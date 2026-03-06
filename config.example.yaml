@@ -1,0 +1,13 @@
+# Umbra_SVR Configuration
+rpc_url: "https://api.mainnet-beta.solana.com"
+listen_addr: ":8080"
+key_path: ""           # Path to Solana keypair JSON file
+cache_max_mb: 256
+data_dir: "./data"
+fetch_interval_sec: 10
+program_id: ""         # Solana program ID for miner registry
+
+# LLM configuration for review agent
+llm_base_url: "https://api.openai.com/v1"  # OpenAI-compatible API endpoint
+llm_api_key: ""                              # API key
+llm_model: "gpt-4o"                          # Model name
