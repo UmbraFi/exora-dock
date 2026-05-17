@@ -9,13 +9,14 @@ import (
 	"github.com/UmbraFi/Umbra_SVR/internal/chat"
 	"github.com/UmbraFi/Umbra_SVR/internal/dht"
 	"github.com/UmbraFi/Umbra_SVR/internal/ipfs"
+	"github.com/UmbraFi/Umbra_SVR/internal/product"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 )
 
-func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring *dht.Ring, ic *ipfs.Client, ps *ipfs.PinStore, ra *agent.ReviewAgent, selfPubkey string) http.Handler {
-	h := api.NewHandler(c, cs, relay, hub, ring, ic, ps, ra, selfPubkey)
+func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring *dht.Ring, ic *ipfs.Client, ps *ipfs.PinStore, ra *agent.ReviewAgent, products *product.Store, selfPubkey string) http.Handler {
+	h := api.NewHandler(c, cs, relay, hub, ring, ic, ps, ra, products, selfPubkey)
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logger)
@@ -34,6 +35,8 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 	r.Route("/v1", func(r chi.Router) {
 		// Cache endpoints
 		r.Get("/account/{address}", h.GetAccount)
+		r.Get("/products", h.ListProducts)
+		r.Post("/products", h.CreateProduct)
 		r.Get("/product/{id}", h.GetProduct)
 		r.Get("/tx/{signature}", h.GetTx)
 

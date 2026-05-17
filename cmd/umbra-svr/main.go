@@ -16,6 +16,7 @@ import (
 	"github.com/UmbraFi/Umbra_SVR/internal/dht"
 	"github.com/UmbraFi/Umbra_SVR/internal/fetcher"
 	"github.com/UmbraFi/Umbra_SVR/internal/ipfs"
+	"github.com/UmbraFi/Umbra_SVR/internal/product"
 	"github.com/UmbraFi/Umbra_SVR/internal/registry"
 	"github.com/UmbraFi/Umbra_SVR/internal/server"
 	"github.com/dgraph-io/badger/v4"
@@ -77,9 +78,12 @@ func main() {
 		}
 	}
 
+	selfPubkey = ensureLocalMiner(ring, selfPubkey, cfg.ListenAddr)
+
 	// IPFS client & pin store
-	ipfsClient := ipfs.NewClient(cfg.IPFSApiURL)
+	ipfsClient := ipfs.NewClient(cfg.IPFSApiURL, filepath.Join(cfg.DataDir, "media"))
 	pinStore := ipfs.NewPinStore(c)
+	productStore := product.NewStore(c)
 
 	// Review agent
 	reviewAgent := agent.NewReviewAgent(cfg.LLMBaseURL, cfg.LLMAPIKey, cfg.LLMModel, ipfsClient)
@@ -107,7 +111,7 @@ func main() {
 	// HTTP + WebSocket server
 	srv := &http.Server{
 		Addr:    cfg.ListenAddr,
-		Handler: server.New(c, chatStore, relay, hub, ring, ipfsClient, pinStore, reviewAgent, selfPubkey),
+		Handler: server.New(c, chatStore, relay, hub, ring, ipfsClient, pinStore, reviewAgent, productStore, selfPubkey),
 	}
 
 	go func() {
@@ -123,4 +127,20 @@ func main() {
 	log.Println("[server] shutting down...")
 	cancel()
 	srv.Shutdown(context.Background())
+}
+
+func ensureLocalMiner(ring *dht.Ring, selfPubkey string, listenAddr string) string {
+	if len(ring.Miners()) > 0 {
+		return selfPubkey
+	}
+	if selfPubkey == "" || selfPubkey == "local" {
+		selfPubkey = "local-dev-miner"
+	}
+	ring.AddMiner(dht.Miner{
+		Pubkey:   selfPubkey,
+		Endpoint: "http://localhost" + listenAddr,
+		Rating:   100,
+	})
+	log.Printf("[registry] dev miner active: %s", selfPubkey)
+	return selfPubkey
 }

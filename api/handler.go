@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/UmbraFi/Umbra_SVR/internal/agent"
@@ -13,6 +14,7 @@ import (
 	"github.com/UmbraFi/Umbra_SVR/internal/chat"
 	"github.com/UmbraFi/Umbra_SVR/internal/dht"
 	"github.com/UmbraFi/Umbra_SVR/internal/ipfs"
+	"github.com/UmbraFi/Umbra_SVR/internal/product"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -25,11 +27,12 @@ type Handler struct {
 	ipfsClient *ipfs.Client
 	pinStore    *ipfs.PinStore
 	reviewAgent *agent.ReviewAgent
+	products    *product.Store
 	selfPubkey  string
 	startTime   time.Time
 }
 
-func NewHandler(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring *dht.Ring, ic *ipfs.Client, ps *ipfs.PinStore, ra *agent.ReviewAgent, selfPubkey string) *Handler {
+func NewHandler(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring *dht.Ring, ic *ipfs.Client, ps *ipfs.PinStore, ra *agent.ReviewAgent, products *product.Store, selfPubkey string) *Handler {
 	return &Handler{
 		cache:       c,
 		chatStore:   cs,
@@ -39,6 +42,7 @@ func NewHandler(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub
 		ipfsClient:  ic,
 		pinStore:    ps,
 		reviewAgent: ra,
+		products:    products,
 		selfPubkey:  selfPubkey,
 		startTime:   time.Now(),
 	}
@@ -68,6 +72,12 @@ func (h *Handler) GetAccount(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) GetProduct(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	if h.products != nil {
+		if p, ok := h.products.Get(id); ok {
+			writeJSON(w, http.StatusOK, p)
+			return
+		}
+	}
 	data, ok := h.cache.Get(fmt.Sprintf("product:%s", id))
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
@@ -75,6 +85,60 @@ func (h *Handler) GetProduct(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
+}
+
+func (h *Handler) ListProducts(w http.ResponseWriter, r *http.Request) {
+	products := []product.Product{}
+	if h.products != nil {
+		products = h.products.List()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"products": products})
+}
+
+func (h *Handler) CreateProduct(w http.ResponseWriter, r *http.Request) {
+	var req product.CreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if h.reviewAgent == nil || h.products == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "product service not configured"})
+		return
+	}
+
+	category, title := "Marketplace", productTitle(req.Description)
+	reviewReq := agent.ReviewRequest{
+		ProductID:    fmt.Sprintf("draft-%d", time.Now().UnixNano()),
+		Title:        title,
+		Description:  req.Description,
+		Category:     category,
+		Price:        req.Price,
+		ImageCIDs:    req.ImageCIDs,
+		SellerPubkey: req.SellerPubkey,
+	}
+
+	review, err := h.reviewAgent.Review(r.Context(), reviewReq)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "review failed: " + err.Error()})
+		return
+	}
+	review.MinerPubkey = h.selfPubkey
+	if !review.Approved {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"approved": false, "review": review})
+		return
+	}
+
+	p, err := product.Build(req, review)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := h.products.Save(p); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "product save failed"})
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]any{"product": p, "review": review})
 }
 
 func (h *Handler) GetTx(w http.ResponseWriter, r *http.Request) {
@@ -141,12 +205,12 @@ func (h *Handler) GetMessages(w http.ResponseWriter, r *http.Request) {
 
 	// Try to sync from peers first if we have few messages
 	local := h.chatStore.GetMessages(orderID, 0)
-	if len(local) == 0 {
+	if len(local) == 0 && h.relay != nil {
 		h.relay.FetchFromPeers(r.Context(), orderID)
 	}
 
 	msgs := h.chatStore.GetMessages(orderID, after)
-	writeJSON(w, http.StatusOK, msgs)
+	writeJSON(w, http.StatusOK, map[string]any{"messages": msgs})
 }
 
 // GetUnread: check which orders have unread messages for a user.
@@ -155,7 +219,7 @@ func (h *Handler) GetUnread(w http.ResponseWriter, r *http.Request) {
 	pubkey := chi.URLParam(r, "pubkey")
 	orders := h.chatStore.GetUnreadOrders(pubkey)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"orders": orders,
+		"order_ids": orders,
 	})
 }
 
@@ -278,7 +342,7 @@ func (h *Handler) IPFSUnpin(w http.ResponseWriter, r *http.Request) {
 // SubmitReview handles POST /v1/review/submit
 // PWA submits a product for review; this node votes locally and collects peer votes.
 func (h *Handler) SubmitReview(w http.ResponseWriter, r *http.Request) {
-	if !h.reviewAgent.Configured() {
+	if h.reviewAgent == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "review agent not configured"})
 		return
 	}
@@ -314,7 +378,7 @@ func (h *Handler) SubmitReview(w http.ResponseWriter, r *http.Request) {
 // Vote handles POST /v1/review/vote
 // Called by peer nodes to get this node's review vote.
 func (h *Handler) Vote(w http.ResponseWriter, r *http.Request) {
-	if !h.reviewAgent.Configured() {
+	if h.reviewAgent == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "review agent not configured"})
 		return
 	}
@@ -352,4 +416,21 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+func productTitle(desc string) string {
+	desc = strings.TrimSpace(desc)
+	if desc == "" {
+		return "Draft listing"
+	}
+	for _, sep := range []string{".", ","} {
+		if idx := strings.Index(desc, sep); idx > 0 {
+			desc = desc[:idx]
+			break
+		}
+	}
+	if len(desc) > 56 {
+		desc = desc[:56]
+	}
+	return strings.TrimSpace(desc)
 }

@@ -70,12 +70,21 @@ func (c *Cache) Get(key string) ([]byte, bool) {
 		return nil, false
 	}
 
-	// Promote to memory
-	c.Set(key, val, 5*time.Minute)
+	// Promote to memory without shortening the persisted Badger TTL.
+	c.setMemory(key, val, 5*time.Minute)
 	return val, true
 }
 
 func (c *Cache) Set(key string, value []byte, ttl time.Duration) {
+	c.setMemory(key, value, ttl)
+
+	// Persist to disk
+	_ = c.db.Update(func(txn *badger.Txn) error {
+		return txn.SetEntry(badger.NewEntry([]byte(key), value).WithTTL(ttl))
+	})
+}
+
+func (c *Cache) setMemory(key string, value []byte, ttl time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -91,11 +100,6 @@ func (c *Cache) Set(key string, value []byte, ttl time.Duration) {
 		e := &entry{key: key, value: value, expiresAt: time.Now().Add(ttl)}
 		c.items[key] = c.evict.PushFront(e)
 	}
-
-	// Persist to disk
-	_ = c.db.Update(func(txn *badger.Txn) error {
-		return txn.SetEntry(badger.NewEntry([]byte(key), value).WithTTL(ttl))
-	})
 }
 
 func (c *Cache) removeElement(el *list.Element) {

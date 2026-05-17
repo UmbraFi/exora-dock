@@ -74,6 +74,10 @@ func NewReviewAgent(baseURL, apiKey, model string, ipfsClient *ipfs.Client) *Rev
 
 // Review performs an LLM review of the given product listing.
 func (a *ReviewAgent) Review(ctx context.Context, req ReviewRequest) (ReviewResult, error) {
+	if !a.Configured() {
+		return devReview(req), nil
+	}
+
 	// Build user content parts
 	content := []map[string]any{
 		{
@@ -175,4 +179,46 @@ func (a *ReviewAgent) Review(ctx context.Context, req ReviewRequest) (ReviewResu
 // Configured reports whether the agent has LLM credentials configured.
 func (a *ReviewAgent) Configured() bool {
 	return a.baseURL != "" && a.apiKey != ""
+}
+
+func devReview(req ReviewRequest) ReviewResult {
+	approved := true
+	reason := "Dev review approved by local deterministic rules."
+	text := strings.ToLower(strings.TrimSpace(req.Title + " " + req.Description))
+
+	switch {
+	case strings.TrimSpace(req.Description) == "":
+		approved = false
+		reason = "Description is required."
+	case len(req.ImageCIDs) == 0:
+		approved = false
+		reason = "At least one product image is required."
+	default:
+		blocked := []string{
+			"weapon",
+			"gun",
+			"explosive",
+			"stolen",
+			"counterfeit currency",
+			"passport",
+			"password",
+			"credential",
+			"drug",
+			"cocaine",
+			"heroin",
+		}
+		for _, term := range blocked {
+			if strings.Contains(text, term) {
+				approved = false
+				reason = "Listing contains prohibited or high-risk terms: " + term
+				break
+			}
+		}
+	}
+
+	return ReviewResult{
+		Approved:  approved,
+		Reason:    reason,
+		Timestamp: time.Now().Unix(),
+	}
 }

@@ -124,11 +124,16 @@ func (r *Relay) FetchFromPeers(ctx context.Context, orderID string) ([]*Message,
 			continue
 		}
 
-		var msgs []*Message
-		json.NewDecoder(resp.Body).Decode(&msgs)
+		var wrapped struct {
+			Messages []*Message `json:"messages"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&wrapped); err != nil {
+			resp.Body.Close()
+			continue
+		}
 		resp.Body.Close()
 
-		for _, msg := range msgs {
+		for _, msg := range wrapped.Messages {
 			_ = r.store.Append(msg)
 		}
 	}
