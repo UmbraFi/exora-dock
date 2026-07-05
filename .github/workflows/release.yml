@@ -7,9 +7,10 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
-  build:
+  binaries:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -29,22 +30,141 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
-      - name: Build
+      - name: Build daemon
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
           ext=""
           if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
-          CGO_ENABLED=0 go build -o umbra-svr-${GOOS}-${GOARCH}${ext} ./cmd/umbra-svr/
-      - name: Upload
-        uses: actions/upload-artifact@v4
+          CGO_ENABLED=0 go build -o exora-dockd-${GOOS}-${GOARCH}${ext} ./cmd/exora-dock/
+      - uses: actions/upload-artifact@v4
         with:
-          name: umbra-svr-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: umbra-svr-*
+          name: exora-dockd-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: exora-dockd-*
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/exora-dock/exora-dock:${{ github.ref_name }}
+            ghcr.io/exora-dock/exora-dock:latest
+
+  deb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Install nfpm
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+      - name: Build binary
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o exora-dock ./cmd/exora-dock/
+      - name: Build deb
+        run: |
+          mkdir -p dist
+          chmod +x packaging/deb/postinstall.sh packaging/deb/preremove.sh
+          VERSION="${GITHUB_REF_NAME#v}" GOARCH=amd64 nfpm package --config packaging/deb/nfpm.yaml --packager deb --target dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exora-dock-deb
+          path: dist/*.deb
+
+  desktop-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install desktop dependencies
+        run: npm install
+        working-directory: desktop
+      - name: Build daemon sidecar
+        run: |
+          mkdir -p desktop/binaries
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o desktop/binaries/exora-dockd ./cmd/exora-dock/
+      - name: Build dmg
+        run: npm run build:dmg
+        working-directory: desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exora-dock-dmg
+          path: desktop/release/*.dmg
+
+  desktop-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install desktop dependencies
+        run: npm install
+        working-directory: desktop
+      - name: Build daemon sidecar
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path desktop/binaries | Out-Null
+          $env:CGO_ENABLED='0'
+          $env:GOOS='windows'
+          $env:GOARCH='amd64'
+          go build -o desktop/binaries/exora-dockd.exe ./cmd/exora-dock/
+      - name: Build exe installer
+        run: npm run build:exe
+        working-directory: desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exora-dock-exe
+          path: desktop/release/*.exe
+
+  desktop-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install desktop dependencies
+        run: npm install
+        working-directory: desktop
+      - name: Build daemon sidecar
+        run: |
+          mkdir -p desktop/binaries
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o desktop/binaries/exora-dockd ./cmd/exora-dock/
+      - name: Build Linux desktop packages
+        run: npm run build:linux
+        working-directory: desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: exora-dock-linux-desktop
+          path: |
+            desktop/release/*.AppImage
+            desktop/release/*.deb
 
   release:
-    needs: build
+    needs: [binaries, deb, desktop-macos, desktop-windows, desktop-linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -52,4 +172,9 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          files: umbra-svr-*
+          files: |
+            exora-dockd-*
+            *.deb
+            *.dmg
+            *.exe
+            *.AppImage

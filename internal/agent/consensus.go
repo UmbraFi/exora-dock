@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/UmbraFi/Umbra_SVR/internal/dht"
+	"github.com/exora-dock/exora-dock/internal/dht"
 )
 
 const voteQuorum = 3 // target number of voters including self

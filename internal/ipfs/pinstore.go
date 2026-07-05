@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/UmbraFi/Umbra_SVR/internal/cache"
+	"github.com/exora-dock/exora-dock/internal/cache"
 )
 
 const pinTTL = 30 * 24 * time.Hour // 30 days

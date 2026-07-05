@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <defs>
+    <linearGradient id="signalFav" x1="11" y1="10" x2="21" y2="22" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E0FF5F" />
+      <stop offset="1" stop-color="#95FF0A" />
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="8" fill="#050805" />
+  <g fill="none" stroke="#95FF0A" stroke-width="1.8" stroke-linecap="round">
+    <path d="M16 12V6.8" />
+    <path d="M20 16H25.2" />
+    <path d="M16 20V25.2" />
+    <path d="M12 16H6.8" />
+    <path d="M19 13L23 9" />
+    <path d="M13 19L9 23" />
+  </g>
+  <g fill="#050805" stroke="#E0FF5F" stroke-width="1.1">
+    <circle cx="16" cy="6.8" r="1.5" />
+    <circle cx="25.2" cy="16" r="1.5" />
+    <circle cx="16" cy="25.2" r="1.5" />
+    <circle cx="6.8" cy="16" r="1.5" />
+    <circle cx="23" cy="9" r="1.5" />
+    <circle cx="9" cy="23" r="1.5" />
+  </g>
+  <rect x="12" y="12" width="8" height="8" rx="2" fill="#0A1208" stroke="url(#signalFav)" stroke-width="1.4" />
+  <rect x="15" y="15" width="2" height="2" rx="0.6" fill="url(#signalFav)" />
+</svg>

@@ -1,0 +1,19 @@
+[Unit]
+Description=Exora Dock daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/exora-dockd /etc/exora-dock/config.yaml
+Restart=on-failure
+RestartSec=3
+User=exora-dock
+Group=exora-dock
+Environment=EXORA_DATA_DIR=/var/lib/exora-dock
+StateDirectory=exora-dock
+ConfigurationDirectory=exora-dock
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

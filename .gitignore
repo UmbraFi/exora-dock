@@ -1,0 +1,12 @@
+data/
+dist/
+/exora-dock
+/exora-dock.exe
+exora-dockd-*
+desktop/dist/
+desktop/logs/
+desktop/node_modules/
+desktop/release/
+desktop/binaries/exora-dockd
+desktop/binaries/exora-dockd.exe
+desktop/resources/docker/exora-dock-image.tar

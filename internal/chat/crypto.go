@@ -24,10 +24,10 @@ func SharedSecret(privKey ed25519.PrivateKey, peerPubKey ed25519.PublicKey) ([]b
 	}
 
 	shared := x25519Multiply(curvPriv, curvPub)
-	// HKDF-like derivation: SHA256(shared || "umbra-chat-v1")
+	// HKDF-like derivation: SHA256(shared || "exora-chat-v1")
 	h := sha256.New()
 	h.Write(shared)
-	h.Write([]byte("umbra-chat-v1"))
+	h.Write([]byte("exora-chat-v1"))
 	return h.Sum(nil), nil
 }
 

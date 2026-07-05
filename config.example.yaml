@@ -1,4 +1,4 @@
-# Umbra_SVR Configuration
+# Exora Dock Configuration
 rpc_url: "https://api.mainnet-beta.solana.com"
 listen_addr: ":8080"
 key_path: ""           # Path to Solana keypair JSON file
@@ -6,8 +6,64 @@ cache_max_mb: 256
 data_dir: "./data"
 fetch_interval_sec: 10
 program_id: ""         # Solana program ID for miner registry
+mode: "hybrid"         # requester, provider, or hybrid
+cloud_url: ""          # Exora Cloud URL; empty keeps MVP flows local
+cloud_token_path: ""   # Defaults to data_dir/cloud-token.json
+cloud_poll_interval_sec: 3
+dock_id: ""            # Defaults to this Dock's provider id
+wallet_path: ""        # Defaults to data_dir/wallet
+auth_token_path: ""    # Defaults to data_dir/auth.json
+payment_pin_path: ""   # Defaults to data_dir/payment-pin.json
+cors_allowed_origins:
+  - "http://localhost:*"
+  - "http://127.0.0.1:*"
+  - "tauri://localhost"
+  - "https://exora-dock.github.io"
 
-# LLM configuration for review agent
-llm_base_url: "https://api.openai.com/v1"  # OpenAI-compatible API endpoint
-llm_api_key: ""                              # API key
-llm_model: "gpt-4o"                          # Model name
+provider:
+  workspace_dir: ""              # Defaults to data_dir/jobs
+  allow_command_executor: false  # Must be true before provider runs local commands
+  allowed_commands: []           # Example: ["python", "node"]
+  max_job_seconds: 300
+  max_input_mb: 128
+  docker:
+    enabled: false                # Must be true before provider runs Docker jobs
+    default_image: ""             # Example: "python:3.12-alpine"
+    allowed_images: []            # Example: ["python:3.12-alpine", "node:22-alpine"]
+    network_mode: "none"          # Default container network mode
+    allowed_network_modes: ["none"]
+    allow_gpu: false
+    max_cpus: 0                   # 0 means no provider-level cap
+    max_memory_mb: 0              # 0 means no provider-level cap
+    pull_policy: "missing"        # missing, always, or never
+
+# OpenAI-compatible LLM API for review/seller agents
+llm_base_url: "https://api.openai.com/v1"
+llm_api_key: ""
+llm_provider_preset: "openai_responses"
+llm_wire_api: "responses"                    # responses or chat_completions
+llm_capabilities:
+  supports_responses: true
+  supports_chat_completions: true
+  supports_system_message: true
+  supports_json_response_format: true
+  supports_streaming: true
+  supports_tools: true
+  supports_reasoning_effort: true
+llm_extra_headers: {}
+llm_research_model: "gpt-5.5"
+llm_research_reasoning_effort: "high"
+llm_utility_model: "gpt-5.5"
+llm_utility_reasoning_effort: "low"
+llm_disable_response_storage: true
+llm_model: "gpt-5.5"                         # Legacy fallback; mirrors research model
+
+seller_agent:
+  enabled: false
+  auto_quote: true
+  auto_complete_text_tasks: false
+  provider_pubkey: ""              # Defaults to this Dock's local provider id
+  poll_interval_sec: 2
+  default_quote_price: 0
+  default_quote_currency: "USD"
+  default_estimated_seconds: 60

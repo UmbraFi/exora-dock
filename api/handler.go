@@ -1,60 +1,1812 @@
 package api
 
 import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/UmbraFi/Umbra_SVR/internal/agent"
-	"github.com/UmbraFi/Umbra_SVR/internal/cache"
-	"github.com/UmbraFi/Umbra_SVR/internal/chat"
-	"github.com/UmbraFi/Umbra_SVR/internal/dht"
-	"github.com/UmbraFi/Umbra_SVR/internal/ipfs"
-	"github.com/UmbraFi/Umbra_SVR/internal/product"
+	"github.com/exora-dock/exora-dock/internal/agent"
+	"github.com/exora-dock/exora-dock/internal/agentcard"
+	"github.com/exora-dock/exora-dock/internal/approval"
+	"github.com/exora-dock/exora-dock/internal/cache"
+	"github.com/exora-dock/exora-dock/internal/chat"
+	"github.com/exora-dock/exora-dock/internal/delegation"
+	"github.com/exora-dock/exora-dock/internal/dht"
+	"github.com/exora-dock/exora-dock/internal/discovery"
+	"github.com/exora-dock/exora-dock/internal/ipfs"
+	"github.com/exora-dock/exora-dock/internal/lease"
+	"github.com/exora-dock/exora-dock/internal/market"
+	"github.com/exora-dock/exora-dock/internal/negotiation"
+	orderpkg "github.com/exora-dock/exora-dock/internal/order"
+	"github.com/exora-dock/exora-dock/internal/orderplan"
+	"github.com/exora-dock/exora-dock/internal/payment"
+	"github.com/exora-dock/exora-dock/internal/paymentpin"
+	"github.com/exora-dock/exora-dock/internal/product"
+	"github.com/exora-dock/exora-dock/internal/providerprotocol"
+	"github.com/exora-dock/exora-dock/internal/resource"
+	"github.com/exora-dock/exora-dock/internal/task"
+	"github.com/exora-dock/exora-dock/internal/wallet"
 	"github.com/go-chi/chi/v5"
 )
 
-type Handler struct {
-	cache      *cache.Cache
-	chatStore  *chat.Store
-	relay      *chat.Relay
-	hub        *chat.Hub
-	ring       *dht.Ring
-	ipfsClient *ipfs.Client
-	pinStore    *ipfs.PinStore
-	reviewAgent *agent.ReviewAgent
-	products    *product.Store
-	selfPubkey  string
-	startTime   time.Time
+type RuntimeStores struct {
+	Wallet          *wallet.Store
+	Tasks           *task.Store
+	Approvals       *approval.Store
+	OrderPlans      *orderplan.Store
+	Negotiations    *negotiation.Store
+	PaymentPIN      *paymentpin.Store
+	Payments        *payment.Store
+	TaskExecutor    *task.Executor
+	Discovery       *discovery.Manifest
+	AgentCards      *agentcard.Store
+	AgentRuns       *agent.RunStore
+	AgentLLMConfig  agent.LLMClientConfig
+	CardDiagnostics agentcard.DiagnosticsConfig
+	CardPublisher   agentcard.CloudPublisher
 }
 
-func NewHandler(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring *dht.Ring, ic *ipfs.Client, ps *ipfs.PinStore, ra *agent.ReviewAgent, products *product.Store, selfPubkey string) *Handler {
-	return &Handler{
-		cache:       c,
-		chatStore:   cs,
-		relay:       relay,
-		hub:         hub,
-		ring:        ring,
-		ipfsClient:  ic,
-		pinStore:    ps,
-		reviewAgent: ra,
-		products:    products,
-		selfPubkey:  selfPubkey,
-		startTime:   time.Now(),
+type Handler struct {
+	cache           *cache.Cache
+	chatStore       *chat.Store
+	relay           *chat.Relay
+	hub             *chat.Hub
+	ring            *dht.Ring
+	ipfsClient      *ipfs.Client
+	pinStore        *ipfs.PinStore
+	reviewAgent     *agent.ReviewAgent
+	products        *product.Store
+	orders          *orderpkg.Store
+	resources       *resource.Store
+	delegations     *delegation.Store
+	leases          *lease.Store
+	wallets         *wallet.Store
+	tasks           *task.Store
+	approvals       *approval.Store
+	orderPlans      *orderplan.Store
+	negotiations    *negotiation.Store
+	paymentPIN      *paymentpin.Store
+	payments        *payment.Store
+	executor        *task.Executor
+	discovery       *discovery.Manifest
+	agentCards      *agentcard.Store
+	agentRuns       *agent.RunStore
+	agentRuntime    *agent.Runtime
+	agentLLMConfig  agent.LLMClientConfig
+	cardDiagnostics agentcard.DiagnosticsConfig
+	cardPublisher   agentcard.CloudPublisher
+	selfPubkey      string
+	startTime       time.Time
+}
+
+const (
+	mcpConnectionsKey = "mcp:connections:index"
+	mcpConnectionsTTL = 365 * 24 * time.Hour
+)
+
+type MCPConnection struct {
+	ID          string `json:"id"`
+	Role        string `json:"role"`
+	CWD         string `json:"cwd,omitempty"`
+	ProjectPath string `json:"projectPath,omitempty"`
+	ProjectName string `json:"projectName,omitempty"`
+	Source      string `json:"source,omitempty"`
+	ClientName  string `json:"clientName,omitempty"`
+	CreatedAt   string `json:"createdAt"`
+	LastSeen    string `json:"lastSeen"`
+}
+
+func NewHandler(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring *dht.Ring, ic *ipfs.Client, ps *ipfs.PinStore, ra *agent.ReviewAgent, products *product.Store, orders *orderpkg.Store, resources *resource.Store, delegations *delegation.Store, leases *lease.Store, selfPubkey string, runtime ...RuntimeStores) *Handler {
+	var stores RuntimeStores
+	if len(runtime) > 0 {
+		stores = runtime[0]
 	}
+	h := &Handler{
+		cache:           c,
+		chatStore:       cs,
+		relay:           relay,
+		hub:             hub,
+		ring:            ring,
+		ipfsClient:      ic,
+		pinStore:        ps,
+		reviewAgent:     ra,
+		products:        products,
+		orders:          orders,
+		resources:       resources,
+		delegations:     delegations,
+		leases:          leases,
+		wallets:         stores.Wallet,
+		tasks:           stores.Tasks,
+		approvals:       stores.Approvals,
+		orderPlans:      stores.OrderPlans,
+		negotiations:    stores.Negotiations,
+		paymentPIN:      stores.PaymentPIN,
+		payments:        stores.Payments,
+		executor:        stores.TaskExecutor,
+		discovery:       stores.Discovery,
+		agentCards:      stores.AgentCards,
+		agentRuns:       stores.AgentRuns,
+		agentLLMConfig:  stores.AgentLLMConfig,
+		cardDiagnostics: stores.CardDiagnostics,
+		cardPublisher:   stores.CardPublisher,
+		selfPubkey:      selfPubkey,
+		startTime:       time.Now(),
+	}
+	if h.agentRuns == nil {
+		h.agentRuns = agent.NewRunStore(c)
+	}
+	if h.negotiations == nil {
+		h.negotiations = negotiation.NewStore(c)
+	}
+	h.agentRuntime = agent.NewRuntime(agent.RuntimeConfig{
+		Store:     h.agentRuns,
+		Generator: agent.NewOpenAICompatibleClient(h.agentLLMConfig),
+		Tools:     h.agentTools(),
+		MaxTurns:  8,
+	})
+	return h
 }
 
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":       "ok",
+		"dock":         "exora-dock",
 		"uptime":       time.Since(h.startTime).String(),
 		"miners":       len(h.ring.Miners()),
 		"online_users": h.hub.OnlineCount(),
+		"discovery":    "/.well-known/exora-dock.json",
 	})
+}
+
+func (h *Handler) DiscoveryManifest(w http.ResponseWriter, r *http.Request) {
+	if h.discovery != nil {
+		manifest := *h.discovery
+		manifest.LastSeen = time.Now().UTC().Format(time.RFC3339)
+		writeJSON(w, http.StatusOK, manifest)
+		return
+	}
+	writeJSON(w, http.StatusOK, discovery.BuildWithBaseURL(requestBaseURL(r), h.selfPubkey))
+}
+
+func (h *Handler) RegisterMCPConnection(w http.ResponseWriter, r *http.Request) {
+	var req MCPConnection
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	role := normalizeMCPConnectionRole(req.Role)
+	cwd := cleanLocalProjectPath(req.CWD)
+	projectPath := cleanLocalProjectPath(req.ProjectPath)
+	if role == "buyer" && projectPath == "" {
+		projectPath = cwd
+	}
+	projectName := strings.TrimSpace(req.ProjectName)
+	if projectName == "" && projectPath != "" {
+		projectName = filepath.Base(projectPath)
+	}
+	source := firstNonEmpty(req.Source, "mcp.stdio")
+	clientName := firstNonEmpty(req.ClientName, "Local Agent")
+	id := firstNonEmpty(req.ID, mcpConnectionID(role, cwd, projectPath, source, clientName))
+	connection := MCPConnection{
+		ID:          id,
+		Role:        role,
+		CWD:         cwd,
+		ProjectPath: projectPath,
+		ProjectName: projectName,
+		Source:      source,
+		ClientName:  clientName,
+		CreatedAt:   now,
+		LastSeen:    now,
+	}
+
+	connections := h.loadMCPConnections()
+	for i := range connections {
+		if connections[i].ID != connection.ID {
+			continue
+		}
+		connection.CreatedAt = firstNonEmpty(connections[i].CreatedAt, now)
+		connections[i] = connection
+		h.saveMCPConnections(connections)
+		writeJSON(w, http.StatusOK, map[string]any{"connection": connection})
+		return
+	}
+	connections = append([]MCPConnection{connection}, connections...)
+	h.saveMCPConnections(connections)
+	writeJSON(w, http.StatusCreated, map[string]any{"connection": connection})
+}
+
+func (h *Handler) ListMCPConnections(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"mcpConnections": h.loadMCPConnections()})
+}
+
+func (h *Handler) loadMCPConnections() []MCPConnection {
+	if h.cache == nil {
+		return nil
+	}
+	data, ok := h.cache.Get(mcpConnectionsKey)
+	if !ok {
+		return nil
+	}
+	var connections []MCPConnection
+	if err := json.Unmarshal(data, &connections); err != nil {
+		return nil
+	}
+	return connections
+}
+
+func (h *Handler) saveMCPConnections(connections []MCPConnection) {
+	if h.cache == nil {
+		return
+	}
+	data, err := json.Marshal(connections)
+	if err != nil {
+		return
+	}
+	h.cache.Set(mcpConnectionsKey, data, mcpConnectionsTTL)
+}
+
+func normalizeMCPConnectionRole(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "seller", "provider":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "buyer"
+	}
+}
+
+func cleanLocalProjectPath(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || !filepath.IsAbs(trimmed) {
+		return ""
+	}
+	return filepath.Clean(trimmed)
+}
+
+func mcpConnectionID(role, cwd, projectPath, source, clientName string) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{role, cwd, projectPath, source, clientName}, "\x00")))
+	return fmt.Sprintf("mcp-%x", sum[:8])
+}
+
+// --- Local wallet endpoints ---
+
+func (h *Handler) GetWallet(w http.ResponseWriter, r *http.Request) {
+	if h.wallets == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "wallet service not configured"})
+		return
+	}
+	status, err := h.wallets.Current()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"wallet": status})
+}
+
+func (h *Handler) CreateWallet(w http.ResponseWriter, r *http.Request) {
+	if h.wallets == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "wallet service not configured"})
+		return
+	}
+	var req wallet.CreateRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	status, err := h.wallets.Create(req)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"wallet": status})
+}
+
+func (h *Handler) BindWallet(w http.ResponseWriter, r *http.Request) {
+	if h.wallets == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "wallet service not configured"})
+		return
+	}
+	var req wallet.BindRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	status, err := h.wallets.Bind(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"wallet": status})
+}
+
+func (h *Handler) ClearWallet(w http.ResponseWriter, r *http.Request) {
+	if h.wallets == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "wallet service not configured"})
+		return
+	}
+	var req wallet.ClearRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	status, err := h.wallets.Clear(req)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"wallet": status})
+}
+
+// --- Remote job task endpoints ---
+
+func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
+	if h.tasks == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "task service not configured"})
+		return
+	}
+	var req task.CreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	t, err := h.tasks.Create(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"task": t})
+}
+
+func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {
+	if h.tasks == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "task service not configured"})
+		return
+	}
+	status := task.Status(strings.TrimSpace(r.URL.Query().Get("status")))
+	party := strings.TrimSpace(r.URL.Query().Get("party"))
+	writeJSON(w, http.StatusOK, map[string]any{"tasks": h.tasks.List(status, party)})
+}
+
+func (h *Handler) GetTask(w http.ResponseWriter, r *http.Request) {
+	if h.tasks == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "task service not configured"})
+		return
+	}
+	t, ok := h.tasks.Get(chi.URLParam(r, "id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"task": t})
+}
+
+func (h *Handler) QuoteTask(w http.ResponseWriter, r *http.Request) {
+	if h.tasks == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "task service not configured"})
+		return
+	}
+	var req task.QuoteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	t, err := h.tasks.Quote(chi.URLParam(r, "id"), req)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"task": t})
+}
+
+func (h *Handler) ConsentTask(w http.ResponseWriter, r *http.Request) {
+	if h.tasks == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "task service not configured"})
+		return
+	}
+	var req task.ConsentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	t, err := h.tasks.Consent(chi.URLParam(r, "id"), req)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"task": t})
+}
+
+func (h *Handler) NextProviderTask(w http.ResponseWriter, r *http.Request) {
+	if h.tasks == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "task service not configured"})
+		return
+	}
+	status := task.Status(strings.TrimSpace(r.URL.Query().Get("status")))
+	provider := strings.TrimSpace(r.URL.Query().Get("providerPubkey"))
+	t, ok := h.tasks.Next(status, provider)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no task available"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"task": t})
+}
+
+func (h *Handler) ClaimTask(w http.ResponseWriter, r *http.Request) {
+	if h.tasks == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "task service not configured"})
+		return
+	}
+	var req task.ClaimRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	t, err := h.tasks.Claim(chi.URLParam(r, "id"), req)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"task": t})
+}
+
+func (h *Handler) RunTask(w http.ResponseWriter, r *http.Request) {
+	if h.tasks == nil || h.executor == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "task executor not configured"})
+		return
+	}
+	t, ok := h.tasks.Get(chi.URLParam(r, "id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		return
+	}
+	var req task.RunRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	artifacts, err := h.executor.Run(r.Context(), t, req)
+	if err != nil {
+		_, _ = h.tasks.Fail(t.ID, task.FailRequest{ProviderPubkey: req.ProviderPubkey, Error: err.Error()})
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	updated, err := h.tasks.Complete(t.ID, task.CompleteRequest{ProviderPubkey: req.ProviderPubkey, Artifacts: artifacts})
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"task": updated})
+}
+
+func (h *Handler) CreateProviderQuoteRequest(w http.ResponseWriter, r *http.Request) {
+	if h.resources == nil || h.executor == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "provider docker service not configured"})
+		return
+	}
+	var req providerprotocol.QuoteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if err := providerprotocol.ValidateTimestamp(req.Timestamp); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+	payload, err := providerprotocol.QuoteRequestPayload(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := providerprotocol.Verify(req.RequesterPubkey, req.Signature, payload); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+	reply := h.buildProviderQuoteReply(req)
+	if reply.Status == "quoted" {
+		if err := h.signQuoteReply(&reply); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, reply)
+}
+
+func (h *Handler) CreateProviderJob(w http.ResponseWriter, r *http.Request) {
+	if h.tasks == nil || h.resources == nil || h.executor == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "provider task executor not configured"})
+		return
+	}
+	var req providerprotocol.JobRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if err := providerprotocol.ValidateTimestamp(req.Timestamp); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+	payload, err := providerprotocol.JobRequestPayload(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := providerprotocol.Verify(req.RequesterPubkey, req.Signature, payload); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+	quote := h.buildProviderQuoteReply(providerprotocol.QuoteRequest{
+		RequestID:       req.RequestID,
+		RequesterPubkey: req.RequesterPubkey,
+		AgentID:         req.AgentID,
+		ProviderPubkey:  req.ProviderPubkey,
+		ResourceID:      req.ResourceID,
+		Draft:           req.Draft,
+		Timestamp:       req.Timestamp,
+	})
+	if quote.Status != "quoted" {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": firstNonEmpty(quote.Error, "provider rejected job")})
+		return
+	}
+	created, err := h.tasks.Create(req.Draft.TaskCreateRequest())
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	quoted, err := h.tasks.Quote(created.ID, task.QuoteRequest{
+		ProviderPubkey:   req.ProviderPubkey,
+		PriceAmount:      quote.PriceAmount,
+		Currency:         firstNonEmpty(quote.Currency, "USD"),
+		EstimatedSeconds: quote.EstimatedSeconds,
+		Notes:            quote.Notes,
+		ExpiresAt:        quote.ExpiresAt,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	consented, err := h.tasks.Consent(quoted.ID, task.ConsentRequest{Approved: true, ApprovalRequestID: req.ApprovalID})
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	claimed, err := h.tasks.Claim(consented.ID, task.ClaimRequest{ProviderPubkey: req.ProviderPubkey})
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	go h.runProviderDockerJob(claimed.ID, req.ProviderPubkey)
+	writeJSON(w, http.StatusAccepted, map[string]any{"job": providerprotocol.JobReply{
+		JobID:          claimed.ID,
+		TaskID:         claimed.ID,
+		Status:         string(claimed.Status),
+		ProviderPubkey: req.ProviderPubkey,
+		NextAction:     "poll_provider_job",
+	}, "task": claimed})
+}
+
+func (h *Handler) GetProviderJob(w http.ResponseWriter, r *http.Request) {
+	if h.tasks == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "task service not configured"})
+		return
+	}
+	t, ok := h.tasks.Get(chi.URLParam(r, "id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "provider job not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"job": providerprotocol.JobReply{
+		JobID:          t.ID,
+		TaskID:         t.ID,
+		Status:         string(t.Status),
+		ProviderPubkey: t.ProviderPubkey,
+		NextAction:     providerJobNextAction(t.Status),
+	}, "task": t})
+}
+
+func (h *Handler) GetProviderJobArtifactManifest(w http.ResponseWriter, r *http.Request) {
+	if h.tasks == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "task service not configured"})
+		return
+	}
+	artifacts, ok := h.tasks.ArtifactManifest(chi.URLParam(r, "id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "provider job not found"})
+		return
+	}
+	for i := range artifacts {
+		artifacts[i].URL = "/v1/provider/jobs/" + url.PathEscape(chi.URLParam(r, "id")) + "/artifacts/" + url.PathEscape(artifacts[i].Name)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"artifacts": artifacts})
+}
+
+func (h *Handler) GetProviderJobArtifact(w http.ResponseWriter, r *http.Request) {
+	if h.tasks == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "task service not configured"})
+		return
+	}
+	path, ok := h.tasks.ArtifactPath(chi.URLParam(r, "id"), chi.URLParam(r, "name"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "artifact not found"})
+		return
+	}
+	http.ServeFile(w, r, path)
+}
+
+func (h *Handler) buildProviderQuoteReply(req providerprotocol.QuoteRequest) providerprotocol.QuoteReply {
+	now := time.Now().UTC()
+	reply := providerprotocol.QuoteReply{
+		RequestID:      req.RequestID,
+		Status:         "rejected",
+		ProviderPubkey: req.ProviderPubkey,
+		ResourceID:     req.ResourceID,
+		Currency:       "USD",
+		Timestamp:      now.Format(time.RFC3339),
+	}
+	res, ok := h.resources.Get(req.ResourceID)
+	if !ok {
+		reply.Error = "resource unavailable"
+		return reply
+	}
+	provider := firstNonEmpty(res.ProviderPubkey, res.Provider)
+	if strings.TrimSpace(req.ProviderPubkey) != "" && provider != "" && req.ProviderPubkey != provider {
+		reply.Error = "resource belongs to a different provider"
+		return reply
+	}
+	if !strings.EqualFold(res.Availability, "available") {
+		reply.Error = "resource unavailable"
+		return reply
+	}
+	providerPubkey := firstNonEmpty(req.ProviderPubkey, provider, h.selfPubkey)
+	temp := task.Task{
+		ID:              "quote-" + req.RequestID,
+		RequesterPubkey: req.RequesterPubkey,
+		AgentID:         req.AgentID,
+		Type:            req.Draft.Type,
+		Goal:            req.Draft.Goal,
+		Requirements:    req.Draft.Requirements,
+		TimeoutSeconds:  req.Draft.TimeoutSeconds,
+		ProviderPubkey:  providerPubkey,
+	}
+	spec, err := h.executor.ValidateDockerTask(temp, task.RunRequest{ProviderPubkey: providerPubkey, Runtime: "docker"})
+	if err != nil {
+		reply.Error = err.Error()
+		return reply
+	}
+	estimated := req.Draft.TimeoutSeconds
+	if estimated <= 0 {
+		estimated = 60
+	}
+	reply.Status = "quoted"
+	reply.ProviderPubkey = providerPubkey
+	reply.PriceAmount = res.PricePerUnit
+	reply.Currency = "USD"
+	reply.EstimatedSeconds = estimated
+	reply.Notes = "Realtime Docker quote confirmed by provider."
+	reply.ExpiresAt = now.Add(30 * time.Minute).Format(time.RFC3339)
+	reply.Runtime = "docker"
+	reply.Docker = spec
+	return reply
+}
+
+func (h *Handler) signQuoteReply(reply *providerprotocol.QuoteReply) error {
+	if h.wallets == nil {
+		return fmt.Errorf("provider local wallet keypair required for signed quote response")
+	}
+	payload, err := providerprotocol.QuoteReplyPayload(*reply)
+	if err != nil {
+		return err
+	}
+	address, signature, err := h.wallets.SignPayload(payload)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(reply.ProviderPubkey) == "" {
+		reply.ProviderPubkey = address
+		payload, err = providerprotocol.QuoteReplyPayload(*reply)
+		if err != nil {
+			return err
+		}
+		_, signature, err = h.wallets.SignPayload(payload)
+		if err != nil {
+			return err
+		}
+	} else if reply.ProviderPubkey != address {
+		return fmt.Errorf("provider pubkey must match local signing wallet")
+	}
+	reply.Signature = signature
+	return nil
+}
+
+func (h *Handler) runProviderDockerJob(taskID, providerPubkey string) {
+	t, ok := h.tasks.Get(taskID)
+	if !ok {
+		return
+	}
+	artifacts, err := h.executor.Run(context.Background(), t, task.RunRequest{ProviderPubkey: providerPubkey, Runtime: "docker"})
+	if err != nil {
+		_, _ = h.tasks.Fail(taskID, task.FailRequest{ProviderPubkey: providerPubkey, Error: err.Error()})
+		return
+	}
+	_, _ = h.tasks.Complete(taskID, task.CompleteRequest{ProviderPubkey: providerPubkey, Artifacts: artifacts})
+}
+
+func providerJobNextAction(status task.Status) string {
+	switch status {
+	case task.StatusCompleted:
+		return "fetch_artifact_manifest"
+	case task.StatusFailed:
+		return "inspect_failure"
+	case task.StatusRunning, task.StatusClaimed:
+		return "poll_provider_job"
+	default:
+		return "wait_for_provider_job"
+	}
+}
+
+func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
+	if h.tasks == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "task service not configured"})
+		return
+	}
+	var req task.CompleteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	t, err := h.tasks.Complete(chi.URLParam(r, "id"), req)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"task": t})
+}
+
+func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
+	if h.tasks == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "task service not configured"})
+		return
+	}
+	var req task.FailRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	t, err := h.tasks.Fail(chi.URLParam(r, "id"), req)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"task": t})
+}
+
+func (h *Handler) GetTaskArtifact(w http.ResponseWriter, r *http.Request) {
+	if h.tasks == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "task service not configured"})
+		return
+	}
+	path, ok := h.tasks.ArtifactPath(chi.URLParam(r, "id"), chi.URLParam(r, "name"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "artifact not found"})
+		return
+	}
+	http.ServeFile(w, r, path)
+}
+
+func (h *Handler) GetTaskArtifactManifest(w http.ResponseWriter, r *http.Request) {
+	if h.tasks == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "task service not configured"})
+		return
+	}
+	artifacts, ok := h.tasks.ArtifactManifest(chi.URLParam(r, "id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"artifacts": artifacts})
+}
+
+// --- Built-in requester agent endpoints ---
+
+func (h *Handler) SearchSellers(w http.ResponseWriter, r *http.Request) {
+	if h.resources == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "resource service not configured"})
+		return
+	}
+	var req market.SearchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if req.CreateSelectionRequest {
+		req.PrepareOrderOptions = true
+	}
+	if strings.TrimSpace(req.ProjectPath) == "" {
+		req.ProjectPath = req.TaskTemplate.ProjectPath
+	}
+	if strings.TrimSpace(req.WorkUID) == "" {
+		req.WorkUID = req.TaskTemplate.WorkUID
+	}
+	if req.RequireRealtimeQuotes {
+		req.PrepareOrderOptions = true
+		if req.MaxOptions <= 0 {
+			req.MaxOptions = market.MaxOrderOptions
+		}
+		if req.MaxResults <= 0 || req.MaxResults < req.MaxOptions {
+			req.MaxResults = req.MaxOptions
+		}
+		if h.wallets != nil {
+			if status, err := h.wallets.Current(); err == nil && status.LocalKeypair && strings.TrimSpace(status.Address) != "" {
+				req.RequesterPubkey = status.Address
+				req.TaskTemplate.RequesterPubkey = status.Address
+			}
+		}
+	}
+	result := market.Search(req, h.resources)
+	candidateStates := []orderplan.CandidateState{}
+	events := []orderplan.Event{{Type: "market_search", Message: result.Summary}}
+	if req.RequireRealtimeQuotes && len(result.OrderDraftOptions) > 0 {
+		var quoteEvents []orderplan.Event
+		result.OrderDraftOptions, candidateStates, quoteEvents = h.realtimeOrderOptions(r, req, result.OrderDraftOptions)
+		events = append(events, quoteEvents...)
+		if len(result.OrderDraftOptions) == 0 {
+			result.NextAction = "no_realtime_quotes_available"
+			result.Summary = "No realtime-confirmed Docker quotes are available from the matching providers."
+		} else {
+			result.NextAction = "ask_user_to_choose_realtime_quote"
+			result.Summary = fmt.Sprintf("Received %d realtime-confirmed Docker quote(s).", len(result.OrderDraftOptions))
+		}
+	}
+	if req.CreateSelectionRequest && len(result.OrderDraftOptions) > 0 {
+		if h.orderPlans == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "order plan service not configured"})
+			return
+		}
+		plan, err := h.orderPlans.Create(orderplan.CreateRequest{
+			Query:            req.Query,
+			ProjectPath:      req.ProjectPath,
+			WorkUID:          req.WorkUID,
+			RequesterPubkey:  req.RequesterPubkey,
+			AgentID:          req.AgentID,
+			NormalizedQuery:  result.NormalizedQuery,
+			Options:          result.OrderDraftOptions,
+			RealtimeRequired: req.RequireRealtimeQuotes,
+			Candidates:       candidateStates,
+			Events:           events,
+			ExpiresAt:        result.OrderDraftOptions[0].ExpiresAt,
+		})
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		result.SelectionRequest = &market.SelectionRequestSummary{
+			PlanID:      plan.ID,
+			Status:      string(plan.Status),
+			ApprovalURL: requestBaseURL(r) + "/order-plans/" + plan.ID,
+			ExpiresAt:   plan.ExpiresAt,
+			NextAction:  plan.NextAction,
+		}
+	} else if req.CreateSelectionRequest && req.RequireRealtimeQuotes {
+		if h.orderPlans == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "order plan service not configured"})
+			return
+		}
+		plan, err := h.orderPlans.Create(orderplan.CreateRequest{
+			Query:            req.Query,
+			ProjectPath:      req.ProjectPath,
+			WorkUID:          req.WorkUID,
+			RequesterPubkey:  req.RequesterPubkey,
+			AgentID:          req.AgentID,
+			NormalizedQuery:  result.NormalizedQuery,
+			RealtimeRequired: true,
+			Candidates:       candidateStates,
+			Events:           events,
+			ExpiresAt:        time.Now().UTC().Add(10 * time.Minute).Format(time.RFC3339),
+		})
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		result.SelectionRequest = &market.SelectionRequestSummary{
+			PlanID:      plan.ID,
+			Status:      string(plan.Status),
+			ApprovalURL: requestBaseURL(r) + "/order-plans/" + plan.ID,
+			ExpiresAt:   plan.ExpiresAt,
+			NextAction:  "no_realtime_quotes_available",
+		}
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) realtimeOrderOptions(r *http.Request, req market.SearchRequest, options []market.OrderDraftOption) ([]market.OrderDraftOption, []orderplan.CandidateState, []orderplan.Event) {
+	confirmed := make([]market.OrderDraftOption, 0, len(options))
+	states := make([]orderplan.CandidateState, 0, len(options))
+	events := []orderplan.Event{}
+	for _, option := range options {
+		state := orderplan.CandidateState{
+			OptionID:       option.OptionID,
+			ResourceID:     option.ResourceID,
+			ProviderPubkey: option.ProviderPubkey,
+			Endpoint:       option.ProviderEndpoint,
+			Status:         "contacting",
+			UpdatedAt:      time.Now().UTC().Format(time.RFC3339),
+		}
+		if strings.TrimSpace(option.ProviderEndpoint) == "" {
+			state.Status = "unreachable"
+			state.Message = "provider endpoint missing"
+			states = append(states, state)
+			events = append(events, orderplan.Event{Type: "provider_unreachable", Message: state.Message, OptionID: option.OptionID})
+			continue
+		}
+		reply, err := h.requestProviderQuote(r, req, option)
+		if err != nil {
+			state.Status = "unreachable"
+			state.Message = err.Error()
+			states = append(states, state)
+			events = append(events, orderplan.Event{Type: "provider_quote_failed", Message: err.Error(), OptionID: option.OptionID})
+			continue
+		}
+		if reply.Status != "quoted" {
+			state.Status = "rejected"
+			state.Message = firstNonEmpty(reply.Error, reply.Notes, "provider rejected quote request")
+			states = append(states, state)
+			events = append(events, orderplan.Event{Type: "provider_rejected", Message: state.Message, OptionID: option.OptionID})
+			continue
+		}
+		option.PriceSnapshot.PricePerUnit = reply.PriceAmount
+		option.PriceSnapshot.Currency = firstNonEmpty(reply.Currency, option.PriceSnapshot.Currency, "USD")
+		option.QuoteID = reply.RequestID
+		option.RealtimeStatus = "quoted"
+		option.ConfirmedAt = time.Now().UTC().Format(time.RFC3339)
+		option.ExpiresAt = reply.ExpiresAt
+		option.Draft.Requirements = ensureDockerRequirement(option.Draft.Requirements, reply.Docker)
+		state.Status = "quoted"
+		state.QuoteID = reply.RequestID
+		state.PriceAmount = reply.PriceAmount
+		state.Currency = firstNonEmpty(reply.Currency, "USD")
+		state.ExpiresAt = reply.ExpiresAt
+		state.Message = reply.Notes
+		state.UpdatedAt = option.ConfirmedAt
+		confirmed = append(confirmed, option)
+		states = append(states, state)
+		events = append(events, orderplan.Event{Type: "provider_quoted", Message: reply.Notes, OptionID: option.OptionID})
+	}
+	return confirmed, states, events
+}
+
+func (h *Handler) requestProviderQuote(r *http.Request, req market.SearchRequest, option market.OrderDraftOption) (providerprotocol.QuoteReply, error) {
+	if h.wallets == nil {
+		return providerprotocol.QuoteReply{}, fmt.Errorf("local wallet keypair required for signed provider quote request")
+	}
+	requestID := fmt.Sprintf("qreq-%d-%s", time.Now().UnixNano(), option.OptionID)
+	quoteReq := providerprotocol.QuoteRequest{
+		RequestID:       requestID,
+		RequesterPubkey: option.Draft.RequesterPubkey,
+		AgentID:         option.Draft.AgentID,
+		ProviderPubkey:  option.ProviderPubkey,
+		ResourceID:      option.ResourceID,
+		Draft:           option.Draft,
+		Timestamp:       time.Now().UTC().Format(time.RFC3339),
+	}
+	payload, err := providerprotocol.QuoteRequestPayload(quoteReq)
+	if err != nil {
+		return providerprotocol.QuoteReply{}, err
+	}
+	address, signature, err := h.wallets.SignPayload(payload)
+	if err != nil {
+		return providerprotocol.QuoteReply{}, err
+	}
+	if strings.TrimSpace(quoteReq.RequesterPubkey) == "" {
+		quoteReq.RequesterPubkey = address
+		quoteReq.Draft.RequesterPubkey = address
+		payload, err = providerprotocol.QuoteRequestPayload(quoteReq)
+		if err != nil {
+			return providerprotocol.QuoteReply{}, err
+		}
+		_, signature, err = h.wallets.SignPayload(payload)
+		if err != nil {
+			return providerprotocol.QuoteReply{}, err
+		}
+	} else if quoteReq.RequesterPubkey != address {
+		return providerprotocol.QuoteReply{}, fmt.Errorf("requester pubkey must match local signing wallet")
+	}
+	quoteReq.Signature = signature
+
+	endpoint, err := providerEndpoint(option.ProviderEndpoint, "/v1/provider/quote-requests")
+	if err != nil {
+		return providerprotocol.QuoteReply{}, err
+	}
+	data, _ := json.Marshal(quoteReq)
+	client := &http.Client{Timeout: 8 * time.Second}
+	httpReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, endpoint, bytes.NewReader(data))
+	if err != nil {
+		return providerprotocol.QuoteReply{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return providerprotocol.QuoteReply{}, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return providerprotocol.QuoteReply{}, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return providerprotocol.QuoteReply{}, fmt.Errorf("provider quote returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	var reply providerprotocol.QuoteReply
+	if err := json.Unmarshal(body, &reply); err != nil {
+		return providerprotocol.QuoteReply{}, err
+	}
+	if reply.Status != "quoted" {
+		return reply, nil
+	}
+	if strings.TrimSpace(reply.Signature) == "" {
+		return providerprotocol.QuoteReply{}, fmt.Errorf("provider quote response missing signature")
+	}
+	payload, err = providerprotocol.QuoteReplyPayload(reply)
+	if err != nil {
+		return providerprotocol.QuoteReply{}, err
+	}
+	if err := providerprotocol.Verify(reply.ProviderPubkey, reply.Signature, payload); err != nil {
+		return providerprotocol.QuoteReply{}, err
+	}
+	return reply, nil
+}
+
+func ensureDockerRequirement(reqs map[string]any, spec task.DockerRunSpec) map[string]any {
+	if reqs == nil {
+		reqs = map[string]any{}
+	}
+	if !dockerRunSpecEmpty(spec) {
+		reqs["docker"] = spec
+	}
+	return reqs
+}
+
+func dockerRunSpecEmpty(spec task.DockerRunSpec) bool {
+	return strings.TrimSpace(spec.Image) == "" && strings.TrimSpace(spec.Command) == "" && len(spec.Args) == 0 && len(spec.Env) == 0
+}
+
+// --- Agent Card endpoints ---
+
+func (h *Handler) ListMyAgentCards(w http.ResponseWriter, r *http.Request) {
+	if h.agentCards == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "agent card service not configured"})
+		return
+	}
+	cards := h.agentCards.List()
+	body := map[string]any{"cards": cards}
+	if buyer, ok := h.agentCards.Get(agentcard.RoleBuyer); ok {
+		body["buyer"] = buyer
+	}
+	if seller, ok := h.agentCards.Get(agentcard.RoleSeller); ok {
+		body["seller"] = seller
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
+func (h *Handler) RunAgentCardDiagnostics(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"diagnostics": agentcard.CollectDiagnostics(h.cardDiagnostics),
+	})
+}
+
+func (h *Handler) DraftAgentCard(w http.ResponseWriter, r *http.Request) {
+	var req agentcard.DraftRequest
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+	}
+	if req.Role == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "role required"})
+		return
+	}
+	if req.Diagnostics.CollectedAt == "" {
+		req.Diagnostics = agentcard.CollectDiagnostics(h.cardDiagnostics)
+	}
+	if strings.TrimSpace(req.DockID) == "" {
+		req.DockID = h.defaultDockID()
+	}
+	if strings.TrimSpace(req.AgentID) == "" {
+		req.AgentID = "exora-desktop-agent"
+	}
+	card, err := agentcard.NewDraft(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"card": card})
+}
+
+func (h *Handler) SaveAgentCard(w http.ResponseWriter, r *http.Request) {
+	if h.agentCards == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "agent card service not configured"})
+		return
+	}
+	role, err := agentcard.NormalizeRole(chi.URLParam(r, "role"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	var req agentcard.SaveRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	card := req.Card
+	if card.Role == "" {
+		card.Role = role
+	}
+	if card.Role != role {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "card role does not match route"})
+		return
+	}
+	if strings.TrimSpace(card.DockID) == "" {
+		card.DockID = h.defaultDockID()
+	}
+	if err := h.agentCards.Save(card); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	saved, _ := h.agentCards.Get(role)
+	writeJSON(w, http.StatusOK, map[string]any{"card": saved})
+}
+
+func (h *Handler) PublishAgentCard(w http.ResponseWriter, r *http.Request) {
+	if h.agentCards == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "agent card service not configured"})
+		return
+	}
+	role, err := agentcard.NormalizeRole(chi.URLParam(r, "role"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	card, ok := h.agentCards.Get(role)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent card not found"})
+		return
+	}
+	result, err := h.cardPublisher.Publish(r.Context(), card)
+	if err != nil {
+		var publishErr *agentcard.PublishError
+		if errors.As(err, &publishErr) {
+			status := publishErr.StatusCode
+			if status == 0 {
+				status = http.StatusConflict
+			}
+			body := map[string]any{"error": publishErr.Error()}
+			if publishErr.Review != nil {
+				body["review"] = publishErr.Review
+			}
+			writeJSON(w, status, body)
+			return
+		}
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := h.agentCards.SavePublished(result.Card); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) defaultDockID() string {
+	if strings.TrimSpace(h.cardPublisher.DockID) != "" {
+		return strings.TrimSpace(h.cardPublisher.DockID)
+	}
+	if strings.TrimSpace(h.selfPubkey) != "" {
+		return strings.TrimSpace(h.selfPubkey)
+	}
+	return "exora-dock-local"
+}
+
+// --- Approval queue endpoints ---
+
+func (h *Handler) CreateApproval(w http.ResponseWriter, r *http.Request) {
+	if h.approvals == nil || h.tasks == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "approval service not configured"})
+		return
+	}
+	var req approval.CreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if strings.TrimSpace(req.TaskID) != "" {
+		t, ok := h.tasks.Get(strings.TrimSpace(req.TaskID))
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+			return
+		}
+		req = mergeApprovalRequest(req, t)
+	}
+	a, err := h.approvals.Create(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if _, err := h.tasks.SetApprovalRequest(a.TaskID, a.ID); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	a = decorateApproval(a, requestBaseURL(r))
+	resp := map[string]any{"approval": a}
+	if a.PaymentRequired && h.payments != nil {
+		paymentRecord, err := h.payments.EnsureIntent(a)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		resp["payment"] = paymentRecord
+	}
+	writeJSON(w, http.StatusCreated, resp)
+}
+
+func (h *Handler) ListApprovals(w http.ResponseWriter, r *http.Request) {
+	if h.approvals == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "approval service not configured"})
+		return
+	}
+	filter := approval.ListFilter{
+		Status:     approval.Status(strings.TrimSpace(r.URL.Query().Get("status"))),
+		UserPubkey: firstQueryValue(r, "userPubkey", "user"),
+		AgentID:    strings.TrimSpace(r.URL.Query().Get("agentId")),
+		TaskID:     strings.TrimSpace(r.URL.Query().Get("taskId")),
+	}
+	approvals := h.approvals.List(filter)
+	for i := range approvals {
+		approvals[i] = decorateApproval(approvals[i], requestBaseURL(r))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"approvals": approvals})
+}
+
+func (h *Handler) GetApproval(w http.ResponseWriter, r *http.Request) {
+	if h.approvals == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "approval service not configured"})
+		return
+	}
+	a, ok := h.approvals.Get(chi.URLParam(r, "id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "approval not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"approval": decorateApproval(a, requestBaseURL(r))})
+}
+
+func (h *Handler) DecideApproval(w http.ResponseWriter, r *http.Request) {
+	if h.approvals == nil || h.tasks == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "approval service not configured"})
+		return
+	}
+	var req approval.DecisionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	existing, ok := h.approvals.Get(chi.URLParam(r, "id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "approval not found"})
+		return
+	}
+	currentTask, ok := h.tasks.Get(existing.TaskID)
+	if !ok {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "approval task not found"})
+		return
+	}
+	if req.Approved && currentTask.Quote == nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "quote required before consent"})
+		return
+	}
+	if existing.Status != approval.StatusPending {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "approval is not pending"})
+		return
+	}
+	var paymentRecord payment.Record
+	paymentConfirmed := false
+	if req.Approved && existing.PaymentRequired {
+		if h.paymentPIN == nil || h.payments == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "payment confirmation service not configured"})
+			return
+		}
+		if strings.TrimSpace(req.PaymentPin) == "" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "payment_pin_required"})
+			return
+		}
+		if err := h.paymentPIN.Verify(req.PaymentPin); err != nil {
+			code := "invalid_payment_pin"
+			if strings.Contains(err.Error(), "not_configured") {
+				code = "payment_pin_not_configured"
+			}
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": code})
+			return
+		}
+		record, err := h.payments.ConfirmSimulated(existing)
+		if err != nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+		paymentRecord = record
+		paymentConfirmed = true
+	}
+	a, err := h.approvals.Decide(chi.URLParam(r, "id"), req)
+	if err != nil {
+		status := http.StatusConflict
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+	consent := task.ConsentRequest{
+		Approved:          req.Approved,
+		UserNote:          req.UserNote,
+		ApprovalRequestID: a.ID,
+	}
+	updated, err := h.tasks.Consent(a.TaskID, consent)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	resp := map[string]any{"approval": decorateApproval(a, requestBaseURL(r)), "task": updated}
+	if paymentConfirmed {
+		resp["payment"] = paymentRecord
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// --- Seller selection order-plan endpoints ---
+
+func (h *Handler) ListOrderPlans(w http.ResponseWriter, r *http.Request) {
+	if h.orderPlans == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "order plan service not configured"})
+		return
+	}
+	filter := orderplan.ListFilter{Status: orderplan.Status(strings.TrimSpace(r.URL.Query().Get("status")))}
+	writeJSON(w, http.StatusOK, map[string]any{"orderPlans": h.orderPlans.List(filter)})
+}
+
+func (h *Handler) GetOrderPlan(w http.ResponseWriter, r *http.Request) {
+	if h.orderPlans == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "order plan service not configured"})
+		return
+	}
+	plan, ok := h.orderPlans.Get(chi.URLParam(r, "id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "order plan not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.orderPlanResponse(plan, false))
+}
+
+func (h *Handler) SelectOrderPlan(w http.ResponseWriter, r *http.Request) {
+	if h.orderPlans == nil || h.tasks == nil || h.approvals == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "order plan service not configured"})
+		return
+	}
+	var req orderplan.SelectionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	plan, ok := h.orderPlans.Get(chi.URLParam(r, "id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "order plan not found"})
+		return
+	}
+	if plan.Status == orderplan.StatusSelected {
+		if plan.SelectedOptionID == strings.TrimSpace(req.OptionID) {
+			writeJSON(w, http.StatusOK, h.orderPlanResponse(plan, true))
+			return
+		}
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "plan_already_selected"})
+		return
+	}
+	if plan.Status != orderplan.StatusPendingSelection {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": string(plan.Status)})
+		return
+	}
+	option, ok := h.orderPlans.FindOption(plan, req.OptionID)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "order option not found"})
+		return
+	}
+	if plan.RealtimeRequired && option.RealtimeStatus != "quoted" {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "option is not realtime-confirmed"})
+		return
+	}
+	if err := h.validateOrderOption(plan, option); err != nil {
+		updated, _ := h.orderPlans.MarkInvalidated(plan, err.Error())
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "offer_expired", "orderPlan": updated})
+		return
+	}
+	amount := option.PriceSnapshot.PricePerUnit
+	if amount > 0 {
+		if h.paymentPIN == nil || h.payments == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "payment confirmation service not configured"})
+			return
+		}
+		if strings.TrimSpace(req.PaymentPin) == "" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "payment_pin_required"})
+			return
+		}
+		if err := h.paymentPIN.Verify(req.PaymentPin); err != nil {
+			code := "invalid_payment_pin"
+			if strings.Contains(err.Error(), "not_configured") {
+				code = "payment_pin_not_configured"
+			}
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": code})
+			return
+		}
+	}
+
+	taskReq := option.Draft.TaskCreateRequest()
+	if strings.TrimSpace(taskReq.ProjectPath) == "" {
+		taskReq.ProjectPath = plan.ProjectPath
+	}
+	created, err := h.tasks.Create(taskReq)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	currency := firstNonEmpty(option.PriceSnapshot.Currency, "USD")
+	quoted, err := h.tasks.Quote(created.ID, task.QuoteRequest{
+		ProviderPubkey:   option.ProviderPubkey,
+		PriceAmount:      amount,
+		Currency:         currency,
+		EstimatedSeconds: 60,
+		Notes:            "Quote generated from Exora market order plan.",
+		ExpiresAt:        option.ExpiresAt,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	a, err := h.approvals.Create(approval.CreateRequest{
+		TaskID:         quoted.ID,
+		Action:         "approve_quote",
+		UserPubkey:     quoted.RequesterPubkey,
+		AgentID:        quoted.AgentID,
+		ProviderPubkey: option.ProviderPubkey,
+		Quote: approval.QuoteSummary{
+			ID:               quoted.Quote.ID,
+			ProviderPubkey:   option.ProviderPubkey,
+			PriceAmount:      amount,
+			Currency:         currency,
+			EstimatedSeconds: quoted.Quote.EstimatedSeconds,
+			Notes:            quoted.Quote.Notes,
+			ExpiresAt:        quoted.Quote.ExpiresAt,
+		},
+		Amount:    approval.Amount{Value: amount, Currency: currency},
+		ExpiresAt: option.ExpiresAt,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	if _, err := h.tasks.SetApprovalRequest(a.TaskID, a.ID); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	var paymentRecord payment.Record
+	if a.PaymentRequired {
+		record, err := h.payments.ConfirmSimulated(a)
+		if err != nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+		paymentRecord = record
+	}
+	a, err = h.approvals.Decide(a.ID, approval.DecisionRequest{Approved: true, DecidedBy: "exora-order-plan", UserNote: req.UserNote})
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	updatedTask, err := h.tasks.Consent(a.TaskID, task.ConsentRequest{
+		Approved:          true,
+		UserNote:          req.UserNote,
+		ApprovalRequestID: a.ID,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	paymentID := paymentRecord.ID
+	plan, err = h.orderPlans.MarkSelected(plan, option.OptionID, updatedTask.ID, a.ID, paymentID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if plan.RealtimeRequired {
+		job, err := h.submitProviderJob(r.Context(), plan, option, updatedTask, a, paymentID)
+		if err != nil {
+			_, _ = h.tasks.Fail(updatedTask.ID, task.FailRequest{ProviderPubkey: option.ProviderPubkey, Error: err.Error()})
+			plan, _ = h.orderPlans.AddEvent(plan, "provider_job_submit_failed", err.Error(), option.OptionID)
+			writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "orderPlan": plan, "task": updatedTask})
+			return
+		}
+		plan, _ = h.orderPlans.MarkProviderJob(plan, job.JobID)
+		plan, _ = h.orderPlans.AddEvent(plan, "provider_job_submitted", "Provider Docker job submitted.", option.OptionID)
+		go h.watchProviderJob(plan.ID, updatedTask.ID, option.ProviderEndpoint, job.JobID, option.ProviderPubkey)
+	}
+	resp := h.orderPlanResponse(plan, true)
+	resp["task"] = updatedTask
+	resp["approval"] = decorateApproval(a, requestBaseURL(r))
+	if paymentRecord.ID != "" {
+		resp["payment"] = paymentRecord
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) CancelOrderPlan(w http.ResponseWriter, r *http.Request) {
+	if h.orderPlans == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "order plan service not configured"})
+		return
+	}
+	var req struct {
+		UserNote string `json:"userNote"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	plan, ok := h.orderPlans.Get(chi.URLParam(r, "id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "order plan not found"})
+		return
+	}
+	if plan.Status == orderplan.StatusSelected {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "plan_already_selected"})
+		return
+	}
+	plan, err := h.orderPlans.Cancel(plan, req.UserNote)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.orderPlanResponse(plan, false))
+}
+
+func (h *Handler) submitProviderJob(ctx context.Context, plan orderplan.Plan, option market.OrderDraftOption, localTask task.Task, a approval.Approval, paymentID string) (providerprotocol.JobReply, error) {
+	if h.wallets == nil {
+		return providerprotocol.JobReply{}, fmt.Errorf("local wallet keypair required for signed provider job request")
+	}
+	req := providerprotocol.JobRequest{
+		RequestID:       fmt.Sprintf("jobreq-%d-%s", time.Now().UnixNano(), option.OptionID),
+		RequesterPubkey: localTask.RequesterPubkey,
+		AgentID:         localTask.AgentID,
+		ProviderPubkey:  option.ProviderPubkey,
+		ResourceID:      option.ResourceID,
+		Draft:           option.Draft,
+		QuoteID:         option.QuoteID,
+		ApprovalID:      a.ID,
+		PaymentID:       paymentID,
+		Timestamp:       time.Now().UTC().Format(time.RFC3339),
+	}
+	payload, err := providerprotocol.JobRequestPayload(req)
+	if err != nil {
+		return providerprotocol.JobReply{}, err
+	}
+	address, signature, err := h.wallets.SignPayload(payload)
+	if err != nil {
+		return providerprotocol.JobReply{}, err
+	}
+	if req.RequesterPubkey != address {
+		return providerprotocol.JobReply{}, fmt.Errorf("task requester pubkey must match local signing wallet")
+	}
+	req.Signature = signature
+	endpoint, err := providerEndpoint(option.ProviderEndpoint, "/v1/provider/jobs")
+	if err != nil {
+		return providerprotocol.JobReply{}, err
+	}
+	data, _ := json.Marshal(req)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(data))
+	if err != nil {
+		return providerprotocol.JobReply{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return providerprotocol.JobReply{}, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return providerprotocol.JobReply{}, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return providerprotocol.JobReply{}, fmt.Errorf("provider job returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	var wrapped struct {
+		Job providerprotocol.JobReply `json:"job"`
+	}
+	if err := json.Unmarshal(body, &wrapped); err != nil {
+		return providerprotocol.JobReply{}, err
+	}
+	if strings.TrimSpace(wrapped.Job.JobID) == "" {
+		return providerprotocol.JobReply{}, fmt.Errorf("provider job response missing jobId")
+	}
+	_ = plan
+	return wrapped.Job, nil
+}
+
+func (h *Handler) watchProviderJob(planID, localTaskID, endpoint, jobID, providerPubkey string) {
+	client := &http.Client{Timeout: 8 * time.Second}
+	for i := 0; i < 120; i++ {
+		time.Sleep(500 * time.Millisecond)
+		status, err := fetchProviderJob(client, endpoint, jobID)
+		if err != nil {
+			continue
+		}
+		if status.Status == string(task.StatusCompleted) {
+			artifacts := h.fetchProviderArtifacts(client, endpoint, jobID)
+			_, _ = h.tasks.Complete(localTaskID, task.CompleteRequest{ProviderPubkey: providerPubkey, Artifacts: artifacts})
+			if h.orderPlans != nil {
+				if plan, ok := h.orderPlans.Get(planID); ok {
+					_, _ = h.orderPlans.AddEvent(plan, "completed", "Provider Docker job completed.", "")
+				}
+			}
+			return
+		}
+		if status.Status == string(task.StatusFailed) {
+			_, _ = h.tasks.Fail(localTaskID, task.FailRequest{ProviderPubkey: providerPubkey, Error: "provider Docker job failed"})
+			if h.orderPlans != nil {
+				if plan, ok := h.orderPlans.Get(planID); ok {
+					_, _ = h.orderPlans.AddEvent(plan, "failed", "Provider Docker job failed.", "")
+				}
+			}
+			return
+		}
+	}
+	if h.orderPlans != nil {
+		if plan, ok := h.orderPlans.Get(planID); ok {
+			_, _ = h.orderPlans.AddEvent(plan, "provider_job_poll_timeout", "Provider job is still running or unreachable.", "")
+		}
+	}
+}
+
+func fetchProviderJob(client *http.Client, endpoint, jobID string) (providerprotocol.JobReply, error) {
+	url, err := providerEndpoint(endpoint, "/v1/provider/jobs/"+url.PathEscape(jobID))
+	if err != nil {
+		return providerprotocol.JobReply{}, err
+	}
+	resp, err := client.Get(url)
+	if err != nil {
+		return providerprotocol.JobReply{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return providerprotocol.JobReply{}, fmt.Errorf("provider job status %s", resp.Status)
+	}
+	var wrapped struct {
+		Job providerprotocol.JobReply `json:"job"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&wrapped); err != nil {
+		return providerprotocol.JobReply{}, err
+	}
+	return wrapped.Job, nil
+}
+
+func (h *Handler) fetchProviderArtifacts(client *http.Client, endpoint, jobID string) []task.ArtifactInput {
+	manifestURL, err := providerEndpoint(endpoint, "/v1/provider/jobs/"+url.PathEscape(jobID)+"/artifacts")
+	if err != nil {
+		return nil
+	}
+	resp, err := client.Get(manifestURL)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil
+	}
+	var wrapped struct {
+		Artifacts []task.Artifact `json:"artifacts"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&wrapped); err != nil {
+		return nil
+	}
+	out := make([]task.ArtifactInput, 0, len(wrapped.Artifacts))
+	for _, artifact := range wrapped.Artifacts {
+		artifactURL := strings.TrimSpace(artifact.URL)
+		if artifactURL == "" {
+			continue
+		}
+		if strings.HasPrefix(artifactURL, "/") {
+			artifactURL, err = providerEndpoint(endpoint, artifactURL)
+			if err != nil {
+				continue
+			}
+		}
+		itemResp, err := client.Get(artifactURL)
+		if err != nil {
+			continue
+		}
+		data, readErr := io.ReadAll(itemResp.Body)
+		_ = itemResp.Body.Close()
+		if readErr != nil || itemResp.StatusCode < 200 || itemResp.StatusCode >= 300 {
+			continue
+		}
+		out = append(out, task.ArtifactInput{
+			Name:        artifact.Name,
+			Content:     base64.StdEncoding.EncodeToString(data),
+			Encoding:    "base64",
+			ContentType: artifact.ContentType,
+		})
+	}
+	return out
+}
+
+// --- Local payment confirmation endpoints ---
+
+func (h *Handler) PaymentPINStatus(w http.ResponseWriter, r *http.Request) {
+	if h.paymentPIN == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "payment pin service not configured"})
+		return
+	}
+	status, err := h.paymentPIN.Status()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"paymentPin": status})
+}
+
+func (h *Handler) SetPaymentPIN(w http.ResponseWriter, r *http.Request) {
+	if h.paymentPIN == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "payment pin service not configured"})
+		return
+	}
+	var req struct {
+		Pin string `json:"pin"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	status, err := h.paymentPIN.Set(req.Pin)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"paymentPin": status})
+}
+
+func (h *Handler) ListPayments(w http.ResponseWriter, r *http.Request) {
+	if h.payments == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "payment ledger service not configured"})
+		return
+	}
+	filter := payment.ListFilter{
+		ApprovalID: strings.TrimSpace(r.URL.Query().Get("approvalId")),
+		TaskID:     strings.TrimSpace(r.URL.Query().Get("taskId")),
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"payments": h.payments.List(filter)})
+}
+
+func (h *Handler) GetPayment(w http.ResponseWriter, r *http.Request) {
+	if h.payments == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "payment ledger service not configured"})
+		return
+	}
+	record, ok := h.payments.Get(chi.URLParam(r, "id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "payment not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"payment": record})
 }
 
 // --- Cache endpoints ---
@@ -141,6 +1893,252 @@ func (h *Handler) CreateProduct(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"product": p, "review": review})
 }
 
+// --- Agent capability resource endpoints ---
+
+func (h *Handler) ListResources(w http.ResponseWriter, r *http.Request) {
+	if h.resources == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "resource service not configured"})
+		return
+	}
+	kind := resource.Type(strings.TrimSpace(r.URL.Query().Get("type")))
+	provider := strings.TrimSpace(r.URL.Query().Get("provider"))
+	query := r.URL.Query().Get("q")
+	region := strings.TrimSpace(r.URL.Query().Get("region"))
+	availability := strings.TrimSpace(r.URL.Query().Get("availability"))
+	minVRAMGB, hasMinVRAMGB, err := optionalQueryInt(r, "minVramGb", "min_vram_gb", "vramGbMin", "vram_gb_min")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	minGPUCount, hasMinGPUCount, err := optionalQueryInt(r, "minGpuCount", "min_gpu_count", "gpuCountMin", "gpu_count_min")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if kind != "" && !resource.IsKnownType(kind) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown resource type"})
+		return
+	}
+	resources := h.resources.Search(kind, query)
+	if provider != "" {
+		filtered := make([]resource.Resource, 0, len(resources))
+		for _, res := range resources {
+			if res.ProviderPubkey == provider || res.Provider == provider {
+				filtered = append(filtered, res)
+			}
+		}
+		resources = filtered
+	}
+	if region != "" || availability != "" || hasMinVRAMGB || hasMinGPUCount {
+		filtered := make([]resource.Resource, 0, len(resources))
+		for _, res := range resources {
+			if region != "" && !strings.EqualFold(res.Spec.Region, region) {
+				continue
+			}
+			if availability != "" && !strings.EqualFold(res.Availability, availability) {
+				continue
+			}
+			if hasMinVRAMGB && res.Spec.VRAMGB < minVRAMGB {
+				continue
+			}
+			if hasMinGPUCount && res.Spec.GPUCount < minGPUCount {
+				continue
+			}
+			filtered = append(filtered, res)
+		}
+		resources = filtered
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"resources": resources})
+}
+
+func (h *Handler) CreateResource(w http.ResponseWriter, r *http.Request) {
+	if h.resources == nil || h.reviewAgent == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "resource service not configured"})
+		return
+	}
+	var req resource.CreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+
+	reviewReq := agent.ReviewRequest{
+		ProductID:    fmt.Sprintf("resource-draft-%d", time.Now().UnixNano()),
+		Title:        req.Name,
+		Description:  req.Description,
+		Category:     string(req.Type),
+		Price:        req.PricePerUnit,
+		SellerPubkey: req.ProviderPubkey,
+	}
+	review, err := h.reviewAgent.Review(r.Context(), reviewReq)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "review failed: " + err.Error()})
+		return
+	}
+	review.MinerPubkey = h.selfPubkey
+	if !review.Approved {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"approved": false, "review": review})
+		return
+	}
+
+	res, err := resource.Build(req, resource.ReviewInput{
+		Approved:    review.Approved,
+		Reason:      review.Reason,
+		MinerPubkey: review.MinerPubkey,
+		Timestamp:   review.Timestamp,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := h.resources.Save(res); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "resource save failed"})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"resource": res, "review": review})
+}
+
+func (h *Handler) GetResource(w http.ResponseWriter, r *http.Request) {
+	if h.resources == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "resource service not configured"})
+		return
+	}
+	res, ok := h.resources.Get(chi.URLParam(r, "id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "resource not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (h *Handler) CreateDelegation(w http.ResponseWriter, r *http.Request) {
+	if h.delegations == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "delegation service not configured"})
+		return
+	}
+	var req delegation.CreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	d, err := h.delegations.Create(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"delegation": d})
+}
+
+func (h *Handler) ListDelegations(w http.ResponseWriter, r *http.Request) {
+	if h.delegations == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "delegation service not configured"})
+		return
+	}
+	user := strings.TrimSpace(r.URL.Query().Get("userPubkey"))
+	if user == "" {
+		user = strings.TrimSpace(r.URL.Query().Get("user"))
+	}
+	agentID := strings.TrimSpace(r.URL.Query().Get("agentId"))
+	delegations := h.delegations.ListByUser(user)
+	if agentID != "" {
+		filtered := make([]delegation.Delegation, 0, len(delegations))
+		for _, d := range delegations {
+			if d.AgentID == agentID {
+				filtered = append(filtered, d)
+			}
+		}
+		delegations = filtered
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"delegations": delegations})
+}
+
+func (h *Handler) CreateLease(w http.ResponseWriter, r *http.Request) {
+	if h.leases == nil || h.resources == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "lease service not configured"})
+		return
+	}
+	var req lease.CreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	l, err := h.leases.Create(req, h.resources, h.delegations)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"lease": l})
+}
+
+func (h *Handler) ListLeases(w http.ResponseWriter, r *http.Request) {
+	if h.leases == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "lease service not configured"})
+		return
+	}
+	party := strings.TrimSpace(r.URL.Query().Get("party"))
+	role := strings.TrimSpace(r.URL.Query().Get("role"))
+	if user := strings.TrimSpace(r.URL.Query().Get("userPubkey")); user != "" {
+		party = user
+		role = "user"
+	}
+	if provider := strings.TrimSpace(r.URL.Query().Get("providerPubkey")); provider != "" {
+		party = provider
+		role = "provider"
+	}
+	if agentID := strings.TrimSpace(r.URL.Query().Get("agentId")); agentID != "" {
+		party = agentID
+		role = "agent"
+	}
+	if party != "" && role != "user" && role != "provider" && role != "agent" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "role must be user, provider, or agent"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"leases": h.leases.ListByParty(party, role)})
+}
+
+func (h *Handler) GetLease(w http.ResponseWriter, r *http.Request) {
+	if h.leases == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "lease service not configured"})
+		return
+	}
+	l, ok := h.leases.Get(chi.URLParam(r, "id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "lease not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, l)
+}
+
+func (h *Handler) RevokeLease(w http.ResponseWriter, r *http.Request) {
+	if h.leases == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "lease service not configured"})
+		return
+	}
+	l, err := h.leases.Revoke(chi.URLParam(r, "id"))
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"lease": l})
+}
+
+func (h *Handler) GetLeaseCredentials(w http.ResponseWriter, r *http.Request) {
+	if h.leases == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "lease service not configured"})
+		return
+	}
+	cred, err := h.leases.Credentials(chi.URLParam(r, "id"))
+	if err != nil {
+		status := http.StatusConflict
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"credential": cred})
+}
+
 func (h *Handler) GetTx(w http.ResponseWriter, r *http.Request) {
 	sig := chi.URLParam(r, "signature")
 	data, ok := h.cache.Get(fmt.Sprintf("tx:%s", sig))
@@ -150,6 +2148,103 @@ func (h *Handler) GetTx(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
+}
+
+// --- Order endpoints ---
+
+func (h *Handler) CreateOrders(w http.ResponseWriter, r *http.Request) {
+	if h.orders == nil || h.products == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "order service not configured"})
+		return
+	}
+
+	var req orderpkg.CreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+
+	orders, err := h.orders.Create(req, h.products)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]any{"orders": orders})
+}
+
+func (h *Handler) ListOrders(w http.ResponseWriter, r *http.Request) {
+	if h.orders == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "order service not configured"})
+		return
+	}
+	party := strings.TrimSpace(r.URL.Query().Get("party"))
+	role := strings.TrimSpace(r.URL.Query().Get("role"))
+	if party == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "party required"})
+		return
+	}
+	if role != "buyer" && role != "seller" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "role must be buyer or seller"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"orders": h.orders.ListByParty(party, role)})
+}
+
+func (h *Handler) GetOrder(w http.ResponseWriter, r *http.Request) {
+	if h.orders == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "order service not configured"})
+		return
+	}
+	id := chi.URLParam(r, "id")
+	o, ok := h.orders.Get(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "order not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, o)
+}
+
+func (h *Handler) SimulateOrderPayment(w http.ResponseWriter, r *http.Request) {
+	if h.orders == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "order service not configured"})
+		return
+	}
+	o, err := h.orders.SimulatePayment(chi.URLParam(r, "id"))
+	if err != nil {
+		status := http.StatusConflict
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"order": o})
+}
+
+func (h *Handler) UpdateOrderStatus(w http.ResponseWriter, r *http.Request) {
+	if h.orders == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "order service not configured"})
+		return
+	}
+	var req orderpkg.StatusRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	o, err := h.orders.UpdateStatus(chi.URLParam(r, "id"), req.Status)
+	if err != nil {
+		status := http.StatusConflict
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		if strings.Contains(err.Error(), "unknown status") {
+			status = http.StatusBadRequest
+		}
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"order": o})
 }
 
 // --- Chat endpoints ---
@@ -433,4 +2528,232 @@ func productTitle(desc string) string {
 		desc = desc[:56]
 	}
 	return strings.TrimSpace(desc)
+}
+
+func requestBaseURL(r *http.Request) string {
+	scheme := "http"
+	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); forwarded != "" {
+		scheme = strings.Split(forwarded, ",")[0]
+	} else if r.TLS != nil {
+		scheme = "https"
+	}
+	host := strings.TrimSpace(r.Host)
+	if host == "" {
+		host = "127.0.0.1:8080"
+	}
+	return scheme + "://" + host
+}
+
+func optionalQueryInt(r *http.Request, names ...string) (int, bool, error) {
+	for _, name := range names {
+		raw := strings.TrimSpace(r.URL.Query().Get(name))
+		if raw == "" {
+			continue
+		}
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			return 0, false, fmt.Errorf("%s must be a non-negative integer", name)
+		}
+		return value, true, nil
+	}
+	return 0, false, nil
+}
+
+func firstQueryValue(r *http.Request, names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(r.URL.Query().Get(name)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func mergeApprovalRequest(req approval.CreateRequest, t task.Task) approval.CreateRequest {
+	if strings.TrimSpace(req.TaskID) == "" {
+		req.TaskID = t.ID
+	}
+	if strings.TrimSpace(req.Action) == "" {
+		req.Action = "approve_quote"
+	}
+	if strings.TrimSpace(req.UserPubkey) == "" {
+		req.UserPubkey = t.RequesterPubkey
+	}
+	if strings.TrimSpace(req.AgentID) == "" {
+		req.AgentID = t.AgentID
+	}
+	if strings.TrimSpace(req.ProviderPubkey) == "" {
+		req.ProviderPubkey = t.ProviderPubkey
+	}
+	if t.Quote != nil {
+		if strings.TrimSpace(req.Quote.ID) == "" {
+			req.Quote.ID = t.Quote.ID
+		}
+		if strings.TrimSpace(req.Quote.ProviderPubkey) == "" {
+			req.Quote.ProviderPubkey = t.Quote.ProviderPubkey
+		}
+		if req.Quote.PriceAmount == 0 {
+			req.Quote.PriceAmount = t.Quote.PriceAmount
+		}
+		if strings.TrimSpace(req.Quote.Currency) == "" {
+			req.Quote.Currency = t.Quote.Currency
+		}
+		if req.Quote.EstimatedSeconds == 0 {
+			req.Quote.EstimatedSeconds = t.Quote.EstimatedSeconds
+		}
+		if strings.TrimSpace(req.Quote.Notes) == "" {
+			req.Quote.Notes = t.Quote.Notes
+		}
+		if strings.TrimSpace(req.Quote.ExpiresAt) == "" {
+			req.Quote.ExpiresAt = t.Quote.ExpiresAt
+		}
+		if strings.TrimSpace(req.ProviderPubkey) == "" {
+			req.ProviderPubkey = t.Quote.ProviderPubkey
+		}
+		if req.Amount.Value == 0 {
+			req.Amount.Value = t.Quote.PriceAmount
+		}
+		if strings.TrimSpace(req.Amount.Currency) == "" {
+			req.Amount.Currency = t.Quote.Currency
+		}
+	}
+	if len(req.FileScope) == 0 {
+		req.FileScope = make([]approval.FileScope, 0, len(t.InputFiles))
+		for _, file := range t.InputFiles {
+			req.FileScope = append(req.FileScope, approval.FileScope{
+				Name:        file.Name,
+				SizeBytes:   file.SizeBytes,
+				ContentType: file.ContentType,
+				URI:         file.URI,
+				SHA256:      file.SHA256,
+			})
+		}
+	}
+	return req
+}
+
+func decorateApproval(a approval.Approval, baseURL string) approval.Approval {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if a.ApprovalURL == "" && baseURL != "" && a.ID != "" {
+		a.ApprovalURL = baseURL + "/approvals/" + a.ID
+	}
+	if a.RiskSummary == "" {
+		a.RiskSummary = "Approval required before this action can continue."
+	}
+	a.RequiresOwnerAuth = true
+	if a.NextAction == "" {
+		switch a.Status {
+		case approval.StatusPending:
+			a.NextAction = "approve_or_reject"
+		case approval.StatusApproved:
+			a.NextAction = "wait_for_task_execution"
+		case approval.StatusRejected:
+			a.NextAction = "task_rejected"
+		case approval.StatusExpired:
+			a.NextAction = "create_new_approval"
+		}
+	}
+	return a
+}
+
+func (h *Handler) validateOrderOption(plan orderplan.Plan, option market.OrderDraftOption) error {
+	if h.resources == nil {
+		return fmt.Errorf("resource service not configured")
+	}
+	res, ok := h.resources.Get(option.ResourceID)
+	if !ok {
+		return fmt.Errorf("resource unavailable")
+	}
+	if strings.TrimSpace(res.ProviderPubkey) != strings.TrimSpace(option.ProviderPubkey) && strings.TrimSpace(res.Provider) != strings.TrimSpace(option.ProviderPubkey) {
+		return fmt.Errorf("provider changed")
+	}
+	if !strings.EqualFold(res.Availability, "available") {
+		return fmt.Errorf("resource unavailable")
+	}
+	if !plan.RealtimeRequired {
+		if res.PricePerUnit != option.PriceSnapshot.PricePerUnit ||
+			string(res.BillingUnit) != option.PriceSnapshot.BillingUnit ||
+			market.ResourceSnapshotHash(res) != option.PriceSnapshot.ResourceHash {
+			return fmt.Errorf("resource changed")
+		}
+	}
+	if plan.NormalizedQuery.Type != "" && res.Type != plan.NormalizedQuery.Type {
+		return fmt.Errorf("resource type changed")
+	}
+	if plan.NormalizedQuery.MinVRAMGB > 0 && res.Spec.VRAMGB < plan.NormalizedQuery.MinVRAMGB {
+		return fmt.Errorf("resource no longer satisfies vram")
+	}
+	if plan.NormalizedQuery.MinGPUCount > 0 && res.Spec.GPUCount < plan.NormalizedQuery.MinGPUCount {
+		return fmt.Errorf("resource no longer satisfies gpu count")
+	}
+	if plan.NormalizedQuery.Region != "" && !strings.EqualFold(res.Spec.Region, plan.NormalizedQuery.Region) {
+		return fmt.Errorf("resource region changed")
+	}
+	return nil
+}
+
+func (h *Handler) orderPlanResponse(plan orderplan.Plan, includePayment bool) map[string]any {
+	resp := map[string]any{"orderPlan": plan}
+	if h.tasks != nil && strings.TrimSpace(plan.TaskID) != "" {
+		if t, ok := h.tasks.Get(plan.TaskID); ok {
+			resp["task"] = t
+		}
+	}
+	if strings.TrimSpace(plan.ProviderJobID) != "" {
+		resp["providerJob"] = map[string]any{"jobId": plan.ProviderJobID, "providerPubkey": selectedProvider(plan)}
+	}
+	if h.approvals != nil && strings.TrimSpace(plan.ApprovalID) != "" {
+		if a, ok := h.approvals.Get(plan.ApprovalID); ok {
+			resp["approval"] = decorateApproval(a, "")
+		}
+	}
+	if includePayment && h.payments != nil && strings.TrimSpace(plan.PaymentID) != "" {
+		if p, ok := h.payments.Get(plan.PaymentID); ok {
+			resp["payment"] = p
+		}
+	}
+	return resp
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func providerEndpoint(base, path string) (string, error) {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		return "", fmt.Errorf("provider endpoint required")
+	}
+	parsed, err := url.Parse(base)
+	if err != nil {
+		return "", err
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("provider endpoint must be absolute")
+	}
+	if strings.HasSuffix(parsed.Path, "/v1") {
+		parsed.Path = strings.TrimSuffix(parsed.Path, "/v1")
+	}
+	rel := strings.TrimLeft(path, "/")
+	joined, err := parsed.Parse(rel)
+	if err != nil {
+		return "", err
+	}
+	if strings.HasPrefix(path, "/") {
+		joined.Path = strings.TrimRight(parsed.Path, "/") + path
+	}
+	return joined.String(), nil
+}
+
+func selectedProvider(plan orderplan.Plan) string {
+	for _, option := range plan.Options {
+		if option.OptionID == plan.SelectedOptionID {
+			return option.ProviderPubkey
+		}
+	}
+	return ""
 }

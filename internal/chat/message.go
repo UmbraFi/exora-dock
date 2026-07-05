@@ -15,13 +15,13 @@ import (
 // Miners store and relay messages but cannot read the plaintext.
 type Message struct {
 	OrderID   string `json:"order_id"`
-	From      string `json:"from"`       // sender pubkey (base58)
-	To        string `json:"to"`         // receiver pubkey (base58)
-	Text      string `json:"text"`       // encrypted ciphertext (hex), only sender/receiver can decrypt
+	From      string `json:"from"` // sender pubkey (base58)
+	To        string `json:"to"`   // receiver pubkey (base58)
+	Text      string `json:"text"` // encrypted ciphertext (hex), only sender/receiver can decrypt
 	Timestamp int64  `json:"ts"`
-	PrevHash  string `json:"prev_hash"`  // hash of previous message, "" if first
-	Hash      string `json:"hash"`       // SHA256(order_id + from + to + text + ts + prev_hash)
-	Signature string `json:"signature"`  // ed25519 signature of Hash by sender
+	PrevHash  string `json:"prev_hash"` // hash of previous message, "" if first
+	Hash      string `json:"hash"`      // SHA256(order_id + from + to + text + ts + prev_hash)
+	Signature string `json:"signature"` // ed25519 signature of Hash by sender
 }
 
 // ComputeHash calculates the message hash from its fields.

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/UmbraFi/Umbra_SVR/internal/agent"
-	"github.com/UmbraFi/Umbra_SVR/internal/cache"
+	"github.com/exora-dock/exora-dock/internal/agent"
+	"github.com/exora-dock/exora-dock/internal/cache"
 )
 
 const (
@@ -174,7 +174,7 @@ func Build(req CreateRequest, review agent.ReviewResult) (Product, error) {
 	return Product{
 		ID:                   id,
 		Name:                 name,
-		Brand:                "UMBRA LOCAL",
+		Brand:                "EXORA LOCAL",
 		Price:                price,
 		Image:                "/v1/ipfs/" + req.ImageCIDs[0],
 		Category:             category,

@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/UmbraFi/Umbra_SVR/internal/dht"
+	"github.com/exora-dock/exora-dock/internal/dht"
 )
 
 func TestEnsureLocalMinerRegistersSingleDevMiner(t *testing.T) {

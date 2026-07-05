@@ -9,10 +9,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/UmbraFi/Umbra_SVR/internal/cache"
-	"github.com/UmbraFi/Umbra_SVR/internal/chat"
-	"github.com/UmbraFi/Umbra_SVR/internal/dht"
 	"github.com/dgraph-io/badger/v4"
+	"github.com/exora-dock/exora-dock/internal/cache"
+	"github.com/exora-dock/exora-dock/internal/chat"
+	"github.com/exora-dock/exora-dock/internal/dht"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -49,7 +49,7 @@ func TestChatHandlersReturnWrappedShapes(t *testing.T) {
 		t.Fatalf("Append() error = %v", err)
 	}
 
-	handler := NewHandler(c, store, nil, chat.NewHub(), dht.NewRing(), nil, nil, nil, nil, "local-dev-miner")
+	handler := NewHandler(c, store, nil, chat.NewHub(), dht.NewRing(), nil, nil, nil, nil, nil, nil, nil, nil, "local-dev-miner")
 	router := chi.NewRouter()
 	router.Get("/messages/{orderID}", handler.GetMessages)
 	router.Get("/unread/{pubkey}", handler.GetUnread)

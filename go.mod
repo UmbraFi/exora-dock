@@ -1,4 +1,4 @@
-module github.com/UmbraFi/Umbra_SVR
+module github.com/exora-dock/exora-dock
 
 go 1.22
 
