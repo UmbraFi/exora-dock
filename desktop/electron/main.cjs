@@ -650,15 +650,24 @@ async function agent_search_sellers(payload) {
   const paths = await dockPaths()
   await ensureLocalLayout(paths)
   const token = await localAgentToken(paths)
-  return httpJson('POST', '/v1/agent/buyer-work', {
+  const negotiationFirst = input.negotiationFirst !== false
+  const body = {
     query: input.query,
     projectPath: input.projectPath,
     workUid: input.workUid,
-    agentId: 'exora-desktop-agent',
+    agentId: String(input.agentId || '').trim() || 'exora-desktop-agent',
     maxResults: input.maxResults ?? 8,
     maxCandidates: input.maxCandidates ?? 3,
-    maxOptions: 6,
+    maxOptions: input.maxOptions ?? 6,
     taskTemplate: input.taskTemplate || undefined,
+  }
+  if (negotiationFirst) {
+    return httpJson('POST', '/v1/agent/buyer-work', body, token)
+  }
+  return httpJson('POST', '/v1/agent/search-sellers', {
+    ...body,
+    prepareOrderOptions: true,
+    createSelectionRequest: true,
   }, token)
 }
 

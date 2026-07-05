@@ -108,13 +108,22 @@ type SelectedKind = 'plan' | 'approval' | 'task' | 'payment'
 type ActiveView = 'work' | 'market' | 'chat' | 'settings'
 type ChatMode = 'expanded' | 'compact'
 type OrderSide = 'buyer' | 'seller'
-type SettingsView = 'api' | 'runtime' | 'agents' | 'buyer-card' | 'seller-card' | 'seller' | 'pwa' | 'wallet' | 'security' | 'diagnostics' | 'archives'
+type SettingsView = 'api' | 'runtime' | 'agents' | 'buyer-agent' | 'buyer-card' | 'seller-card' | 'seller' | 'pwa' | 'wallet' | 'security' | 'diagnostics' | 'archives'
 type AppLanguage = 'en' | 'zh'
 type AppTheme = 'light' | 'dark'
 type ProfileSubmenu = 'language' | 'theme'
 type ProjectFolderMenuAction = 'open' | 'rename' | 'archive' | 'remove'
 type TaskMenuAction = 'pin' | 'rename' | 'archive' | 'unread' | 'open-project' | 'copy-id'
 type PermissionMode = 'ask' | 'approve' | 'full' | 'custom'
+
+type BuyerAgentSettings = {
+  enabled: boolean
+  agentId: string
+  negotiationFirst: boolean
+  maxResults: number
+  maxCandidates: number
+  maxOptions: number
+}
 
 type CardDiagnosticsTask = {
   id: number
@@ -196,6 +205,7 @@ type PersistedAppSettings = {
   language?: AppLanguage
   theme?: AppTheme
   permissionMode?: PermissionMode
+  buyerAgentSettings?: Partial<BuyerAgentSettings>
   activeSettingsView?: SettingsView
   workOrderSide?: OrderSide
   marketOrderSide?: OrderSide
@@ -506,6 +516,7 @@ const settingsNavIcons: Record<SettingsView, string> = {
   api: icon(KeyRound),
   runtime: icon(Cpu),
   agents: icon(Network),
+  'buyer-agent': icon(Hand),
   'buyer-card': icon(IdCard),
   'seller-card': icon(BadgeCheck),
   seller: icon(ShoppingBag),
@@ -537,6 +548,15 @@ const permissionOptions: Array<{ mode: PermissionMode; label: string; descriptio
   { mode: 'full', label: 'Full access', description: 'Unrestricted access to the internet and any file on your computer' },
   { mode: 'custom', label: 'Custom (config.toml)', description: 'Uses permissions defined in config.toml' },
 ]
+
+const DEFAULT_BUYER_AGENT_SETTINGS: BuyerAgentSettings = {
+  enabled: true,
+  agentId: 'exora-desktop-agent',
+  negotiationFirst: true,
+  maxResults: 8,
+  maxCandidates: 3,
+  maxOptions: 6,
+}
 
 const projectFolderMenuIcons = {
   open: icon(FolderOpen),
@@ -827,6 +847,57 @@ app.innerHTML = `
                 <button type="button" data-action="pwa-link-start">New QR</button>
                 <button class="secondary" type="button" data-action="pwa-link-check">Check Link</button>
               </div>
+            </div>
+          </section>
+
+          <section class="settings-page hidden" data-settings-page="buyer-agent">
+            <div class="settings-section">
+              <div class="section-title">
+                <strong>Buyer agent</strong>
+                <span data-buyer-agent-chip>enabled</span>
+              </div>
+              <form class="agent-card-form card-setup-list" data-buyer-agent-form>
+                <label class="card-setup-row card-field-row inline-check-row">
+                  <span class="field-label">Enabled</span>
+                  <small class="field-help">Controls the built-in buyer agent composer.</small>
+                  <span class="inline-check-control"><input data-buyer-field="enabled" type="checkbox" /> Enable buyer agent</span>
+                </label>
+                <label class="card-setup-row card-field-row">
+                  <span class="field-label">Agent ID</span>
+                  <small class="field-help">Written into plans, negotiations, tasks, and approvals.</small>
+                  <input data-buyer-field="agentId" placeholder="exora-desktop-agent" />
+                </label>
+                <div class="card-setup-row card-setup-section-row"><strong>Routing</strong><span>Seller discovery and negotiation limits</span></div>
+                <label class="card-setup-row card-field-row inline-check-row">
+                  <span class="field-label">Negotiation first</span>
+                  <small class="field-help">Ask seller agents for quotes before creating owner choices.</small>
+                  <span class="inline-check-control"><input data-buyer-field="negotiationFirst" type="checkbox" /> Use seller-agent negotiation</span>
+                </label>
+                <label class="card-setup-row card-field-row">
+                  <span class="field-label">Search results</span>
+                  <small class="field-help">Maximum seller-card or resource matches to inspect.</small>
+                  <input data-buyer-field="maxResults" type="number" min="1" max="20" step="1" />
+                </label>
+                <label class="card-setup-row card-field-row">
+                  <span class="field-label">Seller negotiations</span>
+                  <small class="field-help">Maximum seller agents contacted per buyer request.</small>
+                  <input data-buyer-field="maxCandidates" type="number" min="1" max="6" step="1" />
+                </label>
+                <label class="card-setup-row card-field-row">
+                  <span class="field-label">Order options</span>
+                  <small class="field-help">Maximum choices prepared when negotiation-first is off.</small>
+                  <input data-buyer-field="maxOptions" type="number" min="1" max="6" step="1" />
+                </label>
+                <div class="card-setup-row card-setup-section-row"><strong>Owner control</strong><span>Default permission boundary</span></div>
+                <label class="card-setup-row card-field-row">
+                  <span class="field-label">Permission mode</span>
+                  <small class="field-help">Applied to new buyer-agent work.</small>
+                  <select data-buyer-field="permissionMode">
+                    ${permissionOptions.map((item) => `<option value="${escapeHTML(item.mode)}">${escapeHTML(item.label)}</option>`).join('')}
+                  </select>
+                </label>
+                <button type="submit">Save Buyer Agent</button>
+              </form>
             </div>
           </section>
 
@@ -1293,6 +1364,7 @@ const fields = {
   imageTag: app.querySelector<HTMLElement>('[data-image-tag]')!,
   dataDir: app.querySelector<HTMLElement>('[data-data-dir]')!,
   keyState: app.querySelector<HTMLElement>('[data-key-state]')!,
+  buyerAgentChip: app.querySelector<HTMLElement>('[data-buyer-agent-chip]')!,
   sellerMarketChip: app.querySelector<HTMLElement>('[data-seller-market-chip]')!,
   profileIdentity: app.querySelector<HTMLButtonElement>('[data-action="open-profile-menu"]')!,
   profileAvatar: app.querySelector<HTMLElement>('[data-profile-avatar]')!,
@@ -1359,6 +1431,7 @@ const fields = {
   archiveRecords: app.querySelector<HTMLElement>('[data-archive-records]')!,
 }
 
+const buyerAgentForm = app.querySelector<HTMLFormElement>('[data-buyer-agent-form]')!
 const sellerForm = app.querySelector<HTMLFormElement>('[data-seller-form]')!
 const llmSettingsForm = app.querySelector<HTMLFormElement>('[data-llm-form]')!
 const walletBindForm = app.querySelector<HTMLFormElement>('[data-wallet-bind-form]')!
@@ -1392,6 +1465,38 @@ function legacyStoredPermissionMode(): PermissionMode {
 
 function storedPermissionMode(): PermissionMode {
   return hasDesktopBridge() ? 'ask' : legacyStoredPermissionMode()
+}
+
+function clampInteger(value: unknown, fallback: number, min: number, max: number) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.min(max, Math.max(min, Math.trunc(parsed)))
+}
+
+function normalizeBuyerAgentSettings(value: unknown): BuyerAgentSettings {
+  const input = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Partial<BuyerAgentSettings>
+    : {}
+  return {
+    enabled: typeof input.enabled === 'boolean' ? input.enabled : DEFAULT_BUYER_AGENT_SETTINGS.enabled,
+    agentId: String(input.agentId || '').trim() || DEFAULT_BUYER_AGENT_SETTINGS.agentId,
+    negotiationFirst: typeof input.negotiationFirst === 'boolean' ? input.negotiationFirst : DEFAULT_BUYER_AGENT_SETTINGS.negotiationFirst,
+    maxResults: clampInteger(input.maxResults, DEFAULT_BUYER_AGENT_SETTINGS.maxResults, 1, 20),
+    maxCandidates: clampInteger(input.maxCandidates, DEFAULT_BUYER_AGENT_SETTINGS.maxCandidates, 1, 6),
+    maxOptions: clampInteger(input.maxOptions, DEFAULT_BUYER_AGENT_SETTINGS.maxOptions, 1, 6),
+  }
+}
+
+function legacyStoredBuyerAgentSettings(): BuyerAgentSettings {
+  try {
+    return normalizeBuyerAgentSettings(JSON.parse(localStorage.getItem('exora.buyerAgentSettings') || '{}'))
+  } catch {
+    return normalizeBuyerAgentSettings({})
+  }
+}
+
+function storedBuyerAgentSettings(): BuyerAgentSettings {
+  return hasDesktopBridge() ? normalizeBuyerAgentSettings({}) : legacyStoredBuyerAgentSettings()
 }
 
 function normalizeArchivedRecord(value: unknown): ArchivedWorkRecord | undefined {
@@ -1488,6 +1593,7 @@ const state: {
   approvals: Approval[]
   tasks: Task[]
   payments: PaymentRecord[]
+  buyerAgentSettings: BuyerAgentSettings
   sellerSettings?: SellerSettings
   sellerMarketStatus?: SellerMarketStatus
   agentCards: AgentCardsMine
@@ -1553,6 +1659,7 @@ const state: {
   approvals: [],
   tasks: [],
   payments: [],
+  buyerAgentSettings: storedBuyerAgentSettings(),
   llmModels: [],
   llmProfiles: [],
   activeLLMProfileId: undefined,
@@ -1614,7 +1721,7 @@ function isOrderSide(value: unknown): value is OrderSide {
 }
 
 function isSettingsView(value: unknown): value is SettingsView {
-  return value === 'api' || value === 'runtime' || value === 'agents' || value === 'buyer-card' || value === 'seller-card' || value === 'seller' || value === 'pwa' || value === 'wallet' || value === 'security' || value === 'diagnostics' || value === 'archives'
+  return value === 'api' || value === 'runtime' || value === 'agents' || value === 'buyer-agent' || value === 'buyer-card' || value === 'seller-card' || value === 'seller' || value === 'pwa' || value === 'wallet' || value === 'security' || value === 'diagnostics' || value === 'archives'
 }
 
 function legacyAppSettingsSnapshot(): PersistedAppSettings {
@@ -1622,6 +1729,7 @@ function legacyAppSettingsSnapshot(): PersistedAppSettings {
     language: legacyStoredLanguage(),
     theme: legacyStoredTheme(),
     permissionMode: legacyStoredPermissionMode(),
+    buyerAgentSettings: legacyStoredBuyerAgentSettings(),
     workTaskState: workTaskStateToPersisted(legacyStoredWorkTaskState()),
   }
 }
@@ -1632,6 +1740,7 @@ function normalizePersistedSettings(value: unknown): PersistedAppSettings {
     language: isAppLanguage(input.language) ? input.language : undefined,
     theme: isAppTheme(input.theme) ? input.theme : undefined,
     permissionMode: isPermissionMode(input.permissionMode) ? input.permissionMode : undefined,
+    buyerAgentSettings: input.buyerAgentSettings && typeof input.buyerAgentSettings === 'object' ? normalizeBuyerAgentSettings(input.buyerAgentSettings) : undefined,
     activeSettingsView: isSettingsView(input.activeSettingsView) ? input.activeSettingsView : undefined,
     workOrderSide: isOrderSide(input.workOrderSide) ? input.workOrderSide : undefined,
     marketOrderSide: isOrderSide(input.marketOrderSide) ? input.marketOrderSide : undefined,
@@ -1648,6 +1757,7 @@ function mergePersistedSettings(fallback: PersistedAppSettings, value: Persisted
     language: value.language ?? fallback.language,
     theme: value.theme ?? fallback.theme,
     permissionMode: value.permissionMode ?? fallback.permissionMode,
+    buyerAgentSettings: value.buyerAgentSettings ?? fallback.buyerAgentSettings,
     activeSettingsView: value.activeSettingsView ?? fallback.activeSettingsView,
     workOrderSide: value.workOrderSide ?? fallback.workOrderSide,
     marketOrderSide: value.marketOrderSide ?? fallback.marketOrderSide,
@@ -1672,6 +1782,7 @@ function applyPersistedSettings(settings: PersistedAppSettings) {
   if (settings.language) state.language = settings.language
   if (settings.theme) state.theme = settings.theme
   if (settings.permissionMode) state.permissionMode = settings.permissionMode
+  if (settings.buyerAgentSettings) state.buyerAgentSettings = normalizeBuyerAgentSettings(settings.buyerAgentSettings)
   if (settings.activeSettingsView) state.activeSettingsView = settings.activeSettingsView
   if (settings.workOrderSide) state.workOrderSide = settings.workOrderSide
   if (settings.marketOrderSide) state.marketOrderSide = settings.marketOrderSide
@@ -1687,6 +1798,7 @@ function appSettingsSnapshot(): PersistedAppSettings {
     language: state.language,
     theme: state.theme,
     permissionMode: state.permissionMode,
+    buyerAgentSettings: state.buyerAgentSettings,
     activeSettingsView: state.activeSettingsView,
     workOrderSide: state.workOrderSide,
     marketOrderSide: state.marketOrderSide,
@@ -1713,6 +1825,7 @@ async function saveAppSettingsNow() {
     localStorage.setItem('exora.language', settings.language || 'en')
     localStorage.setItem('exora.theme', settings.theme || 'light')
     localStorage.setItem('exora.permissionMode', settings.permissionMode || 'ask')
+    localStorage.setItem('exora.buyerAgentSettings', JSON.stringify(settings.buyerAgentSettings || {}))
     localStorage.setItem(WORK_TASK_STATE_KEY, JSON.stringify(settings.workTaskState || {}))
     return
   }
@@ -3086,6 +3199,10 @@ async function saveTransactionsSnapshot() {
 async function submitAgentMessage() {
   const query = agentQuery.value.trim()
   if (!query || state.busy) return
+  if (!state.buyerAgentSettings.enabled) {
+    showToast('Buyer agent is disabled in Settings.')
+    return
+  }
 
   closePermissionMenu()
   setActiveView('chat')
@@ -3103,13 +3220,11 @@ async function submitAgentMessage() {
   setBusy(true)
   try {
     const response = await invoke<MarketSearchResult>('agent_search_sellers', {
-      input: {
-        query,
-        maxResults: 8,
+      input: buyerAgentSearchInput(query, {
         projectPath: activeProjectFolder().path,
         permissionMode: state.permissionMode,
         taskTemplate: permissionTaskTemplate(),
-      },
+      }),
     })
     updateMessage(pendingID, {
       text: marketResponseText(response),
@@ -3317,6 +3432,10 @@ function renderCandidateSummary(candidate: SellerCandidate) {
 async function searchCardMarket(query: string) {
   const trimmed = query.trim()
   if (!trimmed || state.busy) return
+  if (!state.buyerAgentSettings.enabled) {
+    showToast('Buyer agent is disabled in Settings.')
+    return
+  }
   setActiveView('market')
   state.marketSelectedId = undefined
   const pendingID = pushMessage({
@@ -3328,7 +3447,7 @@ async function searchCardMarket(query: string) {
   setBusy(true)
   try {
     const response = await invoke<MarketSearchResult>('agent_search_sellers', {
-      input: { query: trimmed, maxResults: 8 },
+      input: buyerAgentSearchInput(trimmed),
     })
     updateMessage(pendingID, {
       text: marketResponseText(response),
@@ -3358,6 +3477,7 @@ async function searchCardMarket(query: string) {
 
 const settingsNavItems: Array<{ view: SettingsView; title: string }> = [
   { view: 'api', title: 'Provider API' },
+  { view: 'buyer-agent', title: 'Buyer Agent' },
   { view: 'buyer-card', title: 'Buyer Card' },
   { view: 'seller-card', title: 'Seller Card' },
   { view: 'seller', title: 'Seller Agent' },
@@ -5742,6 +5862,7 @@ function focusExternalOrderPlan(plan: OrderPlan) {
 function renderAll() {
   renderProfileSummary()
   renderPermissionControl()
+  renderBuyerAgentSettings()
   renderLedger()
   renderContextStrip()
   renderDecisionPanel()
@@ -5766,6 +5887,74 @@ function renderSeller(settings: SellerSettings) {
   setValue('dockerMaxCpus', String(settings.dockerMaxCpus || 0))
   setValue('dockerMaxMemoryMb', String(settings.dockerMaxMemoryMb || 0))
   setChecked('dockerAllowGpu', Boolean(settings.dockerAllowGpu))
+}
+
+function buyerAgentInput(name: string) {
+  return buyerAgentForm.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-buyer-field="${name}"]`)!
+}
+
+function buyerAgentValue(name: string) {
+  return buyerAgentInput(name).value.trim()
+}
+
+function setBuyerAgentValue(name: string, next: string) {
+  buyerAgentInput(name).value = next
+}
+
+function buyerAgentChecked(name: string) {
+  return (buyerAgentInput(name) as HTMLInputElement).checked
+}
+
+function setBuyerAgentChecked(name: string, next: boolean) {
+  ;(buyerAgentInput(name) as HTMLInputElement).checked = next
+}
+
+function renderBuyerAgentSettings() {
+  const settings = state.buyerAgentSettings
+  setBuyerAgentChecked('enabled', settings.enabled)
+  setBuyerAgentValue('agentId', settings.agentId)
+  setBuyerAgentChecked('negotiationFirst', settings.negotiationFirst)
+  setBuyerAgentValue('maxResults', String(settings.maxResults))
+  setBuyerAgentValue('maxCandidates', String(settings.maxCandidates))
+  setBuyerAgentValue('maxOptions', String(settings.maxOptions))
+  setBuyerAgentValue('permissionMode', state.permissionMode)
+  fields.buyerAgentChip.textContent = settings.enabled ? (settings.negotiationFirst ? 'negotiation-first' : 'search-first') : 'disabled'
+  fields.buyerAgentChip.dataset.state = settings.enabled ? 'ok' : 'warn'
+}
+
+function buyerAgentPayload(): BuyerAgentSettings {
+  return normalizeBuyerAgentSettings({
+    enabled: buyerAgentChecked('enabled'),
+    agentId: buyerAgentValue('agentId'),
+    negotiationFirst: buyerAgentChecked('negotiationFirst'),
+    maxResults: buyerAgentValue('maxResults'),
+    maxCandidates: buyerAgentValue('maxCandidates'),
+    maxOptions: buyerAgentValue('maxOptions'),
+  })
+}
+
+function saveBuyerAgentSettings() {
+  state.buyerAgentSettings = buyerAgentPayload()
+  const permissionMode = buyerAgentValue('permissionMode')
+  if (isPermissionMode(permissionMode)) state.permissionMode = permissionMode
+  if (!hasDesktopBridge()) localStorage.setItem('exora.permissionMode', state.permissionMode)
+  scheduleSaveAppSettings()
+  renderBuyerAgentSettings()
+  renderPermissionControl()
+  showToast('Buyer agent saved.')
+}
+
+function buyerAgentSearchInput(query: string, extra: Record<string, unknown> = {}) {
+  const settings = state.buyerAgentSettings
+  return {
+    ...extra,
+    query,
+    agentId: settings.agentId,
+    negotiationFirst: settings.negotiationFirst,
+    maxResults: settings.maxResults,
+    maxCandidates: settings.maxCandidates,
+    maxOptions: settings.maxOptions,
+  }
 }
 
 function currentLLMProfile(settings?: SellerSettings): LLMProfile {
@@ -6352,6 +6541,7 @@ function showToast(message: string) {
 
 const settingsTitles: Record<SettingsView, { kicker: string; title: string }> = {
   api: { kicker: 'AI & Models', title: 'Provider API' },
+  'buyer-agent': { kicker: 'Agents', title: 'Buyer Agent' },
   'buyer-card': { kicker: 'Agents', title: 'Buyer Card' },
   'seller-card': { kicker: 'Agents', title: 'Seller Card' },
   seller: { kicker: 'Agents', title: 'Seller Agent' },
@@ -6991,6 +7181,11 @@ walletBindForm.addEventListener('submit', (event) => {
     state.walletStatus = response.wallet || {}
     renderWalletStatus()
   }, 'Wallet address bound.')
+})
+
+buyerAgentForm.addEventListener('submit', (event) => {
+  event.preventDefault()
+  saveBuyerAgentSettings()
 })
 
 sellerForm.addEventListener('submit', (event) => {
