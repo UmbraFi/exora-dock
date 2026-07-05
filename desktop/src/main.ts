@@ -35,6 +35,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   ShoppingBag,
+  ShoppingCart,
   SquareKanban,
   Smartphone,
   WalletCards,
@@ -210,6 +211,7 @@ type PersistedAppSettings = {
   workOrderSide?: OrderSide
   marketOrderSide?: OrderSide
   sidebarCollapsed?: boolean
+  sidebarWidth?: number
   projectFolderCollapsed?: boolean
   expandedProjectFolderPaths?: string[]
   seenProjectFolderPaths?: string[]
@@ -344,6 +346,9 @@ const isMacPlatform = /Mac|iPhone|iPad|iPod/.test(navigator.platform)
 const TOP_WINDOW_DRAG_HEIGHT = 64
 const WORK_TASK_STATE_KEY = 'exora.workTaskState.v1'
 const APP_SETTINGS_SAVE_DELAY = 250
+const DEFAULT_SIDEBAR_WIDTH = 277
+const SIDEBAR_MIN_WIDTH = 236
+const SIDEBAR_MAX_WIDTH = 480
 const CHAT_SAVE_DELAY = 500
 app.dataset.platform = isMacPlatform ? 'mac' : 'windows'
 
@@ -516,7 +521,7 @@ const settingsNavIcons: Record<SettingsView, string> = {
   api: icon(KeyRound),
   runtime: icon(Cpu),
   agents: icon(Network),
-  'buyer-agent': icon(Hand),
+  'buyer-agent': icon(ShoppingCart),
   'buyer-card': icon(IdCard),
   'seller-card': icon(BadgeCheck),
   seller: icon(ShoppingBag),
@@ -612,6 +617,7 @@ app.innerHTML = `
     </div>
     <div class="sidebar-drag-strip" data-drag-region></div>
     <aside class="task-sidebar">
+      <div class="sidebar-resize-handle no-drag" data-sidebar-resize-handle role="separator" aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin="${SIDEBAR_MIN_WIDTH}" aria-valuemax="${SIDEBAR_MAX_WIDTH}" tabindex="0" title="Resize sidebar"></div>
       <nav class="view-switch" aria-label="Workspace views">
         <div class="view-tab-cell"><button type="button" data-view-tab="chat"><span class="tab-icon">${tabIcons.work}</span><span>Work</span></button></div>
         <div class="view-tab-cell"><button type="button" data-view-tab="market"><span class="tab-icon">${tabIcons.market}</span><span>Market</span></button></div>
@@ -1404,6 +1410,7 @@ const fields = {
   backButton: app.querySelector<HTMLButtonElement>('[data-toolbar-action="back"]')!,
   forwardButton: app.querySelector<HTMLButtonElement>('[data-toolbar-action="forward"]')!,
   sidebarButton: app.querySelector<HTMLButtonElement>('[data-toolbar-action="toggle-sidebar"]')!,
+  sidebarResizeHandle: app.querySelector<HTMLElement>('[data-sidebar-resize-handle]')!,
   providerNote: app.querySelector<HTMLElement>('[data-provider-note]')!,
   capabilityNote: app.querySelector<HTMLElement>('[data-capability-note]')!,
   llmTestNote: app.querySelector<HTMLElement>('[data-llm-test-note]')!,
@@ -1471,6 +1478,18 @@ function clampInteger(value: unknown, fallback: number, min: number, max: number
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return fallback
   return Math.min(max, Math.max(min, Math.trunc(parsed)))
+}
+
+function normalizeSidebarWidth(value: unknown, fallback = DEFAULT_SIDEBAR_WIDTH) {
+  return clampInteger(value, fallback, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
+}
+
+function legacyStoredSidebarWidth() {
+  return normalizeSidebarWidth(localStorage.getItem('exora.sidebarWidth'))
+}
+
+function storedSidebarWidth() {
+  return hasDesktopBridge() ? DEFAULT_SIDEBAR_WIDTH : legacyStoredSidebarWidth()
 }
 
 function normalizeBuyerAgentSettings(value: unknown): BuyerAgentSettings {
@@ -1633,6 +1652,7 @@ const state: {
   workOrderSide: OrderSide
   marketOrderSide: OrderSide
   sidebarCollapsed: boolean
+  sidebarWidth: number
   viewHistory: ActiveView[]
   viewHistoryIndex: number
   selectedId?: string
@@ -1685,6 +1705,7 @@ const state: {
   workOrderSide: 'buyer',
   marketOrderSide: 'buyer',
   sidebarCollapsed: false,
+  sidebarWidth: storedSidebarWidth(),
   viewHistory: ['chat'],
   viewHistoryIndex: 0,
   newConversationDraft: true,
@@ -1700,6 +1721,7 @@ let cardDiagnosticsTaskSequence = 0
 let settingsPersistenceReady = false
 let appSettingsSaveTimer: number | undefined
 let lastTransactionsFingerprint = ''
+let sidebarResizePointerId: number | undefined
 const chatSaveTimers = new Map<string, number>()
 const chatSaveQueues = new Map<string, Promise<void>>()
 const threadStorageKeys = new Map<string, string>()
@@ -1730,6 +1752,7 @@ function legacyAppSettingsSnapshot(): PersistedAppSettings {
     theme: legacyStoredTheme(),
     permissionMode: legacyStoredPermissionMode(),
     buyerAgentSettings: legacyStoredBuyerAgentSettings(),
+    sidebarWidth: legacyStoredSidebarWidth(),
     workTaskState: workTaskStateToPersisted(legacyStoredWorkTaskState()),
   }
 }
@@ -1745,6 +1768,7 @@ function normalizePersistedSettings(value: unknown): PersistedAppSettings {
     workOrderSide: isOrderSide(input.workOrderSide) ? input.workOrderSide : undefined,
     marketOrderSide: isOrderSide(input.marketOrderSide) ? input.marketOrderSide : undefined,
     sidebarCollapsed: typeof input.sidebarCollapsed === 'boolean' ? input.sidebarCollapsed : undefined,
+    sidebarWidth: input.sidebarWidth === undefined ? undefined : normalizeSidebarWidth(input.sidebarWidth),
     projectFolderCollapsed: typeof input.projectFolderCollapsed === 'boolean' ? input.projectFolderCollapsed : undefined,
     expandedProjectFolderPaths: Array.isArray(input.expandedProjectFolderPaths) ? input.expandedProjectFolderPaths.map(String).filter(Boolean) : undefined,
     seenProjectFolderPaths: Array.isArray(input.seenProjectFolderPaths) ? input.seenProjectFolderPaths.map(String).filter(Boolean) : undefined,
@@ -1762,6 +1786,7 @@ function mergePersistedSettings(fallback: PersistedAppSettings, value: Persisted
     workOrderSide: value.workOrderSide ?? fallback.workOrderSide,
     marketOrderSide: value.marketOrderSide ?? fallback.marketOrderSide,
     sidebarCollapsed: value.sidebarCollapsed ?? fallback.sidebarCollapsed,
+    sidebarWidth: value.sidebarWidth ?? fallback.sidebarWidth,
     projectFolderCollapsed: value.projectFolderCollapsed ?? fallback.projectFolderCollapsed,
     expandedProjectFolderPaths: value.expandedProjectFolderPaths ?? fallback.expandedProjectFolderPaths,
     seenProjectFolderPaths: value.seenProjectFolderPaths ?? fallback.seenProjectFolderPaths,
@@ -1787,6 +1812,7 @@ function applyPersistedSettings(settings: PersistedAppSettings) {
   if (settings.workOrderSide) state.workOrderSide = settings.workOrderSide
   if (settings.marketOrderSide) state.marketOrderSide = settings.marketOrderSide
   if (typeof settings.sidebarCollapsed === 'boolean') state.sidebarCollapsed = settings.sidebarCollapsed
+  if (typeof settings.sidebarWidth === 'number') state.sidebarWidth = normalizeSidebarWidth(settings.sidebarWidth)
   if (typeof settings.projectFolderCollapsed === 'boolean') state.projectFolderCollapsed = settings.projectFolderCollapsed
   if (settings.expandedProjectFolderPaths) state.expandedProjectFolderPaths = new Set(settings.expandedProjectFolderPaths.map(projectPathKey).filter(Boolean))
   if (settings.seenProjectFolderPaths) state.seenProjectFolderPaths = new Set(settings.seenProjectFolderPaths.map(projectPathKey).filter(Boolean))
@@ -1803,6 +1829,7 @@ function appSettingsSnapshot(): PersistedAppSettings {
     workOrderSide: state.workOrderSide,
     marketOrderSide: state.marketOrderSide,
     sidebarCollapsed: state.sidebarCollapsed,
+    sidebarWidth: state.sidebarWidth,
     projectFolderCollapsed: state.projectFolderCollapsed,
     expandedProjectFolderPaths: [...state.expandedProjectFolderPaths],
     seenProjectFolderPaths: [...state.seenProjectFolderPaths],
@@ -1825,6 +1852,7 @@ async function saveAppSettingsNow() {
     localStorage.setItem('exora.language', settings.language || 'en')
     localStorage.setItem('exora.theme', settings.theme || 'light')
     localStorage.setItem('exora.permissionMode', settings.permissionMode || 'ask')
+    localStorage.setItem('exora.sidebarWidth', String(settings.sidebarWidth || DEFAULT_SIDEBAR_WIDTH))
     localStorage.setItem('exora.buyerAgentSettings', JSON.stringify(settings.buyerAgentSettings || {}))
     localStorage.setItem(WORK_TASK_STATE_KEY, JSON.stringify(settings.workTaskState || {}))
     return
@@ -2017,7 +2045,42 @@ function navigateWorkspaceHistory(delta: -1 | 1) {
   if (state.activeView === 'settings') refreshSettingsStatus()
 }
 
+function applySidebarWidth() {
+  const width = normalizeSidebarWidth(state.sidebarWidth)
+  state.sidebarWidth = width
+  fields.appShell.style.setProperty('--sidebar-width', `${width}px`)
+  fields.sidebarResizeHandle.setAttribute('aria-valuenow', String(width))
+  fields.sidebarResizeHandle.setAttribute('aria-valuetext', `${width}px`)
+}
+
+function sidebarWidthFromPointer(event: PointerEvent) {
+  const shellRect = fields.appShell.getBoundingClientRect()
+  const shellStyle = window.getComputedStyle(fields.appShell)
+  const shellPaddingLeft = Number.parseFloat(shellStyle.paddingLeft) || 0
+  return normalizeSidebarWidth(event.clientX - shellRect.left - shellPaddingLeft, state.sidebarWidth)
+}
+
+function updateSidebarWidthFromPointer(event: PointerEvent) {
+  const width = sidebarWidthFromPointer(event)
+  if (width === state.sidebarWidth) return
+  state.sidebarWidth = width
+  applySidebarWidth()
+}
+
+function stopSidebarResize(event?: PointerEvent) {
+  if (sidebarResizePointerId === undefined) return
+  const pointerId = sidebarResizePointerId
+  sidebarResizePointerId = undefined
+  if (event && event.pointerId === pointerId) updateSidebarWidthFromPointer(event)
+  if (fields.sidebarResizeHandle.hasPointerCapture(pointerId)) {
+    fields.sidebarResizeHandle.releasePointerCapture(pointerId)
+  }
+  fields.appShell.classList.remove('sidebar-resizing')
+  scheduleSaveAppSettings()
+}
+
 function renderChromeControls() {
+  applySidebarWidth()
   fields.appShell.classList.toggle('sidebar-collapsed', state.sidebarCollapsed)
   fields.sidebarButton.innerHTML = state.sidebarCollapsed ? toolbarIcons.sidebarCollapsed : toolbarIcons.sidebarExpanded
   fields.sidebarButton.setAttribute('aria-pressed', String(state.sidebarCollapsed))
@@ -6101,6 +6164,7 @@ function composeLocalAgentPrompt(task: string, work: WorkMCPContext) {
     `- Include workUid: "${work.workUid}" on every related Exora MCP call.`,
     `- Include projectPath: "${folder.path}" on the first related MCP call and whenever a tool accepts it; Dock will create/register this Work folder if needed and can resolve later calls from workUid.`,
     '- Do not ask me to advance each step. Continue calling resume_negotiation, create_order_plan_from_quote, and resume_task_flow when nextAction asks for it.',
+    '- If Exora Dock returns no suitable task card, seller card, quote, or order option, stop and tell the user that Exora Dock cannot help with this task right now. Include the Dock/MCP reason and do not invent a provider.',
     '',
     'Safety boundaries:',
     '- Do not approve payments, enter payment PINs, or treat MCP tool calls as user payment consent.',
@@ -6140,21 +6204,15 @@ async function createWorkMCPContext(task: string): Promise<WorkMCPContext> {
 
 async function copyLocalAgentPrompt() {
   const task = localAgentTaskFromInput(fields.localAgentTask.value)
+    || agentQuery.value.trim()
+    || '[Describe the user task here before sending this prompt to the external agent.]'
   if (!state.appStatus?.mcpCommand || !state.appStatus.discoveryPath) {
     showToast('Refresh runtime before copying the MCP prompt.')
-    return
-  }
-  if (!task) {
-    showToast('Describe the task for your local agent first.')
-    fields.localAgentTask.focus()
     return
   }
   const work = await createWorkMCPContext(task)
   const prompt = composeLocalAgentPrompt(task, work)
   await navigator.clipboard.writeText(prompt)
-  fields.localAgentTask.value = prompt
-  fields.localAgentTask.setSelectionRange(0, 0)
-  fields.localAgentTask.scrollTop = 0
   setProjectFolders([{ name: work.projectName || projectFolderNameForPath(work.projectPath), path: work.projectPath }, ...state.projectFolders], work.projectPath)
   showToast(`Local agent MCP prompt copied with Work UID ${shortID(work.workUid)}.`)
 }
@@ -6984,6 +7042,54 @@ fields.permissionMenu.addEventListener('click', (event) => {
 app.querySelector<HTMLButtonElement>('[data-action="choose-folder"]')!.addEventListener('click', () => {
   closeTaskContextMenu()
   chooseProjectFolder()
+})
+
+fields.sidebarResizeHandle.addEventListener('pointerdown', (event) => {
+  if (state.sidebarCollapsed || event.button !== 0) return
+  event.preventDefault()
+  event.stopPropagation()
+  sidebarResizePointerId = event.pointerId
+  fields.appShell.classList.add('sidebar-resizing')
+  fields.sidebarResizeHandle.setPointerCapture(event.pointerId)
+  updateSidebarWidthFromPointer(event)
+})
+
+fields.sidebarResizeHandle.addEventListener('pointermove', (event) => {
+  if (sidebarResizePointerId !== event.pointerId) return
+  event.preventDefault()
+  updateSidebarWidthFromPointer(event)
+})
+
+fields.sidebarResizeHandle.addEventListener('pointerup', stopSidebarResize)
+fields.sidebarResizeHandle.addEventListener('pointercancel', stopSidebarResize)
+
+fields.sidebarResizeHandle.addEventListener('lostpointercapture', () => {
+  if (sidebarResizePointerId === undefined) return
+  sidebarResizePointerId = undefined
+  fields.appShell.classList.remove('sidebar-resizing')
+  scheduleSaveAppSettings()
+})
+
+fields.sidebarResizeHandle.addEventListener('keydown', (event) => {
+  if (state.sidebarCollapsed) return
+  const step = event.shiftKey ? 24 : 12
+  if (event.key === 'ArrowLeft') {
+    event.preventDefault()
+    state.sidebarWidth = normalizeSidebarWidth(state.sidebarWidth - step)
+  } else if (event.key === 'ArrowRight') {
+    event.preventDefault()
+    state.sidebarWidth = normalizeSidebarWidth(state.sidebarWidth + step)
+  } else if (event.key === 'Home') {
+    event.preventDefault()
+    state.sidebarWidth = SIDEBAR_MIN_WIDTH
+  } else if (event.key === 'End') {
+    event.preventDefault()
+    state.sidebarWidth = SIDEBAR_MAX_WIDTH
+  } else {
+    return
+  }
+  applySidebarWidth()
+  scheduleSaveAppSettings()
 })
 
 fields.sidebarButton.addEventListener('click', (event) => {

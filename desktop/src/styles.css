@@ -3,9 +3,13 @@
   --app-edge-bottom: 2px;
   --app-radius: 8px;
   --collapsed-sidebar-width: 124px;
-  --sidebar-width: 326px;
+  --sidebar-width: 277px;
+  --sidebar-min-width: 236px;
+  --sidebar-max-width: 480px;
   --workspace-pad-x: 24px;
   --workspace-content-max: 980px;
+  --settings-panel-width: 720px;
+  --settings-container-bg: rgb(237 245 241 / 0.68);
   background: #eef1ee;
   color: #17211e;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -215,6 +219,16 @@ h3 {
   grid-template-columns: var(--collapsed-sidebar-width) minmax(0, 1fr);
 }
 
+.app-shell.sidebar-resizing {
+  cursor: col-resize;
+  transition: none;
+}
+
+.app-shell.sidebar-resizing * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+
 .task-sidebar,
 .main-workspace {
   min-height: 0;
@@ -243,6 +257,38 @@ h3 {
   padding: var(--sidebar-pad);
   position: relative;
   z-index: 35;
+}
+
+.sidebar-resize-handle {
+  bottom: 8px;
+  cursor: col-resize;
+  position: absolute;
+  right: -8px;
+  top: 8px;
+  touch-action: none;
+  width: 16px;
+  z-index: 80;
+  -webkit-app-region: no-drag;
+}
+
+.sidebar-resize-handle::before {
+  background: transparent;
+  border-radius: 999px;
+  content: "";
+  inset: 18px 7px;
+  position: absolute;
+  transition: background 140ms ease, opacity 140ms ease;
+}
+
+.sidebar-resize-handle:hover::before,
+.sidebar-resize-handle:focus-visible::before,
+.app-shell.sidebar-resizing .sidebar-resize-handle::before {
+  background: #9fb0aa;
+  opacity: 0.9;
+}
+
+.app-shell.sidebar-collapsed .sidebar-resize-handle {
+  display: none;
 }
 
 .sidebar-drag-strip {
@@ -350,6 +396,10 @@ h3 {
   background: transparent;
   border-color: transparent;
   padding: 0;
+}
+
+.app-shell.settings-mode {
+  background: #fff;
 }
 
 .app-shell.settings-mode .settings-return-cell {
@@ -1041,16 +1091,16 @@ h3 {
   display: block;
   height: 17px;
   overflow: visible;
-  stroke-width: 1.1;
+  stroke-width: 1;
   width: 17px;
 }
 
-.settings-record-icon path {
+.settings-record-icon :where(path, line, polyline, polygon, circle, rect) {
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 1.65;
+  stroke-width: 1.15;
 }
 
 .project-folder-switcher {
@@ -1605,7 +1655,12 @@ h3 {
 }
 
 .app-shell.settings-mode .main-header {
-  max-width: 720px;
+  max-width: var(--settings-panel-width);
+  width: min(var(--settings-panel-width), 100%);
+}
+
+.app-shell.settings-mode .main-workspace {
+  background: #fff;
 }
 
 .main-head-actions {
@@ -1904,10 +1959,15 @@ h3 {
 }
 
 .api-profiles-section {
+  background: var(--settings-container-bg);
+  border: 1px solid #dce5e2;
+  border-radius: 8px;
+  box-shadow: 0 1px 0 rgb(23 33 30 / 0.03);
   display: grid;
-  gap: 12px;
-  max-width: var(--workspace-content-max);
-  width: 100%;
+  gap: 10px;
+  max-width: none;
+  padding: 12px;
+  width: min(var(--settings-panel-width), 100%);
 }
 
 .api-profiles-layout {
@@ -2026,14 +2086,20 @@ h3 {
   max-width: none;
   overflow: auto;
   padding: 0 0 4px;
+  scrollbar-gutter: stable both-edges;
   width: 100%;
 }
 
-.action-view > .decision-content,
-.settings-view > .settings-detail {
+.action-view > .decision-content {
   justify-self: center;
   max-width: var(--workspace-content-max);
   width: 100%;
+}
+
+.settings-view > .settings-detail {
+  justify-self: center;
+  max-width: none;
+  width: min(var(--settings-panel-width), 100%);
 }
 
 .chat-feed {
@@ -3531,21 +3597,62 @@ dd {
   gap: 8px;
   min-width: 0;
   overflow: visible;
-  padding: 0 2px 4px;
+  padding: 0 0 4px;
 }
 
 .settings-page {
   align-content: start;
   display: grid;
   gap: 8px;
-  justify-items: center;
+  justify-items: start;
   min-height: 0;
   overflow: visible;
-  padding-right: 0;
+  padding: 0;
 }
 
 .settings-page > * {
-  width: 100%;
+  width: min(var(--settings-panel-width), 100%);
+}
+
+.settings-view > .settings-detail,
+.settings-view .settings-page,
+.settings-view .settings-page > *,
+.settings-view .api-profiles-section,
+.settings-view .settings-section,
+.settings-view .archive-records-section {
+  inline-size: min(var(--settings-panel-width), 100%);
+  max-inline-size: var(--settings-panel-width);
+  min-inline-size: 0;
+}
+
+.settings-view .settings-section.agent-card-settings-shell > *,
+.settings-view [data-settings-card-content] > *,
+.settings-view .agent-card-settings-form {
+  inline-size: 100%;
+  justify-self: start;
+  margin-inline: 0;
+  max-inline-size: 100%;
+  min-inline-size: 0;
+}
+
+.settings-view .section-title {
+  display: none;
+}
+
+.settings-view .agent-card-form.card-setup-list,
+.settings-view .api-settings-form.card-setup-list,
+.settings-view .api-profile-sidebar {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: visible;
+  padding: 0;
+}
+
+.settings-view .agent-card-form.card-setup-list .card-setup-section-row {
+  margin-inline: 0;
+  padding-inline: 0;
 }
 
 .icon-button {
@@ -3562,27 +3669,29 @@ dd {
 }
 
 .settings-section {
-  background: #fff;
+  background: var(--settings-container-bg);
   border: 1px solid #dce5e2;
   border-radius: 8px;
   box-shadow: 0 1px 0 rgb(23 33 30 / 0.03);
   display: grid;
   gap: 10px;
   justify-self: center;
-  max-width: 720px;
+  max-width: none;
+  min-width: 0;
   padding: 12px;
-  width: 100%;
+  width: min(var(--settings-panel-width), 100%);
 }
 
 .settings-section.agent-card-settings-shell {
-  background: transparent;
-  border: 0;
-  box-shadow: none;
-  gap: 0;
+  background: var(--settings-container-bg);
+  border: 1px solid #dce5e2;
+  box-shadow: 0 1px 0 rgb(23 33 30 / 0.03);
+  gap: 10px;
   justify-self: center;
-  max-width: 720px;
-  padding: 0;
-  width: 100%;
+  max-width: none;
+  min-width: 0;
+  padding: 12px;
+  width: min(var(--settings-panel-width), 100%);
 }
 
 .settings-actions {
@@ -3596,7 +3705,8 @@ dd {
 }
 
 .archive-records-section {
-  max-width: 780px;
+  max-width: none;
+  width: min(var(--settings-panel-width), 100%);
 }
 
 .archive-record-list {
@@ -3753,6 +3863,12 @@ label span {
   background: #151d1a;
   border-color: #26352f;
   box-shadow: none;
+}
+
+:root[data-theme="dark"] .sidebar-resize-handle:hover::before,
+:root[data-theme="dark"] .sidebar-resize-handle:focus-visible::before,
+:root[data-theme="dark"] .app-shell.sidebar-resizing .sidebar-resize-handle::before {
+  background: #5e746b;
 }
 
 :root[data-theme="dark"] .main-workspace,
@@ -4188,7 +4304,7 @@ label span {
 
 @media (max-width: 1080px) {
   .app-shell {
-    --sidebar-width: 296px;
+    --sidebar-width: 252px;
   }
 }
 

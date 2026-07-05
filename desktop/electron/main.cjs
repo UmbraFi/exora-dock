@@ -600,6 +600,7 @@ async function agent_card_diagnostics() {
   const paths = await dockPaths()
   await ensureLocalLayout(paths)
   await ensureLLMProfiles(paths)
+  await ensureDockReady()
   return httpJson('POST', '/v1/agent-cards/diagnostics', {}, await localOwnerToken(paths), { timeoutMs: 20000 })
 }
 
@@ -608,6 +609,7 @@ async function agent_card_draft(payload) {
   const paths = await dockPaths()
   await ensureLocalLayout(paths)
   await ensureLLMProfiles(paths)
+  await ensureDockReady()
   return httpJson('POST', '/v1/agent-cards/draft', input, await localOwnerToken(paths), { timeoutMs: 20000 })
 }
 
@@ -2079,6 +2081,11 @@ async function httpJson(method, route, body, token, options = {}) {
   }
 }
 
+async function ensureDockReady() {
+  if (await healthOk()) return
+  await start_dock()
+}
+
 function isLocalConnectionFailure(error) {
   const message = errorMessage(error).toLowerCase()
   return (
@@ -2096,7 +2103,7 @@ function localRequestError(error, route, timeoutMs) {
     return new Error(`Local Exora Dock did not answer ${route} within ${timeoutMs}ms. The background task is still safe to retry.`)
   }
   if (isLocalConnectionFailure(error)) {
-    return new Error(`Local Exora Dock is not reachable at ${BASE_URL}. I tried to start it automatically, but ${route} still failed: ${message}`)
+    return new Error(`Local Exora Dock is not reachable at ${BASE_URL}. I tried to start it automatically, but ${route} is still unavailable. Wait a few seconds and try again, or start Dock from Runtime.`)
   }
   return error instanceof Error ? error : new Error(message)
 }

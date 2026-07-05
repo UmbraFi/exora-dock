@@ -407,7 +407,16 @@ export function shortID(value?: string, head = 8, tail = 6) {
 }
 
 export function humanizeError(error: unknown) {
-  const text = String(error).replace(/^Error invoking remote method '[^']+':\s*/, '')
+  let text = String(error)
+  for (let i = 0; i < 4; i += 1) {
+    const next = text
+      .replace(/^Error:\s*/, '')
+      .replace(/^Error invoking remote method '[^']+':\s*/, '')
+      .replace(/^Error occurred in handler for '[^']+':\s*/, '')
+      .replace(/^TypeError:\s*/, '')
+    if (next === text) break
+    text = next
+  }
   const jsonStart = text.indexOf('{')
   if (jsonStart >= 0) {
     try {
@@ -420,6 +429,10 @@ export function humanizeError(error: unknown) {
   }
   if (text.includes('payment_pin_required')) return 'Payment PIN is required before this paid task can continue.'
   if (text.includes('offer_expired')) return 'Offer changed or expired. Ask the agent to search again.'
+  const lower = text.toLowerCase()
+  if (lower.includes('fetch failed') || lower.includes('econnrefused') || lower.includes('econnreset') || lower.includes('socket hang up')) {
+    return 'Network request failed. Check that the local Exora Dock runtime is running, then try again.'
+  }
   return text.replace(/^Error:\s*/, '')
 }
 
