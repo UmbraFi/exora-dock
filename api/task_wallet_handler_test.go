@@ -16,7 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-func TestWalletHandlersCreateBindAndShow(t *testing.T) {
+func TestWalletHandlersCreateAndShowAccountWallet(t *testing.T) {
 	c, err := cache.New(128, t.TempDir())
 	if err != nil {
 		t.Fatalf("cache.New() error = %v", err)
@@ -28,7 +28,6 @@ func TestWalletHandlersCreateBindAndShow(t *testing.T) {
 	router := chi.NewRouter()
 	router.Get("/wallet", handler.GetWallet)
 	router.Post("/wallet/create", handler.CreateWallet)
-	router.Post("/wallet/bind", handler.BindWallet)
 
 	createReq := httptest.NewRequest(http.MethodPost, "/wallet/create", nil)
 	createRec := httptest.NewRecorder()
@@ -40,20 +39,10 @@ func TestWalletHandlersCreateBindAndShow(t *testing.T) {
 		t.Fatalf("create body = %s", createRec.Body.String())
 	}
 
-	bindReq := httptest.NewRequest(http.MethodPost, "/wallet/bind", bytes.NewReader([]byte(`{"address":"11111111111111111111111111111111"}`)))
-	bindRec := httptest.NewRecorder()
-	router.ServeHTTP(bindRec, bindReq)
-	if bindRec.Code != http.StatusOK {
-		t.Fatalf("bind status = %d body = %s", bindRec.Code, bindRec.Body.String())
-	}
-	if !strings.Contains(bindRec.Body.String(), `"boundOnly":true`) {
-		t.Fatalf("bind body = %s", bindRec.Body.String())
-	}
-
 	showReq := httptest.NewRequest(http.MethodGet, "/wallet", nil)
 	showRec := httptest.NewRecorder()
 	router.ServeHTTP(showRec, showReq)
-	if showRec.Code != http.StatusOK || !strings.Contains(showRec.Body.String(), `11111111111111111111111111111111`) {
+	if showRec.Code != http.StatusOK || !strings.Contains(showRec.Body.String(), `"accountBound":true`) {
 		t.Fatalf("show status/body = %d %s", showRec.Code, showRec.Body.String())
 	}
 }

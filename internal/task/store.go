@@ -106,6 +106,8 @@ type Task struct {
 
 type CreateRequest struct {
 	OrderID           string         `json:"orderId"`
+	RunID             string         `json:"runId,omitempty"`
+	Controller        string         `json:"controller,omitempty"`
 	ProjectPath       string         `json:"projectPath,omitempty"`
 	WorkUID           string         `json:"workUid,omitempty"`
 	RequesterPubkey   string         `json:"requesterPubkey"`
@@ -240,7 +242,7 @@ func (s *Store) Quote(id string, req QuoteRequest) (Task, error) {
 	}
 	currency := strings.TrimSpace(req.Currency)
 	if currency == "" {
-		currency = "USD"
+		currency = "USDC"
 	}
 	now := time.Now().UTC()
 	t.ProviderPubkey = provider

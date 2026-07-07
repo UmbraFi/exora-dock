@@ -17,6 +17,10 @@ type Config struct {
 	DataDir                    string            `yaml:"data_dir"`
 	FetchInterv                int               `yaml:"fetch_interval_sec"`
 	ProgramID                  string            `yaml:"program_id"`
+	EscrowProgramID            string            `yaml:"escrow_program_id"`
+	SolanaNetwork              string            `yaml:"solana_network"`
+	USDCMint                   string            `yaml:"usdc_mint"`
+	USDCDecimals               uint8             `yaml:"usdc_decimals"`
 	IPFSApiURL                 string            `yaml:"ipfs_api_url"`
 	LLMBaseURL                 string            `yaml:"llm_base_url"`
 	LLMAPIKey                  string            `yaml:"llm_api_key"`
@@ -30,6 +34,8 @@ type Config struct {
 	LLMUtilityModel            string            `yaml:"llm_utility_model"`
 	LLMUtilityReasoningEffort  string            `yaml:"llm_utility_reasoning_effort"`
 	LLMDisableResponseStorage  bool              `yaml:"llm_disable_response_storage"`
+	BuyerLLM                   RoleLLMConfig     `yaml:"buyer_llm"`
+	SellerLLM                  RoleLLMConfig     `yaml:"seller_llm"`
 	Mode                       string            `yaml:"mode"`
 	CloudURL                   string            `yaml:"cloud_url"`
 	CloudTokenPath             string            `yaml:"cloud_token_path"`
@@ -51,6 +57,21 @@ type LLMCapabilities struct {
 	SupportsStreaming          bool `yaml:"supports_streaming"`
 	SupportsTools              bool `yaml:"supports_tools"`
 	SupportsReasoningEffort    bool `yaml:"supports_reasoning_effort"`
+}
+
+type RoleLLMConfig struct {
+	BaseURL                 string            `yaml:"base_url"`
+	APIKey                  string            `yaml:"api_key"`
+	ProviderPreset          string            `yaml:"provider_preset"`
+	Model                   string            `yaml:"model"`
+	WireAPI                 string            `yaml:"wire_api"`
+	Capabilities            LLMCapabilities   `yaml:"capabilities"`
+	ExtraHeaders            map[string]string `yaml:"extra_headers"`
+	ResearchModel           string            `yaml:"research_model"`
+	ResearchReasoningEffort string            `yaml:"research_reasoning_effort"`
+	UtilityModel            string            `yaml:"utility_model"`
+	UtilityReasoningEffort  string            `yaml:"utility_reasoning_effort"`
+	DisableResponseStorage  bool              `yaml:"disable_response_storage"`
 }
 
 type ProviderConfig struct {
@@ -77,6 +98,7 @@ type DockerConfig struct {
 type SellerAgentConfig struct {
 	Enabled               bool    `yaml:"enabled"`
 	AutoQuote             bool    `yaml:"auto_quote"`
+	AutoAcceptLowRisk     bool    `yaml:"auto_accept_low_risk"`
 	AutoCompleteTextTasks bool    `yaml:"auto_complete_text_tasks"`
 	ProviderPubkey        string  `yaml:"provider_pubkey"`
 	PollIntervalSec       int     `yaml:"poll_interval_sec"`
@@ -111,7 +133,7 @@ func Load(path string) (*Config, error) {
 		SellerAgent: SellerAgentConfig{
 			AutoQuote:            true,
 			PollIntervalSec:      2,
-			DefaultQuoteCurrency: "USD",
+			DefaultQuoteCurrency: "USDC",
 			DefaultEstimatedSec:  60,
 		},
 	}
@@ -194,6 +216,20 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("EXORA_DOCK_ID"); v != "" {
 		cfg.DockID = v
 	}
+	if v := os.Getenv("EXORA_ESCROW_PROGRAM_ID"); v != "" {
+		cfg.EscrowProgramID = v
+	}
+	if v := os.Getenv("EXORA_SOLANA_NETWORK"); v != "" {
+		cfg.SolanaNetwork = v
+	}
+	if v := os.Getenv("EXORA_USDC_MINT"); v != "" {
+		cfg.USDCMint = v
+	}
+	if v := os.Getenv("EXORA_USDC_DECIMALS"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed >= 0 && parsed <= 255 {
+			cfg.USDCDecimals = uint8(parsed)
+		}
+	}
 	if v := os.Getenv("EXORA_WALLET_PATH"); v != "" {
 		cfg.WalletPath = v
 	}
@@ -262,8 +298,14 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("EXORA_SELLER_AGENT_AUTO_QUOTE"); v != "" {
 		cfg.SellerAgent.AutoQuote = parseBool(v)
 	}
+	if v := os.Getenv("EXORA_SELLER_AGENT_AUTO_ACCEPT_LOW_RISK"); v != "" {
+		cfg.SellerAgent.AutoAcceptLowRisk = parseBool(v)
+	}
 	if v := os.Getenv("EXORA_SELLER_AGENT_AUTO_COMPLETE_TEXT_TASKS"); v != "" {
 		cfg.SellerAgent.AutoCompleteTextTasks = parseBool(v)
+		if cfg.SellerAgent.AutoCompleteTextTasks {
+			cfg.SellerAgent.AutoAcceptLowRisk = true
+		}
 	}
 	if v := os.Getenv("EXORA_SELLER_AGENT_PROVIDER_PUBKEY"); v != "" {
 		cfg.SellerAgent.ProviderPubkey = v
@@ -320,8 +362,16 @@ func applyDerivedDefaults(cfg *Config) {
 	if strings.TrimSpace(cfg.LLMUtilityReasoningEffort) == "" {
 		cfg.LLMUtilityReasoningEffort = "low"
 	}
+	cfg.BuyerLLM = normalizeRoleLLMConfig(cfg.BuyerLLM, cfg)
+	cfg.SellerLLM = normalizeRoleLLMConfig(cfg.SellerLLM, cfg)
 	if strings.TrimSpace(cfg.Mode) == "" {
 		cfg.Mode = "hybrid"
+	}
+	if strings.TrimSpace(cfg.SolanaNetwork) == "" {
+		cfg.SolanaNetwork = "devnet"
+	}
+	if cfg.USDCDecimals == 0 {
+		cfg.USDCDecimals = 6
 	}
 	if strings.TrimSpace(cfg.WalletPath) == "" {
 		cfg.WalletPath = filepath.Join(cfg.DataDir, "wallet")
@@ -365,11 +415,86 @@ func applyDerivedDefaults(cfg *Config) {
 		cfg.SellerAgent.PollIntervalSec = 2
 	}
 	if strings.TrimSpace(cfg.SellerAgent.DefaultQuoteCurrency) == "" {
-		cfg.SellerAgent.DefaultQuoteCurrency = "USD"
+		cfg.SellerAgent.DefaultQuoteCurrency = "USDC"
 	}
 	if cfg.SellerAgent.DefaultEstimatedSec <= 0 {
 		cfg.SellerAgent.DefaultEstimatedSec = 60
 	}
+	if cfg.SellerAgent.AutoCompleteTextTasks {
+		cfg.SellerAgent.AutoAcceptLowRisk = true
+	}
+}
+
+func normalizeRoleLLMConfig(role RoleLLMConfig, cfg *Config) RoleLLMConfig {
+	fallback := topLevelRoleLLMConfig(cfg)
+	if !roleLLMConfigured(role) {
+		return fallback
+	}
+	role.BaseURL = strings.TrimRight(strings.TrimSpace(role.BaseURL), "/")
+	if role.BaseURL == "" {
+		role.BaseURL = fallback.BaseURL
+	}
+	role.APIKey = strings.TrimSpace(role.APIKey)
+	role.ProviderPreset = normalizeProviderPreset(firstText(role.ProviderPreset, fallback.ProviderPreset))
+	role.WireAPI = normalizeWireAPI(firstText(role.WireAPI, fallback.WireAPI))
+	role.Capabilities = normalizeLLMCapabilities(role.ProviderPreset, role.BaseURL, role.WireAPI, role.Capabilities)
+	role.ResearchModel = strings.TrimSpace(role.ResearchModel)
+	role.UtilityModel = strings.TrimSpace(role.UtilityModel)
+	role.Model = strings.TrimSpace(role.Model)
+	legacyModel := role.Model
+	if role.ResearchModel == "" {
+		role.ResearchModel = firstText(legacyModel, fallback.ResearchModel)
+	}
+	if role.UtilityModel == "" {
+		role.UtilityModel = firstText(legacyModel, role.ResearchModel, fallback.UtilityModel)
+	}
+	if role.Model == "" {
+		role.Model = role.ResearchModel
+	}
+	role.ResearchReasoningEffort = firstText(role.ResearchReasoningEffort, fallback.ResearchReasoningEffort, "high")
+	role.UtilityReasoningEffort = firstText(role.UtilityReasoningEffort, fallback.UtilityReasoningEffort, "low")
+	return role
+}
+
+func topLevelRoleLLMConfig(cfg *Config) RoleLLMConfig {
+	return RoleLLMConfig{
+		BaseURL:                 cfg.LLMBaseURL,
+		APIKey:                  cfg.LLMAPIKey,
+		ProviderPreset:          cfg.LLMProviderPreset,
+		Model:                   cfg.LLMModel,
+		WireAPI:                 cfg.LLMWireAPI,
+		Capabilities:            cfg.LLMCapabilities,
+		ExtraHeaders:            cfg.LLMExtraHeaders,
+		ResearchModel:           cfg.LLMResearchModel,
+		ResearchReasoningEffort: cfg.LLMResearchReasoningEffort,
+		UtilityModel:            cfg.LLMUtilityModel,
+		UtilityReasoningEffort:  cfg.LLMUtilityReasoningEffort,
+		DisableResponseStorage:  cfg.LLMDisableResponseStorage,
+	}
+}
+
+func roleLLMConfigured(role RoleLLMConfig) bool {
+	return strings.TrimSpace(role.BaseURL) != "" ||
+		strings.TrimSpace(role.APIKey) != "" ||
+		strings.TrimSpace(role.ProviderPreset) != "" ||
+		strings.TrimSpace(role.Model) != "" ||
+		strings.TrimSpace(role.WireAPI) != "" ||
+		role.Capabilities != (LLMCapabilities{}) ||
+		len(role.ExtraHeaders) > 0 ||
+		strings.TrimSpace(role.ResearchModel) != "" ||
+		strings.TrimSpace(role.ResearchReasoningEffort) != "" ||
+		strings.TrimSpace(role.UtilityModel) != "" ||
+		strings.TrimSpace(role.UtilityReasoningEffort) != "" ||
+		role.DisableResponseStorage
+}
+
+func firstText(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func normalizeProviderPreset(value string) string {

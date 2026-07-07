@@ -15,6 +15,8 @@ const MaxOrderOptions = 6
 
 type SearchRequest struct {
 	Query                  string             `json:"query"`
+	RunID                  string             `json:"runId,omitempty"`
+	Controller             string             `json:"controller,omitempty"`
 	ProjectPath            string             `json:"projectPath,omitempty"`
 	WorkUID                string             `json:"workUid,omitempty"`
 	RequesterPubkey        string             `json:"requesterPubkey,omitempty"`
@@ -268,7 +270,7 @@ func buildOrderDraftOptions(req SearchRequest, normalized NormalizedQuery, candi
 			PriceSnapshot: PriceSnapshot{
 				PricePerUnit: res.PricePerUnit,
 				BillingUnit:  string(res.BillingUnit),
-				Currency:     "USD",
+				Currency:     "USDC",
 				Availability: res.Availability,
 				ResourceHash: ResourceSnapshotHash(res),
 			},

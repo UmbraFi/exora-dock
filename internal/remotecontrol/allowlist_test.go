@@ -46,6 +46,8 @@ func TestAllowedBlocksSensitiveRemoteDownloads(t *testing.T) {
 		{"GET", "/v1/tasks/task_1/artifacts/output.zip"},
 		{"GET", "/v1/leases/lease_1/credentials"},
 		{"POST", "/v1/wallet/create"},
+		{"POST", "/v1/wallet/bind"},
+		{"POST", "/v1/payments/pay_1/direct-intent"},
 		{"POST", "/v1/payment-pin/set"},
 		{"POST", "/v1/dispute-evidence"},
 		{"POST", "/v1/order-plans"},

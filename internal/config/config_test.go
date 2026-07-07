@@ -89,6 +89,45 @@ func TestLoadLLMEnvOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadRoleLLMConfigOverridesTopLevel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+llm_api_key: "top-key"
+llm_research_model: "top-model"
+buyer_llm:
+  base_url: "https://buyer.example/v1"
+  api_key: "buyer-key"
+  provider_preset: "openrouter"
+  wire_api: "chat"
+  research_model: "buyer-research"
+seller_llm:
+  base_url: "http://127.0.0.1:1234/v1"
+  provider_preset: "lm_studio"
+  research_model: "seller-research"
+  utility_model: "seller-utility"
+`), 0600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.BuyerLLM.APIKey != "buyer-key" || cfg.BuyerLLM.ResearchModel != "buyer-research" {
+		t.Fatalf("buyer llm = %#v", cfg.BuyerLLM)
+	}
+	if cfg.BuyerLLM.WireAPI != "chat_completions" || cfg.BuyerLLM.Capabilities.SupportsResponses {
+		t.Fatalf("buyer wire/caps = %q %#v", cfg.BuyerLLM.WireAPI, cfg.BuyerLLM.Capabilities)
+	}
+	if cfg.SellerLLM.APIKey != "" || cfg.SellerLLM.ResearchModel != "seller-research" || cfg.SellerLLM.UtilityModel != "seller-utility" {
+		t.Fatalf("seller llm = %#v", cfg.SellerLLM)
+	}
+	if cfg.SellerLLM.Capabilities.SupportsResponses || !cfg.SellerLLM.Capabilities.SupportsChatCompletions {
+		t.Fatalf("seller caps = %#v", cfg.SellerLLM.Capabilities)
+	}
+}
+
 func TestLoadDockerProviderDefaultsAndEnv(t *testing.T) {
 	t.Setenv("EXORA_PROVIDER_DOCKER_ENABLED", "1")
 	t.Setenv("EXORA_PROVIDER_DOCKER_DEFAULT_IMAGE", "python:3.12-alpine")
@@ -106,5 +145,39 @@ func TestLoadDockerProviderDefaultsAndEnv(t *testing.T) {
 	}
 	if cfg.Provider.Docker.MaxMemoryMB != 2048 || cfg.Provider.Docker.PullPolicy != "missing" {
 		t.Fatalf("docker limits = %#v", cfg.Provider.Docker)
+	}
+}
+
+func TestLoadSellerAutoAcceptLowRiskAndLegacyAlias(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+seller_agent:
+  auto_complete_text_tasks: true
+`), 0600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.SellerAgent.AutoAcceptLowRisk {
+		t.Fatalf("legacy auto_complete_text_tasks should enable AutoAcceptLowRisk: %#v", cfg.SellerAgent)
+	}
+
+	path = filepath.Join(t.TempDir(), "config-new.yaml")
+	if err := os.WriteFile(path, []byte(`
+seller_agent:
+  auto_accept_low_risk: true
+`), 0600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.SellerAgent.AutoAcceptLowRisk {
+		t.Fatalf("auto_accept_low_risk not loaded: %#v", cfg.SellerAgent)
 	}
 }

@@ -17,20 +17,26 @@ import (
 	"github.com/exora-dock/exora-dock/internal/market"
 	"github.com/exora-dock/exora-dock/internal/negotiation"
 	"github.com/exora-dock/exora-dock/internal/orderplan"
+	"github.com/exora-dock/exora-dock/internal/payment"
 	"github.com/exora-dock/exora-dock/internal/resource"
 	"github.com/exora-dock/exora-dock/internal/task"
+	"github.com/exora-dock/exora-dock/internal/workrun"
 	"github.com/go-chi/chi/v5"
 )
 
 type agentRunStartRequest struct {
-	Intent   string `json:"intent"`
-	Profile  string `json:"profile,omitempty"`
-	MaxTurns int    `json:"maxTurns,omitempty"`
-	Wait     bool   `json:"wait,omitempty"`
+	Intent      string `json:"intent"`
+	Profile     string `json:"profile,omitempty"`
+	WorkUID     string `json:"workUid,omitempty"`
+	ProjectPath string `json:"projectPath,omitempty"`
+	Controller  string `json:"controller,omitempty"`
+	MaxTurns    int    `json:"maxTurns,omitempty"`
+	Wait        bool   `json:"wait,omitempty"`
 }
 
 type agentRunResumeRequest struct {
-	Wait bool `json:"wait,omitempty"`
+	Wait       bool                  `json:"wait,omitempty"`
+	ResumeJSON workrun.ResumePayload `json:"resumeJson,omitempty"`
 }
 
 func (h *Handler) StartAgentRun(w http.ResponseWriter, r *http.Request) {
@@ -44,9 +50,12 @@ func (h *Handler) StartAgentRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run, err := h.agentRuntime.Start(r.Context(), agent.StartRequest{
-		Intent:   req.Intent,
-		Profile:  req.Profile,
-		MaxTurns: req.MaxTurns,
+		Intent:      req.Intent,
+		Profile:     req.Profile,
+		WorkUID:     req.WorkUID,
+		ProjectPath: req.ProjectPath,
+		Controller:  firstNonEmpty(req.Controller, workrun.ControllerInternalAPI),
+		MaxTurns:    req.MaxTurns,
 	}, req.Wait)
 	if err != nil && run.RunID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -56,7 +65,18 @@ func (h *Handler) StartAgentRun(w http.ResponseWriter, r *http.Request) {
 	if req.Wait || run.Status == agent.RunStatusFailed {
 		status = http.StatusOK
 	}
-	writeJSON(w, status, map[string]any{"run": run})
+	payload := map[string]any{"run": run}
+	payload = h.decorateWorkRunPayload(payload, workRunContext{
+		RunID:       run.RunID,
+		WorkUID:     req.WorkUID,
+		ProjectPath: req.ProjectPath,
+		Controller:  firstNonEmpty(req.Controller, workrun.ControllerInternalAPI),
+		Intent:      req.Intent,
+		CurrentStep: workrun.StepDiscoverAgentCards,
+		NextAction:  run.NextAction,
+		Summary:     run.Summary,
+	}, payload)
+	writeJSON(w, status, payload)
 }
 
 func (h *Handler) ListAgentRuns(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +139,18 @@ func (h *Handler) ResumeAgentRun(w http.ResponseWriter, r *http.Request) {
 	if req.Wait {
 		status = http.StatusOK
 	}
-	writeJSON(w, status, map[string]any{"run": run})
+	payload := map[string]any{"run": run}
+	payload = h.decorateWorkRunPayload(payload, workRunContext{
+		RunID:       run.RunID,
+		WorkUID:     firstNonEmpty(run.WorkUID, req.ResumeJSON.WorkUID),
+		ProjectPath: firstNonEmpty(run.ProjectPath, req.ResumeJSON.ProjectPath),
+		Controller:  firstNonEmpty(run.Controller, req.ResumeJSON.ControllerHint, workrun.ControllerInternalAPI),
+		Intent:      run.Intent,
+		CurrentStep: firstNonEmpty(req.ResumeJSON.CurrentStep, workrun.StepDiscoverAgentCards),
+		NextAction:  run.NextAction,
+		Summary:     run.Summary,
+	}, payload)
+	writeJSON(w, status, payload)
 }
 
 func (h *Handler) StopAgentRun(w http.ResponseWriter, r *http.Request) {
@@ -132,7 +163,19 @@ func (h *Handler) StopAgentRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"run": run})
+	payload := map[string]any{"run": run}
+	payload = h.decorateWorkRunPayload(payload, workRunContext{
+		RunID:       run.RunID,
+		WorkUID:     run.WorkUID,
+		ProjectPath: run.ProjectPath,
+		Controller:  firstNonEmpty(run.Controller, workrun.ControllerInternalAPI),
+		Intent:      run.Intent,
+		CurrentStep: workrun.StepDiscoverAgentCards,
+		NextAction:  "resume_from_checkpoint",
+		Status:      workrun.StatusStopped,
+		Summary:     run.Summary,
+	}, payload)
+	writeJSON(w, http.StatusOK, payload)
 }
 
 func (h *Handler) SearchCloudAgentCards(w http.ResponseWriter, r *http.Request) {
@@ -243,6 +286,22 @@ func (h *Handler) agentTools() []agent.AgentTool {
 			Handler:         h.toolRequestApproval,
 		},
 		{
+			Name:            "find_payment_evidence",
+			Description:     "Read local chain payment evidence status and Cloud sync instructions. Paid worker jobs must have found_finalized evidence before submit_worker_job.",
+			ReadOnly:        true,
+			AllowedProfiles: buyerAndVerifier,
+			NextAction:      "sync_payment_evidence_or_submit_worker_job",
+			Handler:         h.toolFindPaymentEvidence,
+		},
+		{
+			Name:            "sync_payment_evidence",
+			Description:     "Record Cloud/chain payment evidence returned by Exora Cloud. Does not move funds or approve payment.",
+			Mutating:        true,
+			AllowedProfiles: buyerAndVerifier,
+			NextAction:      "verify_payment_evidence",
+			Handler:         h.toolSyncPaymentEvidence,
+		},
+		{
 			Name:            "get_artifact_manifest",
 			Description:     "Read artifact metadata for a completed task or provider job.",
 			ReadOnly:        true,
@@ -315,6 +374,10 @@ func (h *Handler) toolStartTaskFlow(ctx context.Context, run agent.AgentRun, arg
 	if firstAgentArgString(body, "query", "q") == "" {
 		body["query"] = run.Intent
 	}
+	setAgentDefault(body, "runId", run.RunID)
+	setAgentDefault(body, "workUid", run.WorkUID)
+	setAgentDefault(body, "projectPath", run.ProjectPath)
+	setAgentDefault(body, "controller", firstNonEmpty(run.Controller, workrun.ControllerInternalAPI))
 	setAgentDefault(body, "agentId", "exora-agent-runtime")
 	setAgentDefault(body, "prepareOrderOptions", true)
 	setAgentDefault(body, "createSelectionRequest", true)
@@ -336,6 +399,11 @@ func (h *Handler) toolStartTaskFlow(ctx context.Context, run agent.AgentRun, arg
 		result.NextAction = firstNonEmpty(stringFromAny(selection["nextAction"]), result.NextAction)
 		result.Waiting = true
 	}
+	if paths, err := writeAgentPlanFiles(firstNonEmpty(run.ProjectPath, stringFromAny(body["projectPath"])), firstNonEmpty(result.OrderPlanID, run.RunID, run.WorkUID), run.Intent, body, payload); err != nil {
+		payload["agentPlanFileError"] = err.Error()
+	} else if len(paths) > 0 {
+		payload["agentPlanFiles"] = paths
+	}
 	if result.NextAction == "" {
 		result.NextAction = "wait_for_owner_to_choose_order_plan"
 	}
@@ -347,6 +415,10 @@ func (h *Handler) toolNegotiateTask(ctx context.Context, run agent.AgentRun, arg
 	if firstAgentArgString(body, "intent", "query", "q") == "" {
 		body["intent"] = run.Intent
 	}
+	setAgentDefault(body, "runId", run.RunID)
+	setAgentDefault(body, "workUid", run.WorkUID)
+	setAgentDefault(body, "projectPath", run.ProjectPath)
+	setAgentDefault(body, "controller", firstNonEmpty(run.Controller, workrun.ControllerInternalAPI))
 	setAgentDefault(body, "agentId", "exora-agent-runtime")
 	setAgentDefault(body, "maxCandidates", float64(3))
 	payload, err := h.invokeJSONHandler(ctx, http.MethodPost, "/v1/negotiations", body, h.CreateNegotiations)
@@ -437,6 +509,7 @@ func (h *Handler) toolCompareQuotes(ctx context.Context, run agent.AgentRun, arg
 	}
 	quoted := []negotiation.Negotiation{}
 	rejected := []negotiation.Negotiation{}
+	needsNegotiation := []negotiation.Negotiation{}
 	pending := []negotiation.Negotiation{}
 	for _, id := range ids {
 		item, ok := h.negotiations.Get(id)
@@ -448,6 +521,8 @@ func (h *Handler) toolCompareQuotes(ctx context.Context, run agent.AgentRun, arg
 			quoted = append(quoted, item)
 		case negotiation.StatusRejected:
 			rejected = append(rejected, item)
+		case negotiation.StatusNeedsNegotiation:
+			needsNegotiation = append(needsNegotiation, item)
 		default:
 			pending = append(pending, item)
 		}
@@ -455,23 +530,26 @@ func (h *Handler) toolCompareQuotes(ctx context.Context, run agent.AgentRun, arg
 	next := "wait_for_seller_decision"
 	if len(quoted) > 0 {
 		next = "create_order_plan_from_quote"
+	} else if len(needsNegotiation) > 0 {
+		next = "provide_more_details_or_negotiate"
 	}
 	return agent.ToolResult{
 		Content: map[string]any{
-			"quoted":         quoted,
-			"rejected":       rejected,
-			"pending":        pending,
-			"negotiationIds": ids,
-			"quoteCount":     len(quoted),
-			"rejectionCount": len(rejected),
-			"nextAction":     next,
+			"quoted":           quoted,
+			"rejected":         rejected,
+			"needsNegotiation": needsNegotiation,
+			"pending":          pending,
+			"negotiationIds":   ids,
+			"quoteCount":       len(quoted),
+			"rejectionCount":   len(rejected),
+			"nextAction":       next,
 		},
-		Summary:        fmt.Sprintf("%d quote(s), %d rejection(s), %d pending negotiation(s).", len(quoted), len(rejected), len(pending)),
+		Summary:        fmt.Sprintf("%d quote(s), %d need negotiation, %d rejection(s), %d pending negotiation(s).", len(quoted), len(needsNegotiation), len(rejected), len(pending)),
 		NextAction:     next,
 		NegotiationIDs: ids,
 		QuoteCount:     len(quoted),
 		RejectionCount: len(rejected),
-		Waiting:        len(quoted) == 0 && len(pending) > 0,
+		Waiting:        len(quoted) == 0 && (len(pending) > 0 || len(needsNegotiation) > 0),
 	}, nil
 }
 
@@ -485,6 +563,10 @@ func (h *Handler) toolCreateOrderPlanFromQuote(ctx context.Context, run agent.Ag
 	if firstAgentArgString(body, "query", "intent") == "" {
 		body["query"] = run.Intent
 	}
+	setAgentDefault(body, "runId", run.RunID)
+	setAgentDefault(body, "workUid", run.WorkUID)
+	setAgentDefault(body, "projectPath", run.ProjectPath)
+	setAgentDefault(body, "controller", firstNonEmpty(run.Controller, workrun.ControllerInternalAPI))
 	setAgentDefault(body, "agentId", "exora-agent-runtime")
 	payload, err := h.invokeJSONHandler(ctx, http.MethodPost, "/v1/order-plans/from-negotiations", body, h.CreateOrderPlanFromNegotiations)
 	if err != nil {
@@ -502,6 +584,11 @@ func (h *Handler) toolCreateOrderPlanFromQuote(ctx context.Context, run agent.Ag
 	}
 	if result.OrderPlanID == "" {
 		result.OrderPlanID = stringFromAny(payload["planId"])
+	}
+	if paths, err := writeAgentPlanFiles(firstNonEmpty(run.ProjectPath, stringFromAny(body["projectPath"])), firstNonEmpty(result.OrderPlanID, run.RunID, run.WorkUID), run.Intent, body, payload); err != nil {
+		payload["agentPlanFileError"] = err.Error()
+	} else if len(paths) > 0 {
+		payload["agentPlanFiles"] = paths
 	}
 	return result, nil
 }
@@ -549,7 +636,7 @@ func (h *Handler) toolResumeTaskFlow(ctx context.Context, run agent.AgentRun, ar
 }
 
 func (h *Handler) toolRequestApproval(ctx context.Context, run agent.AgentRun, args map[string]any) (agent.ToolResult, error) {
-	if h.approvals == nil || h.tasks == nil {
+	if h.approvals == nil {
 		return agent.ToolResult{}, fmt.Errorf("approval service not configured")
 	}
 	var req approval.CreateRequest
@@ -559,7 +646,13 @@ func (h *Handler) toolRequestApproval(ctx context.Context, run agent.AgentRun, a
 	if strings.TrimSpace(req.TaskID) == "" {
 		req.TaskID = run.TaskID
 	}
+	if strings.TrimSpace(req.WorkRunID) == "" {
+		req.WorkRunID = run.RunID
+	}
 	if strings.TrimSpace(req.TaskID) != "" {
+		if h.tasks == nil {
+			return agent.ToolResult{}, fmt.Errorf("task service not configured")
+		}
 		t, ok := h.tasks.Get(req.TaskID)
 		if !ok {
 			return agent.ToolResult{}, fmt.Errorf("task not found")
@@ -570,11 +663,20 @@ func (h *Handler) toolRequestApproval(ctx context.Context, run agent.AgentRun, a
 	if err != nil {
 		return agent.ToolResult{}, err
 	}
+	a = decorateApproval(a, "")
+	if strings.TrimSpace(a.TaskID) == "" {
+		return agent.ToolResult{
+			Content:    map[string]any{"approval": a},
+			Summary:    "Approval request created.",
+			NextAction: a.NextAction,
+			ApprovalID: a.ID,
+			Waiting:    true,
+		}, nil
+	}
 	updated, err := h.tasks.SetApprovalRequest(a.TaskID, a.ID)
 	if err != nil {
 		return agent.ToolResult{}, err
 	}
-	a = decorateApproval(a, "")
 	return agent.ToolResult{
 		Content:    map[string]any{"approval": a, "task": updated},
 		Summary:    "Approval request created.",
@@ -583,6 +685,99 @@ func (h *Handler) toolRequestApproval(ctx context.Context, run agent.AgentRun, a
 		ApprovalID: a.ID,
 		Waiting:    true,
 	}, nil
+}
+
+func (h *Handler) toolFindPaymentEvidence(ctx context.Context, run agent.AgentRun, args map[string]any) (agent.ToolResult, error) {
+	if h.payments == nil {
+		return agent.ToolResult{}, fmt.Errorf("payment ledger service not configured")
+	}
+	paymentID := firstAgentArgString(args, "paymentId", "id")
+	if paymentID == "" {
+		paymentID = h.paymentIDFromAgentArgs(args)
+	}
+	if paymentID == "" {
+		return agent.ToolResult{}, fmt.Errorf("paymentId required")
+	}
+	record, ok := h.payments.Get(paymentID)
+	if !ok {
+		return agent.ToolResult{}, fmt.Errorf("payment not found")
+	}
+	intent, _ := payment.BuildPaymentIntent(record, h.defaultChainIntentRequest(record, payment.ChainIntentRequest{}))
+	payload := map[string]any{
+		"payment":     record,
+		"intent":      intent,
+		"evidence":    paymentEvidenceSummary(record),
+		"nextAction":  paymentEvidenceNextAction(record),
+		"mustVerify":  true,
+		"cloudAction": "Resolve evidence through Exora Cloud or sync a found_finalized chain_scan evidence before any paid worker job.",
+	}
+	return agent.ToolResult{
+		Content:    payload,
+		Summary:    fmt.Sprintf("Payment evidence for %s is %s.", paymentID, record.EvidenceStatus),
+		NextAction: stringFromAny(payload["nextAction"]),
+		TaskID:     record.TaskID,
+		ApprovalID: record.ApprovalID,
+	}, nil
+}
+
+func (h *Handler) toolSyncPaymentEvidence(ctx context.Context, run agent.AgentRun, args map[string]any) (agent.ToolResult, error) {
+	if h.payments == nil {
+		return agent.ToolResult{}, fmt.Errorf("payment ledger service not configured")
+	}
+	var evidence payment.PaymentEvidence
+	if raw, ok := args["evidence"]; ok {
+		if err := decodeAgentValue(raw, &evidence); err != nil {
+			return agent.ToolResult{}, err
+		}
+	} else if err := decodeAgentArgs(args, &evidence); err != nil {
+		return agent.ToolResult{}, err
+	}
+	if strings.TrimSpace(evidence.PaymentID) == "" {
+		evidence.PaymentID = firstAgentArgString(args, "paymentId", "id")
+	}
+	if strings.TrimSpace(evidence.PaymentID) == "" {
+		evidence.PaymentID = h.paymentIDFromAgentArgs(args)
+	}
+	if strings.TrimSpace(evidence.PaymentID) == "" {
+		return agent.ToolResult{}, fmt.Errorf("paymentId required")
+	}
+	if evidence.Status == "" {
+		evidence.Status = payment.EvidencePendingChainConfirmation
+	}
+	record, err := h.payments.ApplyEvidence(evidence)
+	if err != nil {
+		return agent.ToolResult{}, err
+	}
+	payload := map[string]any{
+		"payment":    record,
+		"evidence":   paymentEvidenceSummary(record),
+		"nextAction": paymentEvidenceNextAction(record),
+	}
+	return agent.ToolResult{
+		Content:    payload,
+		Summary:    fmt.Sprintf("Payment evidence synced as %s.", record.EvidenceStatus),
+		NextAction: stringFromAny(payload["nextAction"]),
+		TaskID:     record.TaskID,
+		ApprovalID: record.ApprovalID,
+	}, nil
+}
+
+func (h *Handler) paymentIDFromAgentArgs(args map[string]any) string {
+	if h.orderPlans != nil {
+		if planID := firstAgentArgString(args, "orderPlanId", "planId"); planID != "" {
+			if plan, ok := h.orderPlans.Get(planID); ok && strings.TrimSpace(plan.PaymentID) != "" {
+				return plan.PaymentID
+			}
+		}
+	}
+	if h.payments != nil {
+		if approvalID := firstAgentArgString(args, "approvalId"); approvalID != "" {
+			if record, ok := h.payments.GetByApproval(approvalID); ok {
+				return record.ID
+			}
+		}
+	}
+	return ""
 }
 
 func (h *Handler) toolGetArtifactManifest(ctx context.Context, run agent.AgentRun, args map[string]any) (agent.ToolResult, error) {

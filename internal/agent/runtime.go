@@ -40,6 +40,9 @@ type AgentRun struct {
 	Profile        string      `json:"profile"`
 	Status         string      `json:"status"`
 	Intent         string      `json:"intent"`
+	WorkUID        string      `json:"workUid,omitempty"`
+	ProjectPath    string      `json:"projectPath,omitempty"`
+	Controller     string      `json:"controller,omitempty"`
 	Summary        string      `json:"summary,omitempty"`
 	NextAction     string      `json:"nextAction,omitempty"`
 	OrderPlanID    string      `json:"orderPlanId,omitempty"`
@@ -100,9 +103,12 @@ type RuntimeConfig struct {
 }
 
 type StartRequest struct {
-	Intent   string `json:"intent"`
-	Profile  string `json:"profile,omitempty"`
-	MaxTurns int    `json:"maxTurns,omitempty"`
+	Intent      string `json:"intent"`
+	Profile     string `json:"profile,omitempty"`
+	WorkUID     string `json:"workUid,omitempty"`
+	ProjectPath string `json:"projectPath,omitempty"`
+	Controller  string `json:"controller,omitempty"`
+	MaxTurns    int    `json:"maxTurns,omitempty"`
 }
 
 type Runtime struct {
@@ -162,15 +168,18 @@ func (r *Runtime) Start(ctx context.Context, req StartRequest, wait bool) (Agent
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	run := AgentRun{
-		RunID:      newRunID("arun"),
-		Profile:    profile,
-		Status:     RunStatusQueued,
-		Intent:     intent,
-		Summary:    "Agent run queued.",
-		NextAction: "agent_execute",
-		CreatedAt:  now,
-		UpdatedAt:  now,
-		MaxTurns:   maxTurns,
+		RunID:       newRunID("arun"),
+		Profile:     profile,
+		Status:      RunStatusQueued,
+		Intent:      intent,
+		WorkUID:     strings.TrimSpace(req.WorkUID),
+		ProjectPath: strings.TrimSpace(req.ProjectPath),
+		Controller:  strings.TrimSpace(req.Controller),
+		Summary:     "Agent run queued.",
+		NextAction:  "agent_execute",
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		MaxTurns:    maxTurns,
 	}
 	if err := r.store.Save(run); err != nil {
 		return AgentRun{}, err
@@ -473,6 +482,7 @@ Hard boundaries:
 - Never approve, reject, select order plans, pay, set wallet/payment PIN, reveal credentials, or read arbitrary local files.
 - Docker is never called directly by you; use task flow, docker_preflight, status polling, and artifact manifest tools only.
 - If a human must choose, approve, pay, or provide consent, stop with a clear nextAction.
+- For paid work, never continue to submit_worker_job from a local payment record alone; first call/find payment evidence and require found_finalized Cloud/chain evidence.
 - Plan/read-only phases may only use readOnly tools.
 - Prefer Agent Card search before offer fallback for buyer work.
 - Buyer work should be negotiation-first: search seller Agent Cards, negotiate with 2-3 sellers, compare formal quotes/rejections, then create an order plan and stop for owner choice.
@@ -486,6 +496,9 @@ func (r *Runtime) userPayload(run AgentRun) map[string]any {
 	return map[string]any{
 		"runId":          run.RunID,
 		"intent":         run.Intent,
+		"workUid":        run.WorkUID,
+		"projectPath":    run.ProjectPath,
+		"controller":     run.Controller,
 		"profile":        run.Profile,
 		"status":         run.Status,
 		"summary":        run.Summary,

@@ -76,6 +76,7 @@ type ManualFields struct {
 type BuyerManualFields struct {
 	DisplayName           string   `json:"displayName,omitempty"`
 	SupportedAgentTypes   []string `json:"supportedAgentTypes,omitempty"`
+	Notes                 string   `json:"notes,omitempty"`
 	Budget                string   `json:"budget,omitempty"`
 	Preferences           []string `json:"preferences,omitempty"`
 	RiskBoundary          string   `json:"riskBoundary,omitempty"`
@@ -97,42 +98,47 @@ type SellerManualFields struct {
 	DataBoundary        string   `json:"dataBoundary,omitempty"`
 	ManagedAPIs         []string `json:"managedApis,omitempty"`
 	OutputFormats       []string `json:"outputFormats,omitempty"`
-	AutoQuote           bool     `json:"autoQuote,omitempty"`
-	AutoAcceptLowRisk   bool     `json:"autoAcceptLowRisk,omitempty"`
+	AutoQuote           *bool    `json:"autoQuote,omitempty"`
+	AutoAcceptLowRisk   *bool    `json:"autoAcceptLowRisk,omitempty"`
 	ExternalWritePolicy string   `json:"externalWritePolicy,omitempty"`
 }
 
 type Diagnostics struct {
-	CollectedAt        string        `json:"collectedAt"`
-	ExpiresAt          string        `json:"expiresAt"`
-	OS                 string        `json:"os"`
-	OSVersion          string        `json:"osVersion,omitempty"`
-	KernelVersion      string        `json:"kernelVersion,omitempty"`
-	Arch               string        `json:"arch"`
-	CPUCores           int           `json:"cpuCores"`
-	CPUModel           string        `json:"cpuModel,omitempty"`
-	RAMGB              int           `json:"ramGb,omitempty"`
-	GPUs               []GPUInfo     `json:"gpus,omitempty"`
-	Storage            []StorageInfo `json:"storage,omitempty"`
-	DockerAvailable    bool          `json:"dockerAvailable"`
-	DockerVersion      string        `json:"dockerVersion,omitempty"`
-	PythonVersion      string        `json:"pythonVersion,omitempty"`
-	NodeVersion        string        `json:"nodeVersion,omitempty"`
-	NPMVersion         string        `json:"npmVersion,omitempty"`
-	MCPAvailable       bool          `json:"mcpAvailable"`
-	MCPEntrypoint      string        `json:"mcpEntrypoint,omitempty"`
-	LLMProvider        string        `json:"llmProvider,omitempty"`
-	LLMConfigured      bool          `json:"llmConfigured"`
-	SellerAgentEnabled bool          `json:"sellerAgentEnabled"`
-	CommandExecutor    bool          `json:"commandExecutor"`
-	NetworkCheck       string        `json:"networkCheck,omitempty"`
-	RedactionSummary   string        `json:"redactionSummary"`
-	DiagnosticsVersion string        `json:"diagnosticsVersion"`
+	CollectedAt        string           `json:"collectedAt"`
+	ExpiresAt          string           `json:"expiresAt"`
+	OS                 string           `json:"os"`
+	OSVersion          string           `json:"osVersion,omitempty"`
+	KernelVersion      string           `json:"kernelVersion,omitempty"`
+	Arch               string           `json:"arch"`
+	CPUCores           int              `json:"cpuCores"`
+	CPUModel           string           `json:"cpuModel,omitempty"`
+	RAMGB              int              `json:"ramGb,omitempty"`
+	GPUs               []GPUInfo        `json:"gpus,omitempty"`
+	Storage            []StorageInfo    `json:"storage,omitempty"`
+	DockerAvailable    bool             `json:"dockerAvailable"`
+	DockerVersion      string           `json:"dockerVersion,omitempty"`
+	PythonVersion      string           `json:"pythonVersion,omitempty"`
+	NodeVersion        string           `json:"nodeVersion,omitempty"`
+	NPMVersion         string           `json:"npmVersion,omitempty"`
+	CodeEnvironment    []DependencyInfo `json:"codeEnvironment,omitempty"`
+	Dependencies       []DependencyInfo `json:"dependencies,omitempty"`
+	MCPAvailable       bool             `json:"mcpAvailable"`
+	MCPEntrypoint      string           `json:"mcpEntrypoint,omitempty"`
+	LLMProvider        string           `json:"llmProvider,omitempty"`
+	LLMConfigured      bool             `json:"llmConfigured"`
+	SellerAgentEnabled bool             `json:"sellerAgentEnabled"`
+	CommandExecutor    bool             `json:"commandExecutor"`
+	NetworkCheck       string           `json:"networkCheck,omitempty"`
+	RedactionSummary   string           `json:"redactionSummary"`
+	DiagnosticsVersion string           `json:"diagnosticsVersion"`
 }
 
 type GPUInfo struct {
-	Name   string `json:"name"`
-	VRAMGB int    `json:"vramGb,omitempty"`
+	Name          string `json:"name"`
+	Chip          string `json:"chip,omitempty"`
+	DeviceID      string `json:"deviceId,omitempty"`
+	DriverVersion string `json:"driverVersion,omitempty"`
+	VRAMGB        int    `json:"vramGb,omitempty"`
 }
 
 type StorageInfo struct {
@@ -140,6 +146,13 @@ type StorageInfo struct {
 	TotalGB     int    `json:"totalGb,omitempty"`
 	FreeGB      int    `json:"freeGb,omitempty"`
 	UsedPercent int    `json:"usedPercent,omitempty"`
+}
+
+type DependencyInfo struct {
+	Name     string `json:"name"`
+	Version  string `json:"version,omitempty"`
+	Source   string `json:"source,omitempty"`
+	Location string `json:"location,omitempty"`
 }
 
 type DraftRequest struct {
@@ -272,43 +285,55 @@ func ValidatePublish(card AgentCard) error {
 	}
 	switch card.Role {
 	case RoleBuyer:
-		b := card.ManualFields.Buyer
-		if strings.TrimSpace(b.Budget) == "" {
-			return fmt.Errorf("buyer budget required")
+		buyer := card.ManualFields.Buyer
+		if strings.TrimSpace(buyer.DisplayName) == "" {
+			return fmt.Errorf("buyer displayName required")
 		}
-		if strings.TrimSpace(b.RiskBoundary) == "" {
-			return fmt.Errorf("buyer risk boundary required")
+		if strings.TrimSpace(buyer.RiskBoundary) == "" {
+			return fmt.Errorf("buyer riskBoundary required")
 		}
-		if strings.TrimSpace(b.AuthorizationStrategy) == "" {
-			return fmt.Errorf("buyer authorization strategy required")
+		if strings.TrimSpace(buyer.AuthorizationStrategy) == "" {
+			return fmt.Errorf("buyer authorizationStrategy required")
+		}
+		if strings.TrimSpace(buyer.IdentityDisclosure) == "" {
+			return fmt.Errorf("buyer identityDisclosure required")
+		}
+		if strings.TrimSpace(buyer.FileDisclosure) == "" {
+			return fmt.Errorf("buyer fileDisclosure required")
 		}
 	case RoleSeller:
-		s := card.ManualFields.Seller
-		if strings.TrimSpace(s.DisplayName) == "" {
-			return fmt.Errorf("seller display name required")
+		seller := card.ManualFields.Seller
+		if strings.TrimSpace(seller.DisplayName) == "" {
+			return fmt.Errorf("seller displayName required")
 		}
-		if strings.TrimSpace(s.CapabilitySummary) == "" {
-			return fmt.Errorf("seller capability summary required")
+		if strings.TrimSpace(seller.CapabilitySummary) == "" && len(seller.CapabilityTypes) == 0 {
+			return fmt.Errorf("seller capability required")
 		}
-		if strings.TrimSpace(s.Pricing) == "" {
+		if strings.TrimSpace(seller.Pricing) == "" {
 			return fmt.Errorf("seller pricing required")
 		}
-		if strings.TrimSpace(s.Availability) == "" {
+		if strings.TrimSpace(seller.Availability) == "" {
 			return fmt.Errorf("seller availability required")
 		}
-		if strings.TrimSpace(s.HumanConfirmation) == "" {
-			return fmt.Errorf("seller confirmation policy required")
-		}
-		if strings.TrimSpace(s.DataBoundary) == "" {
-			return fmt.Errorf("seller data boundary required")
+		if strings.TrimSpace(seller.HumanConfirmation) == "" {
+			return fmt.Errorf("seller humanConfirmation required")
 		}
 	}
 	return nil
 }
 
 func (b BuyerManualFields) withDefaults() BuyerManualFields {
+	if strings.TrimSpace(b.DisplayName) == "" {
+		b.DisplayName = "Exora Buyer"
+	}
 	if len(b.SupportedAgentTypes) == 0 {
 		b.SupportedAgentTypes = []string{"Codex", "Claude Code", "OpenCode", "Exora agent"}
+	}
+	if strings.TrimSpace(b.Budget) == "" {
+		b.Budget = "Budget is provided per task."
+	}
+	if strings.TrimSpace(b.RiskBoundary) == "" {
+		b.RiskBoundary = "Low-risk compute, research, data, code, and automation only unless the owner approves more."
 	}
 	if strings.TrimSpace(b.AuthorizationStrategy) == "" {
 		b.AuthorizationStrategy = "Human confirmation is required for payments, file disclosure, external writes, and public publishing."
@@ -332,8 +357,20 @@ func (b BuyerManualFields) withDefaults() BuyerManualFields {
 }
 
 func (s SellerManualFields) withDefaults(diag Diagnostics) SellerManualFields {
+	if strings.TrimSpace(s.DisplayName) == "" {
+		s.DisplayName = "Exora Seller"
+	}
+	if strings.TrimSpace(s.CapabilitySummary) == "" {
+		s.CapabilitySummary = "Local seller agent offering task-scoped compute, code, or agent work."
+	}
 	if len(s.CapabilityTypes) == 0 {
 		s.CapabilityTypes = inferCapabilityTypes(diag)
+	}
+	if strings.TrimSpace(s.Pricing) == "" {
+		s.Pricing = "Task-specific quotes are generated by the seller agent from local pricing policy."
+	}
+	if strings.TrimSpace(s.Availability) == "" {
+		s.Availability = "Local availability is checked during seller-agent negotiation."
 	}
 	if strings.TrimSpace(s.HumanConfirmation) == "" {
 		s.HumanConfirmation = "Human confirmation is required for external writes, payments, credential use, and public disclosure."

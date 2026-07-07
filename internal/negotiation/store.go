@@ -23,6 +23,7 @@ type Status string
 const (
 	StatusPendingSellerDecision Status = "pending_seller_decision"
 	StatusQuoted                Status = "quoted"
+	StatusNeedsNegotiation      Status = "needs_negotiation"
 	StatusRejected              Status = "rejected"
 	StatusManualReview          Status = "manual_review"
 	StatusExpired               Status = "expired"
@@ -50,6 +51,12 @@ type Quote struct {
 	DataProvenance       string             `json:"dataProvenance,omitempty"`
 	RetentionCommitment  string             `json:"retentionCommitment,omitempty"`
 	SellerApprovalMode   string             `json:"sellerApprovalMode,omitempty"`
+	ValuationDecision    string             `json:"valuationDecision,omitempty"`
+	SellerAgentCardID    string             `json:"sellerAgentCardId,omitempty"`
+	CapabilitySummary    string             `json:"capabilitySummary,omitempty"`
+	PricingPolicyID      string             `json:"pricingPolicyId,omitempty"`
+	ValuationHash        string             `json:"valuationHash,omitempty"`
+	QuoteBindingHash     string             `json:"quoteBindingHash,omitempty"`
 	Notes                string             `json:"notes,omitempty"`
 	Runtime              string             `json:"runtime,omitempty"`
 	Docker               task.DockerRunSpec `json:"docker,omitempty"`
@@ -64,6 +71,15 @@ type Rejection struct {
 	MissingInputs []string `json:"missingInputs,omitempty"`
 	CreatedAt     string   `json:"createdAt"`
 	Signature     string   `json:"signature,omitempty"`
+}
+
+type NegotiationNeed struct {
+	Reason              string   `json:"reason"`
+	RiskSummary         string   `json:"riskSummary,omitempty"`
+	MissingInputs       []string `json:"missingInputs,omitempty"`
+	RequiredPermissions []string `json:"requiredPermissions,omitempty"`
+	CreatedAt           string   `json:"createdAt"`
+	Signature           string   `json:"signature,omitempty"`
 }
 
 type Negotiation struct {
@@ -81,6 +97,7 @@ type Negotiation struct {
 	Messages          []Message         `json:"messages,omitempty"`
 	Quote             *Quote            `json:"quote,omitempty"`
 	Rejection         *Rejection        `json:"rejection,omitempty"`
+	NeedsNegotiation  *NegotiationNeed  `json:"needsNegotiation,omitempty"`
 	OrderPlanID       string            `json:"orderPlanId,omitempty"`
 	NextAction        string            `json:"nextAction,omitempty"`
 	Error             string            `json:"error,omitempty"`
@@ -119,6 +136,12 @@ type QuoteRequest struct {
 	DataProvenance       string
 	RetentionCommitment  string
 	SellerApprovalMode   string
+	ValuationDecision    string
+	SellerAgentCardID    string
+	CapabilitySummary    string
+	PricingPolicyID      string
+	ValuationHash        string
+	QuoteBindingHash     string
 	Notes                string
 	Runtime              string
 	Docker               task.DockerRunSpec
@@ -131,6 +154,14 @@ type RejectRequest struct {
 	RiskSummary   string
 	MissingInputs []string
 	Signature     string
+}
+
+type NeedsNegotiationRequest struct {
+	Reason              string
+	RiskSummary         string
+	MissingInputs       []string
+	RequiredPermissions []string
+	Signature           string
 }
 
 type ListFilter struct {
@@ -294,7 +325,7 @@ func (s *Store) MarkQuoted(id string, req QuoteRequest) (Negotiation, error) {
 	now := time.Now().UTC()
 	currency := strings.TrimSpace(req.Currency)
 	if currency == "" {
-		currency = "USD"
+		currency = "USDC"
 	}
 	expires := strings.TrimSpace(req.ExpiresAt)
 	if expires == "" {
@@ -324,6 +355,12 @@ func (s *Store) MarkQuoted(id string, req QuoteRequest) (Negotiation, error) {
 		DataProvenance:       strings.TrimSpace(req.DataProvenance),
 		RetentionCommitment:  strings.TrimSpace(req.RetentionCommitment),
 		SellerApprovalMode:   strings.TrimSpace(req.SellerApprovalMode),
+		ValuationDecision:    firstNonEmpty(strings.TrimSpace(req.ValuationDecision), "can_accept"),
+		SellerAgentCardID:    strings.TrimSpace(req.SellerAgentCardID),
+		CapabilitySummary:    strings.TrimSpace(req.CapabilitySummary),
+		PricingPolicyID:      strings.TrimSpace(req.PricingPolicyID),
+		ValuationHash:        strings.TrimSpace(req.ValuationHash),
+		QuoteBindingHash:     strings.TrimSpace(req.QuoteBindingHash),
 		Notes:                strings.TrimSpace(req.Notes),
 		Runtime:              strings.TrimSpace(req.Runtime),
 		Docker:               req.Docker,
@@ -332,6 +369,7 @@ func (s *Store) MarkQuoted(id string, req QuoteRequest) (Negotiation, error) {
 		Signature:            strings.TrimSpace(req.Signature),
 	}
 	n.Rejection = nil
+	n.NeedsNegotiation = nil
 	n.NextAction = "create_order_plan_from_quote"
 	n.Error = ""
 	n.UpdatedAt = now.Format(time.RFC3339)
@@ -357,7 +395,35 @@ func (s *Store) MarkRejected(id string, req RejectRequest) (Negotiation, error) 
 		Signature:     strings.TrimSpace(req.Signature),
 	}
 	n.Quote = nil
+	n.NeedsNegotiation = nil
 	n.NextAction = "inspect_rejection_or_try_another_seller"
+	n.Error = reason
+	n.UpdatedAt = now.Format(time.RFC3339)
+	return n, s.Save(n)
+}
+
+func (s *Store) MarkNeedsNegotiation(id string, req NeedsNegotiationRequest) (Negotiation, error) {
+	n, ok := s.Get(id)
+	if !ok {
+		return Negotiation{}, fmt.Errorf("negotiation not found")
+	}
+	now := time.Now().UTC()
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		reason = "seller needs more detail before quoting"
+	}
+	n.Status = StatusNeedsNegotiation
+	n.NeedsNegotiation = &NegotiationNeed{
+		Reason:              reason,
+		RiskSummary:         strings.TrimSpace(req.RiskSummary),
+		MissingInputs:       compactStrings(req.MissingInputs),
+		RequiredPermissions: compactStrings(req.RequiredPermissions),
+		CreatedAt:           now.Format(time.RFC3339),
+		Signature:           strings.TrimSpace(req.Signature),
+	}
+	n.Quote = nil
+	n.Rejection = nil
+	n.NextAction = "provide_more_details_or_negotiate"
 	n.Error = reason
 	n.UpdatedAt = now.Format(time.RFC3339)
 	return n, s.Save(n)
@@ -467,7 +533,7 @@ func compactStrings(values []string) []string {
 }
 
 func isActive(status Status) bool {
-	return status == StatusPendingSellerDecision || status == StatusManualReview
+	return status == StatusPendingSellerDecision || status == StatusManualReview || status == StatusNeedsNegotiation
 }
 
 func isExpired(value string) bool {

@@ -57,7 +57,12 @@ type DecisionReceipt struct {
 
 type Approval struct {
 	ID                string           `json:"approvalId"`
-	TaskID            string           `json:"taskId"`
+	TaskID            string           `json:"taskId,omitempty"`
+	SubjectType       string           `json:"subjectType,omitempty"`
+	SubjectID         string           `json:"subjectId,omitempty"`
+	WorkRunID         string           `json:"workRunId,omitempty"`
+	PlanID            string           `json:"planId,omitempty"`
+	ManifestHash      string           `json:"manifestHash,omitempty"`
 	Action            string           `json:"action"`
 	UserPubkey        string           `json:"userPubkey"`
 	AgentID           string           `json:"agentId"`
@@ -75,18 +80,25 @@ type Approval struct {
 	UpdatedAt         string           `json:"updatedAt"`
 	ExpiresAt         string           `json:"expiresAt"`
 	Decision          *DecisionReceipt `json:"decision,omitempty"`
+	Metadata          map[string]any   `json:"metadata,omitempty"`
 }
 
 type CreateRequest struct {
-	TaskID         string       `json:"taskId"`
-	Action         string       `json:"action"`
-	UserPubkey     string       `json:"userPubkey"`
-	AgentID        string       `json:"agentId"`
-	ProviderPubkey string       `json:"providerPubkey"`
-	Quote          QuoteSummary `json:"quote"`
-	FileScope      []FileScope  `json:"fileScope"`
-	Amount         Amount       `json:"amount"`
-	ExpiresAt      string       `json:"expiresAt"`
+	TaskID         string         `json:"taskId"`
+	SubjectType    string         `json:"subjectType,omitempty"`
+	SubjectID      string         `json:"subjectId,omitempty"`
+	WorkRunID      string         `json:"workRunId,omitempty"`
+	PlanID         string         `json:"planId,omitempty"`
+	ManifestHash   string         `json:"manifestHash,omitempty"`
+	Action         string         `json:"action"`
+	UserPubkey     string         `json:"userPubkey"`
+	AgentID        string         `json:"agentId"`
+	ProviderPubkey string         `json:"providerPubkey"`
+	Quote          QuoteSummary   `json:"quote"`
+	FileScope      []FileScope    `json:"fileScope"`
+	Amount         Amount         `json:"amount"`
+	ExpiresAt      string         `json:"expiresAt"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
 }
 
 type DecisionRequest struct {
@@ -106,14 +118,16 @@ func NewStore(c *cache.Cache) *Store {
 
 func (s *Store) Create(req CreateRequest) (Approval, error) {
 	taskID := strings.TrimSpace(req.TaskID)
-	action := strings.TrimSpace(req.Action)
+	subjectType := strings.TrimSpace(req.SubjectType)
+	subjectID := strings.TrimSpace(req.SubjectID)
+	workRunID := strings.TrimSpace(req.WorkRunID)
+	planID := strings.TrimSpace(req.PlanID)
+	manifestHash := strings.TrimSpace(req.ManifestHash)
+	action := defaultAction(strings.TrimSpace(req.Action), subjectType, manifestHash)
 	user := strings.TrimSpace(req.UserPubkey)
 	agent := strings.TrimSpace(req.AgentID)
-	if taskID == "" {
-		return Approval{}, fmt.Errorf("task_id required")
-	}
-	if action == "" {
-		action = "approve_quote"
+	if taskID == "" && subjectType == "" && subjectID == "" && planID == "" && manifestHash == "" {
+		return Approval{}, fmt.Errorf("task_id or subject required")
 	}
 	if user == "" {
 		return Approval{}, fmt.Errorf("user_pubkey required")
@@ -136,8 +150,13 @@ func (s *Store) Create(req CreateRequest) (Approval, error) {
 	}
 
 	a := Approval{
-		ID:             fmt.Sprintf("appr-%d-%s", now.UnixNano(), shortHash(taskID+user+agent+action)),
+		ID:             fmt.Sprintf("appr-%d-%s", now.UnixNano(), shortHash(taskID+subjectType+subjectID+planID+manifestHash+user+agent+action)),
 		TaskID:         taskID,
+		SubjectType:    subjectType,
+		SubjectID:      subjectID,
+		WorkRunID:      workRunID,
+		PlanID:         planID,
+		ManifestHash:   manifestHash,
 		Action:         action,
 		UserPubkey:     user,
 		AgentID:        agent,
@@ -152,10 +171,11 @@ func (s *Store) Create(req CreateRequest) (Approval, error) {
 		Status:            StatusPending,
 		RiskSummary:       riskSummary(req),
 		RequiresOwnerAuth: true,
-		NextAction:        "approve_or_reject",
+		NextAction:        pendingNextAction(action),
 		CreatedAt:         now.Format(time.RFC3339),
 		UpdatedAt:         now.Format(time.RFC3339),
 		ExpiresAt:         expires.Format(time.RFC3339),
+		Metadata:          copyMetadata(req.Metadata),
 	}
 	return a, s.Save(a)
 }
@@ -177,10 +197,10 @@ func (s *Store) Decide(id string, req DecisionRequest) (Approval, error) {
 	now := time.Now().UTC()
 	if req.Approved {
 		a.Status = StatusApproved
-		a.NextAction = "wait_for_task_execution"
+		a.NextAction = approvedNextAction(a)
 	} else {
 		a.Status = StatusRejected
-		a.NextAction = "task_rejected"
+		a.NextAction = rejectedNextAction(a)
 	}
 	a.Decision = &DecisionReceipt{
 		Approved:  req.Approved,
@@ -252,10 +272,14 @@ func (s *Store) List(filter ListFilter) []Approval {
 }
 
 type ListFilter struct {
-	Status     Status
-	UserPubkey string
-	AgentID    string
-	TaskID     string
+	Status      Status
+	UserPubkey  string
+	AgentID     string
+	TaskID      string
+	SubjectType string
+	SubjectID   string
+	WorkRunID   string
+	PlanID      string
 }
 
 func (f ListFilter) matches(a Approval) bool {
@@ -269,6 +293,18 @@ func (f ListFilter) matches(a Approval) bool {
 		return false
 	}
 	if strings.TrimSpace(f.TaskID) != "" && a.TaskID != strings.TrimSpace(f.TaskID) {
+		return false
+	}
+	if strings.TrimSpace(f.SubjectType) != "" && a.SubjectType != strings.TrimSpace(f.SubjectType) {
+		return false
+	}
+	if strings.TrimSpace(f.SubjectID) != "" && a.SubjectID != strings.TrimSpace(f.SubjectID) {
+		return false
+	}
+	if strings.TrimSpace(f.WorkRunID) != "" && a.WorkRunID != strings.TrimSpace(f.WorkRunID) {
+		return false
+	}
+	if strings.TrimSpace(f.PlanID) != "" && a.PlanID != strings.TrimSpace(f.PlanID) {
 		return false
 	}
 	return true
@@ -315,6 +351,15 @@ func normalizeFiles(files []FileScope) []FileScope {
 
 func riskSummary(req CreateRequest) string {
 	parts := []string{}
+	if strings.TrimSpace(req.SubjectType) != "" {
+		parts = append(parts, "subject "+strings.TrimSpace(req.SubjectType))
+	}
+	if strings.TrimSpace(req.PlanID) != "" {
+		parts = append(parts, "plan "+strings.TrimSpace(req.PlanID))
+	}
+	if strings.TrimSpace(req.ManifestHash) != "" {
+		parts = append(parts, "manifest "+shortDisplayHash(req.ManifestHash))
+	}
 	if strings.TrimSpace(req.ProviderPubkey) != "" {
 		parts = append(parts, "provider "+strings.TrimSpace(req.ProviderPubkey))
 	}
@@ -340,6 +385,80 @@ func riskSummary(req CreateRequest) string {
 
 func paymentRequired(req CreateRequest) bool {
 	return req.Amount.Value > 0 || req.Quote.PriceAmount > 0
+}
+
+func defaultAction(action, subjectType, manifestHash string) string {
+	if action != "" {
+		return action
+	}
+	if subjectType == "buyer_manifest" || manifestHash != "" {
+		return "submit_remote_task_manifest"
+	}
+	return "approve_quote"
+}
+
+func pendingNextAction(action string) string {
+	switch strings.TrimSpace(action) {
+	case "submit_remote_task_manifest":
+		return "review_remote_task_manifest"
+	case "seller_execution_plan":
+		return "review_seller_execution_plan"
+	default:
+		return "approve_or_reject"
+	}
+}
+
+func approvedNextAction(a Approval) string {
+	switch strings.TrimSpace(a.Action) {
+	case "submit_remote_task_manifest":
+		return "submit_manifest_for_matching"
+	case "seller_execution_plan":
+		return "run_seller_execution_plan"
+	default:
+		if strings.TrimSpace(a.TaskID) == "" {
+			return "approval_recorded"
+		}
+		return "wait_for_task_execution"
+	}
+}
+
+func rejectedNextAction(a Approval) string {
+	switch strings.TrimSpace(a.Action) {
+	case "submit_remote_task_manifest":
+		return "manifest_submission_rejected"
+	case "seller_execution_plan":
+		return "seller_execution_rejected"
+	default:
+		if strings.TrimSpace(a.TaskID) == "" {
+			return "approval_rejected"
+		}
+		return "task_rejected"
+	}
+}
+
+func copyMetadata(value map[string]any) map[string]any {
+	if len(value) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(value))
+	for key, item := range value {
+		key = strings.TrimSpace(key)
+		if key != "" {
+			out[key] = item
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func shortDisplayHash(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= 20 {
+		return value
+	}
+	return value[:20]
 }
 
 func isExpired(value string) bool {
