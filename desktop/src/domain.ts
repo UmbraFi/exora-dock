@@ -18,6 +18,7 @@ export type AppStatus = {
 export type SellerSettings = {
   enabled: boolean
   autoQuote: boolean
+  autoAcceptLowRisk: boolean
   autoCompleteTextTasks: boolean
   llmBaseUrl: string
   hasApiKey: boolean
@@ -75,13 +76,15 @@ export type AgentCardDiagnostics = {
   cpuCores: number
   cpuModel?: string
   ramGb?: number
-  gpus?: Array<{ name: string; vramGb?: number }>
+  gpus?: Array<{ name: string; chip?: string; deviceId?: string; driverVersion?: string; vramGb?: number }>
   storage?: Array<{ label: string; totalGb?: number; freeGb?: number; usedPercent?: number }>
   dockerAvailable: boolean
   dockerVersion?: string
   pythonVersion?: string
   nodeVersion?: string
   npmVersion?: string
+  codeEnvironment?: DiagnosticDependency[]
+  dependencies?: DiagnosticDependency[]
   mcpAvailable: boolean
   mcpEntrypoint?: string
   llmProvider?: string
@@ -93,9 +96,17 @@ export type AgentCardDiagnostics = {
   diagnosticsVersion: string
 }
 
+export type DiagnosticDependency = {
+  name: string
+  version?: string
+  source?: string
+  location?: string
+}
+
 export type BuyerManualFields = {
   displayName?: string
   supportedAgentTypes?: string[]
+  notes?: string
   budget?: string
   preferences?: string[]
   riskBoundary?: string
@@ -150,7 +161,13 @@ export type AgentCardsMine = {
 
 export type Approval = {
   approvalId: string
-  taskId: string
+  taskId?: string
+  subjectType?: string
+  subjectId?: string
+  workRunId?: string
+  planId?: string
+  manifestHash?: string
+  metadata?: Record<string, unknown>
   action: string
   agentId: string
   providerPubkey?: string
@@ -191,6 +208,8 @@ export type Task = {
     expiresAt?: string
   }
   approvalRequestId?: string
+  artifacts?: Array<{ name: string; contentType?: string; sizeBytes?: number; sha256?: string; url?: string }>
+  artifactHashes?: Record<string, string>
   error?: string
   createdAt?: string
   updatedAt?: string
@@ -290,6 +309,17 @@ export type OrderPlan = {
   approvalId?: string
   paymentId?: string
   providerJobId?: string
+  invalidationCause?: string
+  orderState?: {
+    planId?: string
+    orderId?: string
+    taskId?: string
+    state?: string
+    owner?: string
+    waitingFor?: string
+    terminalReason?: string
+    updatedAt?: string
+  }
   normalizedQuery?: NormalizedQuery
   nextAction?: string
   expiresAt?: string
@@ -342,25 +372,25 @@ export function optionIsPaid(option: OrderDraftOption) {
 export function optionPrice(option: OrderDraftOption) {
   return formatPrice(
     option.priceSnapshot?.pricePerUnit || 0,
-    option.priceSnapshot?.currency || 'USD',
+    option.priceSnapshot?.currency || 'USDC',
     option.priceSnapshot?.billingUnit || 'unit',
   )
 }
 
 export function approvalAmount(approval: Approval) {
   const value = approval.amount?.value || approval.quote?.priceAmount || 0
-  const currency = approval.amount?.currency || approval.quote?.currency || 'USD'
+  const currency = approval.amount?.currency || approval.quote?.currency || 'USDC'
   return value > 0 ? `${trimNumber(value)} ${currency}` : 'none'
 }
 
 export function taskAmount(task?: Task) {
   if (!task?.quote?.priceAmount) return 'none'
-  return `${trimNumber(task.quote.priceAmount)} ${task.quote.currency || 'USD'}`
+  return `${trimNumber(task.quote.priceAmount)} ${task.quote.currency || 'USDC'}`
 }
 
 export function paymentAmount(payment?: PaymentRecord) {
   if (!payment?.amount) return 'none'
-  return `${trimNumber(payment.amount)} ${payment.currency || 'USD'}`
+  return `${trimNumber(payment.amount)} ${payment.currency || 'USDC'}`
 }
 
 export function formatPrice(amount: number, currency: string, unit?: string) {

@@ -21,6 +21,7 @@ import (
 	"github.com/exora-dock/exora-dock/internal/approval"
 	"github.com/exora-dock/exora-dock/internal/cache"
 	"github.com/exora-dock/exora-dock/internal/chat"
+	"github.com/exora-dock/exora-dock/internal/cloudlink"
 	"github.com/exora-dock/exora-dock/internal/delegation"
 	"github.com/exora-dock/exora-dock/internal/dht"
 	"github.com/exora-dock/exora-dock/internal/discovery"
@@ -37,6 +38,8 @@ import (
 	"github.com/exora-dock/exora-dock/internal/resource"
 	"github.com/exora-dock/exora-dock/internal/task"
 	"github.com/exora-dock/exora-dock/internal/wallet"
+	"github.com/exora-dock/exora-dock/internal/workrun"
+	"github.com/gagliardetto/solana-go"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -55,6 +58,14 @@ type RuntimeStores struct {
 	AgentLLMConfig  agent.LLMClientConfig
 	CardDiagnostics agentcard.DiagnosticsConfig
 	CardPublisher   agentcard.CloudPublisher
+	WorkRuns        *workrun.Store
+	EscrowProgramID string
+	SolanaNetwork   string
+	USDCMint        string
+	USDCDecimals    uint8
+	CloudURL        string
+	CloudTokenPath  string
+	DockID          string
 }
 
 type Handler struct {
@@ -83,9 +94,17 @@ type Handler struct {
 	agentCards      *agentcard.Store
 	agentRuns       *agent.RunStore
 	agentRuntime    *agent.Runtime
+	workRuns        *workrun.Store
 	agentLLMConfig  agent.LLMClientConfig
 	cardDiagnostics agentcard.DiagnosticsConfig
 	cardPublisher   agentcard.CloudPublisher
+	escrowProgramID string
+	solanaNetwork   string
+	usdcMint        string
+	usdcDecimals    uint8
+	cloudURL        string
+	cloudTokenPath  string
+	dockID          string
 	selfPubkey      string
 	startTime       time.Time
 }
@@ -138,13 +157,27 @@ func NewHandler(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub
 		agentCards:      stores.AgentCards,
 		agentRuns:       stores.AgentRuns,
 		agentLLMConfig:  stores.AgentLLMConfig,
+		workRuns:        stores.WorkRuns,
 		cardDiagnostics: stores.CardDiagnostics,
 		cardPublisher:   stores.CardPublisher,
+		escrowProgramID: strings.TrimSpace(stores.EscrowProgramID),
+		solanaNetwork:   firstNonEmpty(strings.TrimSpace(stores.SolanaNetwork), "devnet"),
+		usdcMint:        strings.TrimSpace(stores.USDCMint),
+		usdcDecimals:    stores.USDCDecimals,
+		cloudURL:        strings.TrimRight(strings.TrimSpace(stores.CloudURL), "/"),
+		cloudTokenPath:  strings.TrimSpace(stores.CloudTokenPath),
+		dockID:          strings.TrimSpace(stores.DockID),
 		selfPubkey:      selfPubkey,
 		startTime:       time.Now(),
 	}
+	if h.usdcDecimals == 0 {
+		h.usdcDecimals = 6
+	}
 	if h.agentRuns == nil {
 		h.agentRuns = agent.NewRunStore(c)
+	}
+	if h.workRuns == nil {
+		h.workRuns = workrun.NewStore(c)
 	}
 	if h.negotiations == nil {
 		h.negotiations = negotiation.NewStore(c)
@@ -291,6 +324,7 @@ func (h *Handler) GetWallet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	status = h.enrichWalletStatus(status)
 	writeJSON(w, http.StatusOK, map[string]any{"wallet": status})
 }
 
@@ -308,25 +342,120 @@ func (h *Handler) CreateWallet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"wallet": status})
+	status = h.enrichWalletStatus(status)
+	resp := map[string]any{"wallet": status}
+	if strings.TrimSpace(req.RecoveryPassword) != "" {
+		if backup, err := h.wallets.Backup(); err == nil {
+			if accountWallet, err := cloudlink.PutAccountWallet(r.Context(), h.cloudURL, h.cloudTokenPath, h.dockID, backup, nil); err == nil {
+				status.BackupStatus = "encrypted_cloud_backed_up"
+				resp["wallet"] = status
+				resp["accountWallet"] = accountWallet
+			} else {
+				resp["backupWarning"] = err.Error()
+			}
+		}
+	}
+	writeJSON(w, http.StatusCreated, resp)
 }
 
-func (h *Handler) BindWallet(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) UnlockWallet(w http.ResponseWriter, r *http.Request) {
 	if h.wallets == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "wallet service not configured"})
 		return
 	}
-	var req wallet.BindRequest
+	var req wallet.UnlockRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
-	status, err := h.wallets.Bind(req)
+	status, err := h.wallets.Unlock(req)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"wallet": status})
+	writeJSON(w, http.StatusOK, map[string]any{"wallet": h.enrichWalletStatus(status)})
+}
+
+func (h *Handler) RestoreWallet(w http.ResponseWriter, r *http.Request) {
+	if h.wallets == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "wallet service not configured"})
+		return
+	}
+	var req wallet.RestoreRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if strings.TrimSpace(req.Backup.Data) == "" {
+		accountWallet, err := cloudlink.GetAccountWallet(r.Context(), h.cloudURL, h.cloudTokenPath, h.dockID, nil)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "wallet backup unavailable: " + err.Error()})
+			return
+		}
+		req.Backup = accountWallet.EncryptedBackup
+	}
+	status, err := h.wallets.Restore(req)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"wallet": h.enrichWalletStatus(status)})
+}
+
+func (h *Handler) WithdrawWallet(w http.ResponseWriter, r *http.Request) {
+	if h.wallets == nil || h.paymentPIN == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "wallet withdrawal service not configured"})
+		return
+	}
+	if strings.TrimSpace(h.usdcMint) == "" {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "usdc_mint_not_configured"})
+		return
+	}
+	var req struct {
+		ToAddress    string `json:"toAddress"`
+		AmountAtomic uint64 `json:"amountAtomic"`
+		PaymentPin   string `json:"paymentPin"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if strings.TrimSpace(req.PaymentPin) == "" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "payment_pin_required"})
+		return
+	}
+	if err := h.paymentPIN.Verify(req.PaymentPin); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "invalid_payment_pin"})
+		return
+	}
+	if strings.TrimSpace(req.ToAddress) == "" || req.AmountAtomic == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "toAddress and amountAtomic required"})
+		return
+	}
+	if _, err := solana.PublicKeyFromBase58(strings.TrimSpace(req.ToAddress)); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_to_address"})
+		return
+	}
+	payload := []byte(fmt.Sprintf("exora.wallet.withdraw.v1\n%s\n%d\n%s\n%s", strings.TrimSpace(req.ToAddress), req.AmountAtomic, h.usdcMint, time.Now().UTC().Format(time.RFC3339Nano)))
+	address, signature, err := h.wallets.SignPayload(payload)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"withdrawal": map[string]any{
+			"fromAddress":  address,
+			"toAddress":    strings.TrimSpace(req.ToAddress),
+			"amountAtomic": req.AmountAtomic,
+			"currency":     "USDC",
+			"mint":         h.usdcMint,
+			"decimals":     h.usdcDecimals,
+			"signature":    signature,
+			"status":       "relayer_required",
+		},
+		"nextAction": "submit_to_cloud_relayer",
+		"feePolicy":  h.walletFeePolicy(),
+	})
 }
 
 func (h *Handler) ClearWallet(w http.ResponseWriter, r *http.Request) {
@@ -346,6 +475,39 @@ func (h *Handler) ClearWallet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"wallet": status})
 }
 
+func (h *Handler) enrichWalletStatus(status wallet.Status) wallet.Status {
+	status.AccountBound = status.Configured && !status.BoundOnly
+	status.USDCMint = h.usdcMint
+	status.FeePolicy = h.walletFeePolicy()
+	status.Balances = map[string]wallet.Balance{
+		"usdc": {
+			AmountAtomic: 0,
+			Decimals:     h.usdcDecimals,
+			Currency:     "USDC",
+			Mint:         h.usdcMint,
+			Status:       h.walletBalanceStatus(),
+			UpdatedAt:    time.Now().UTC().Format(time.RFC3339),
+		},
+	}
+	return status
+}
+
+func (h *Handler) walletFeePolicy() *wallet.FeePolicy {
+	return &wallet.FeePolicy{
+		Currency:            "USDC",
+		RelayFeeAtomic:      0,
+		RelayFeeDescription: "Exora relayer pays Solana gas; protocol fee can be added here when configured.",
+		GasPaidBy:           "exora_relayer",
+	}
+}
+
+func (h *Handler) walletBalanceStatus() string {
+	if strings.TrimSpace(h.usdcMint) == "" {
+		return "usdc_mint_not_configured"
+	}
+	return "not_fetched"
+}
+
 // --- Remote job task endpoints ---
 
 func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
@@ -363,7 +525,16 @@ func (h *Handler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"task": t})
+	payload := map[string]any{"task": t, "summary": "Task draft created.", "nextAction": "request_approval"}
+	payload = h.decorateWorkRunPayload(payload, workRunContext{
+		RunID:       req.RunID,
+		WorkUID:     req.WorkUID,
+		ProjectPath: req.ProjectPath,
+		Controller:  firstNonEmpty(req.Controller, workrun.ControllerInternalAPI),
+		Intent:      req.Goal,
+		CurrentStep: workrun.StepRequestApproval,
+	}, payload)
+	writeJSON(w, http.StatusCreated, payload)
 }
 
 func (h *Handler) ListTasks(w http.ResponseWriter, r *http.Request) {
@@ -542,6 +713,10 @@ func (h *Handler) CreateProviderJob(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
 		return
 	}
+	if strings.TrimSpace(req.PaymentID) != "" && !providerPaymentEvidenceFinalized(req.PaymentEvidence) {
+		writeJSON(w, http.StatusPaymentRequired, map[string]string{"error": "payment_evidence_required: paid provider jobs require found_finalized Cloud/chain evidence"})
+		return
+	}
 	quote := h.buildProviderQuoteReply(providerprotocol.QuoteRequest{
 		RequestID:       req.RequestID,
 		RequesterPubkey: req.RequesterPubkey,
@@ -563,7 +738,7 @@ func (h *Handler) CreateProviderJob(w http.ResponseWriter, r *http.Request) {
 	quoted, err := h.tasks.Quote(created.ID, task.QuoteRequest{
 		ProviderPubkey:   req.ProviderPubkey,
 		PriceAmount:      quote.PriceAmount,
-		Currency:         firstNonEmpty(quote.Currency, "USD"),
+		Currency:         firstNonEmpty(quote.Currency, "USDC"),
 		EstimatedSeconds: quote.EstimatedSeconds,
 		Notes:            quote.Notes,
 		ExpiresAt:        quote.ExpiresAt,
@@ -647,7 +822,7 @@ func (h *Handler) buildProviderQuoteReply(req providerprotocol.QuoteRequest) pro
 		Status:         "rejected",
 		ProviderPubkey: req.ProviderPubkey,
 		ResourceID:     req.ResourceID,
-		Currency:       "USD",
+		Currency:       "USDC",
 		Timestamp:      now.Format(time.RFC3339),
 	}
 	res, ok := h.resources.Get(req.ResourceID)
@@ -687,7 +862,7 @@ func (h *Handler) buildProviderQuoteReply(req providerprotocol.QuoteRequest) pro
 	reply.Status = "quoted"
 	reply.ProviderPubkey = providerPubkey
 	reply.PriceAmount = res.PricePerUnit
-	reply.Currency = "USD"
+	reply.Currency = "USDC"
 	reply.EstimatedSeconds = estimated
 	reply.Notes = "Realtime Docker quote confirmed by provider."
 	reply.ExpiresAt = now.Add(30 * time.Minute).Format(time.RFC3339)
@@ -922,7 +1097,22 @@ func (h *Handler) SearchSellers(w http.ResponseWriter, r *http.Request) {
 			NextAction:  "no_realtime_quotes_available",
 		}
 	}
-	writeJSON(w, http.StatusOK, result)
+	payload := map[string]any{}
+	if data, err := json.Marshal(result); err == nil {
+		_ = json.Unmarshal(data, &payload)
+	}
+	if len(payload) == 0 {
+		payload = map[string]any{"summary": result.Summary, "nextAction": result.NextAction}
+	}
+	payload = h.decorateWorkRunPayload(payload, workRunContext{
+		RunID:       req.RunID,
+		WorkUID:     req.WorkUID,
+		ProjectPath: req.ProjectPath,
+		Controller:  firstNonEmpty(req.Controller, workrun.ControllerInternalAPI),
+		Intent:      req.Query,
+		CurrentStep: workrun.StepStartTaskFlow,
+	}, payload)
+	writeJSON(w, http.StatusOK, payload)
 }
 
 func (h *Handler) realtimeOrderOptions(r *http.Request, req market.SearchRequest, options []market.OrderDraftOption) ([]market.OrderDraftOption, []orderplan.CandidateState, []orderplan.Event) {
@@ -961,7 +1151,7 @@ func (h *Handler) realtimeOrderOptions(r *http.Request, req market.SearchRequest
 			continue
 		}
 		option.PriceSnapshot.PricePerUnit = reply.PriceAmount
-		option.PriceSnapshot.Currency = firstNonEmpty(reply.Currency, option.PriceSnapshot.Currency, "USD")
+		option.PriceSnapshot.Currency = firstNonEmpty(reply.Currency, option.PriceSnapshot.Currency, "USDC")
 		option.QuoteID = reply.RequestID
 		option.RealtimeStatus = "quoted"
 		option.ConfirmedAt = time.Now().UTC().Format(time.RFC3339)
@@ -970,7 +1160,7 @@ func (h *Handler) realtimeOrderOptions(r *http.Request, req market.SearchRequest
 		state.Status = "quoted"
 		state.QuoteID = reply.RequestID
 		state.PriceAmount = reply.PriceAmount
-		state.Currency = firstNonEmpty(reply.Currency, "USD")
+		state.Currency = firstNonEmpty(reply.Currency, "USDC")
 		state.ExpiresAt = reply.ExpiresAt
 		state.Message = reply.Notes
 		state.UpdatedAt = option.ConfirmedAt
@@ -1216,7 +1406,7 @@ func (h *Handler) defaultDockID() string {
 // --- Approval queue endpoints ---
 
 func (h *Handler) CreateApproval(w http.ResponseWriter, r *http.Request) {
-	if h.approvals == nil || h.tasks == nil {
+	if h.approvals == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "approval service not configured"})
 		return
 	}
@@ -1226,6 +1416,10 @@ func (h *Handler) CreateApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.TrimSpace(req.TaskID) != "" {
+		if h.tasks == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "task service not configured"})
+			return
+		}
 		t, ok := h.tasks.Get(strings.TrimSpace(req.TaskID))
 		if !ok {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
@@ -1238,19 +1432,28 @@ func (h *Handler) CreateApproval(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	if _, err := h.tasks.SetApprovalRequest(a.TaskID, a.ID); err != nil {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
-		return
+	if strings.TrimSpace(a.TaskID) != "" {
+		if h.tasks == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "task service not configured"})
+			return
+		}
+		if _, err := h.tasks.SetApprovalRequest(a.TaskID, a.ID); err != nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 	a = decorateApproval(a, requestBaseURL(r))
 	resp := map[string]any{"approval": a}
 	if a.PaymentRequired && h.payments != nil {
-		paymentRecord, err := h.payments.EnsureIntent(a)
+		paymentRecord, intent, err := h.ensurePaymentIntentForApproval(a, "")
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
 		resp["payment"] = paymentRecord
+		if intent.PaymentID != "" {
+			resp["paymentIntent"] = intent
+		}
 	}
 	writeJSON(w, http.StatusCreated, resp)
 }
@@ -1265,6 +1468,10 @@ func (h *Handler) ListApprovals(w http.ResponseWriter, r *http.Request) {
 		UserPubkey: firstQueryValue(r, "userPubkey", "user"),
 		AgentID:    strings.TrimSpace(r.URL.Query().Get("agentId")),
 		TaskID:     strings.TrimSpace(r.URL.Query().Get("taskId")),
+		SubjectType: strings.TrimSpace(r.URL.Query().Get("subjectType")),
+		SubjectID:   strings.TrimSpace(r.URL.Query().Get("subjectId")),
+		WorkRunID:   strings.TrimSpace(r.URL.Query().Get("workRunId")),
+		PlanID:      strings.TrimSpace(r.URL.Query().Get("planId")),
 	}
 	approvals := h.approvals.List(filter)
 	for i := range approvals {
@@ -1287,7 +1494,7 @@ func (h *Handler) GetApproval(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) DecideApproval(w http.ResponseWriter, r *http.Request) {
-	if h.approvals == nil || h.tasks == nil {
+	if h.approvals == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "approval service not configured"})
 		return
 	}
@@ -1301,22 +1508,36 @@ func (h *Handler) DecideApproval(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "approval not found"})
 		return
 	}
-	currentTask, ok := h.tasks.Get(existing.TaskID)
-	if !ok {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "approval task not found"})
-		return
-	}
-	if req.Approved && currentTask.Quote == nil {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "quote required before consent"})
-		return
-	}
 	if existing.Status != approval.StatusPending {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "approval is not pending"})
 		return
 	}
+	var currentTask task.Task
+	hasTask := strings.TrimSpace(existing.TaskID) != ""
+	if hasTask {
+		if h.tasks == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "task service not configured"})
+			return
+		}
+		var ok bool
+		currentTask, ok = h.tasks.Get(existing.TaskID)
+		if !ok {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "approval task not found"})
+			return
+		}
+		if req.Approved && currentTask.Quote == nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "quote required before consent"})
+			return
+		}
+	}
 	var paymentRecord payment.Record
+	var paymentIntent payment.PaymentIntent
 	paymentConfirmed := false
 	if req.Approved && existing.PaymentRequired {
+		if !hasTask {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "payment approvals require a task"})
+			return
+		}
 		if h.paymentPIN == nil || h.payments == nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "payment confirmation service not configured"})
 			return
@@ -1333,12 +1554,13 @@ func (h *Handler) DecideApproval(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": code})
 			return
 		}
-		record, err := h.payments.ConfirmSimulated(existing)
+		record, intent, err := h.confirmApprovalPayment(existing, "")
 		if err != nil {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 			return
 		}
 		paymentRecord = record
+		paymentIntent = intent
 		paymentConfirmed = true
 	}
 	a, err := h.approvals.Decide(chi.URLParam(r, "id"), req)
@@ -1348,6 +1570,10 @@ func (h *Handler) DecideApproval(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusNotFound
 		}
 		writeJSON(w, status, map[string]string{"error": err.Error()})
+		return
+	}
+	if !hasTask {
+		writeJSON(w, http.StatusOK, map[string]any{"approval": decorateApproval(a, requestBaseURL(r))})
 		return
 	}
 	consent := task.ConsentRequest{
@@ -1363,6 +1589,9 @@ func (h *Handler) DecideApproval(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{"approval": decorateApproval(a, requestBaseURL(r)), "task": updated}
 	if paymentConfirmed {
 		resp["payment"] = paymentRecord
+		if paymentIntent.PaymentID != "" {
+			resp["paymentIntent"] = paymentIntent
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -1461,7 +1690,7 @@ func (h *Handler) SelectOrderPlan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	currency := firstNonEmpty(option.PriceSnapshot.Currency, "USD")
+	currency := firstNonEmpty(option.PriceSnapshot.Currency, "USDC")
 	quoted, err := h.tasks.Quote(created.ID, task.QuoteRequest{
 		ProviderPubkey:   option.ProviderPubkey,
 		PriceAmount:      amount,
@@ -1501,13 +1730,15 @@ func (h *Handler) SelectOrderPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var paymentRecord payment.Record
+	var paymentIntent payment.PaymentIntent
 	if a.PaymentRequired {
-		record, err := h.payments.ConfirmSimulated(a)
+		record, intent, err := h.confirmApprovalPayment(a, plan.ID)
 		if err != nil {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 			return
 		}
 		paymentRecord = record
+		paymentIntent = intent
 	}
 	a, err = h.approvals.Decide(a.ID, approval.DecisionRequest{Approved: true, DecidedBy: "exora-order-plan", UserNote: req.UserNote})
 	if err != nil {
@@ -1529,6 +1760,21 @@ func (h *Handler) SelectOrderPlan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	if paymentRecord.ID != "" && paymentRecord.Mode == "chain_escrow" && providerPaymentEvidenceFromRecord(paymentRecord) == nil {
+		plan.NextAction = "fund_chain_escrow"
+		plan.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		_ = h.orderPlans.Save(plan)
+		resp := h.orderPlanResponse(plan, true)
+		resp["task"] = updatedTask
+		resp["approval"] = decorateApproval(a, requestBaseURL(r))
+		resp["payment"] = paymentRecord
+		if paymentIntent.PaymentID != "" {
+			resp["paymentIntent"] = paymentIntent
+		}
+		resp["nextAction"] = "fund_chain_escrow"
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
 	if plan.RealtimeRequired {
 		job, err := h.submitProviderJob(r.Context(), plan, option, updatedTask, a, paymentID)
 		if err != nil {
@@ -1546,6 +1792,9 @@ func (h *Handler) SelectOrderPlan(w http.ResponseWriter, r *http.Request) {
 	resp["approval"] = decorateApproval(a, requestBaseURL(r))
 	if paymentRecord.ID != "" {
 		resp["payment"] = paymentRecord
+		if paymentIntent.PaymentID != "" {
+			resp["paymentIntent"] = paymentIntent
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -1578,6 +1827,77 @@ func (h *Handler) CancelOrderPlan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, h.orderPlanResponse(plan, false))
 }
 
+func (h *Handler) SubmitOrderPlanProviderJob(w http.ResponseWriter, r *http.Request) {
+	if h.orderPlans == nil || h.tasks == nil || h.approvals == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "order plan service not configured"})
+		return
+	}
+	plan, ok := h.orderPlans.Get(chi.URLParam(r, "id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "order plan not found"})
+		return
+	}
+	if plan.Status != orderplan.StatusSelected {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "plan_not_selected"})
+		return
+	}
+	if strings.TrimSpace(plan.ProviderJobID) != "" {
+		writeJSON(w, http.StatusOK, h.orderPlanResponse(plan, true))
+		return
+	}
+	option, ok := h.orderPlans.FindOption(plan, plan.SelectedOptionID)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "selected order option not found"})
+		return
+	}
+	localTask, ok := h.tasks.Get(plan.TaskID)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		return
+	}
+	a, ok := h.approvals.Get(plan.ApprovalID)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "approval not found"})
+		return
+	}
+	if strings.TrimSpace(plan.PaymentID) != "" {
+		if h.payments == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "payment ledger service not configured"})
+			return
+		}
+		record, ok := h.payments.Get(plan.PaymentID)
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "payment not found"})
+			return
+		}
+		if providerPaymentEvidenceFromRecord(record) == nil {
+			writeJSON(w, http.StatusPaymentRequired, map[string]any{
+				"error":      "payment_evidence_required",
+				"orderPlan":  plan,
+				"task":       localTask,
+				"payment":    record,
+				"nextAction": paymentEvidenceNextAction(record),
+			})
+			return
+		}
+	}
+	job, err := h.submitProviderJob(r.Context(), plan, option, localTask, a, plan.PaymentID)
+	if err != nil {
+		_, _ = h.tasks.Fail(localTask.ID, task.FailRequest{ProviderPubkey: option.ProviderPubkey, Error: err.Error()})
+		plan, _ = h.orderPlans.AddEvent(plan, "provider_job_submit_failed", err.Error(), option.OptionID)
+		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "orderPlan": plan, "task": localTask})
+		return
+	}
+	plan, _ = h.orderPlans.MarkProviderJob(plan, job.JobID)
+	plan, _ = h.orderPlans.AddEvent(plan, "provider_job_submitted", "Provider Docker job submitted.", option.OptionID)
+	go h.watchProviderJob(plan.ID, localTask.ID, option.ProviderEndpoint, job.JobID, option.ProviderPubkey)
+	resp := h.orderPlanResponse(plan, true)
+	resp["task"] = localTask
+	resp["approval"] = decorateApproval(a, requestBaseURL(r))
+	resp["providerJob"] = job
+	writeJSON(w, http.StatusOK, resp)
+}
+
 func (h *Handler) submitProviderJob(ctx context.Context, plan orderplan.Plan, option market.OrderDraftOption, localTask task.Task, a approval.Approval, paymentID string) (providerprotocol.JobReply, error) {
 	if h.wallets == nil {
 		return providerprotocol.JobReply{}, fmt.Errorf("local wallet keypair required for signed provider job request")
@@ -1593,6 +1913,14 @@ func (h *Handler) submitProviderJob(ctx context.Context, plan orderplan.Plan, op
 		ApprovalID:      a.ID,
 		PaymentID:       paymentID,
 		Timestamp:       time.Now().UTC().Format(time.RFC3339),
+	}
+	if paymentID != "" && h.payments != nil {
+		if record, ok := h.payments.Get(paymentID); ok {
+			req.PaymentEvidence = providerPaymentEvidenceFromRecord(record)
+			if req.PaymentEvidence == nil {
+				return providerprotocol.JobReply{}, fmt.Errorf("payment_evidence_required: call find_payment_evidence/sync_payment_evidence until found_finalized before submitting paid provider jobs")
+			}
+		}
 	}
 	payload, err := providerprotocol.JobRequestPayload(req)
 	if err != nil {
@@ -1807,6 +2135,375 @@ func (h *Handler) GetPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"payment": record})
+}
+
+func (h *Handler) PayWithWallet(w http.ResponseWriter, r *http.Request) {
+	if h.payments == nil || h.wallets == nil || h.paymentPIN == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "wallet payment service not configured"})
+		return
+	}
+	if strings.TrimSpace(h.usdcMint) == "" {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "usdc_mint_not_configured"})
+		return
+	}
+	record, ok := h.payments.Get(chi.URLParam(r, "id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "payment not found"})
+		return
+	}
+	var req struct {
+		PaymentPin string `json:"paymentPin"`
+	}
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+	}
+	if strings.TrimSpace(req.PaymentPin) == "" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "payment_pin_required"})
+		return
+	}
+	if err := h.paymentPIN.Verify(req.PaymentPin); err != nil {
+		code := "invalid_payment_pin"
+		if strings.Contains(err.Error(), "not_configured") {
+			code = "payment_pin_not_configured"
+		}
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": code})
+		return
+	}
+	address, err := h.wallets.PublicSigningAddress()
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+		return
+	}
+	updated, intent, err := h.payments.AttachChainIntent(record.ID, h.defaultChainIntentRequest(record, payment.ChainIntentRequest{
+		BuyerPubkey: address,
+		Currency:    "USDC",
+		Mint:        h.usdcMint,
+		Decimals:    h.usdcDecimals,
+		NativeSOL:   false,
+	}))
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	payload := []byte("exora.wallet.pay.v1\n" + intent.CanonicalIntentHash)
+	_, signature, err := h.wallets.SignPayload(payload)
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+		return
+	}
+	updated, err = h.payments.MarkChainConfirming(updated.ID, "", 0)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"payment":         updated,
+		"intent":          intent,
+		"walletSignature": signature,
+		"feePolicy":       h.walletFeePolicy(),
+		"nextAction":      "submit_to_cloud_relayer",
+		"source":          "exora_builtin_wallet",
+	})
+}
+
+func (h *Handler) PreparePaymentChainIntent(w http.ResponseWriter, r *http.Request) {
+	if h.payments == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "payment ledger service not configured"})
+		return
+	}
+	record, ok := h.payments.Get(chi.URLParam(r, "id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "payment not found"})
+		return
+	}
+	var req payment.ChainIntentRequest
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+	}
+	req = h.defaultChainIntentRequest(record, req)
+	updated, intent, err := h.payments.AttachChainIntent(record.ID, req)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"payment":      updated,
+		"intent":       intent,
+		"nextAction":   "fund_chain_escrow",
+		"resumeHint":   "After the owner funds escrow, call sync_payment_evidence/find_payment_evidence until found_finalized.",
+		"redactions":   []string{"payment_pin", "private_key", "owner_token"},
+		"source":       "dock_chain_intent",
+		"status":       updated.Status,
+		"evidence":     paymentEvidenceSummary(updated),
+		"paymentId":    updated.ID,
+		"escrowPda":    intent.EscrowPDA,
+		"programId":    intent.ProgramID,
+		"intentHash":   intent.CanonicalIntentHash,
+		"amountAtomic": intent.AmountAtomic,
+		"currency":     intent.Currency,
+		"mint":         intent.Mint,
+		"decimals":     intent.Decimals,
+		"nativeSol":    intent.NativeSOL,
+		"chain":        intent.Chain,
+		"network":      intent.Network,
+		"orderPlanId":  intent.OrderPlanID,
+		"taskId":       intent.TaskID,
+	})
+}
+
+func (h *Handler) SyncPaymentEvidence(w http.ResponseWriter, r *http.Request) {
+	if h.payments == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "payment ledger service not configured"})
+		return
+	}
+	paymentID := chi.URLParam(r, "id")
+	record, ok := h.payments.Get(paymentID)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "payment not found"})
+		return
+	}
+	var body map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	var evidence payment.PaymentEvidence
+	if raw, ok := body["evidence"]; ok {
+		if err := decodeMapValue(raw, &evidence); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	} else if len(body) > 0 {
+		if err := decodeMapValue(body, &evidence); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	if strings.TrimSpace(evidence.PaymentID) == "" {
+		evidence.PaymentID = paymentID
+	}
+	if evidence.Status == "" {
+		evidence.Status = payment.EvidencePendingChainConfirmation
+	}
+	if strings.TrimSpace(evidence.Chain) == "" {
+		evidence.Chain = firstNonEmpty(record.Chain, "solana")
+	}
+	if strings.TrimSpace(evidence.Network) == "" {
+		evidence.Network = firstNonEmpty(record.Network, h.solanaNetwork)
+	}
+	if strings.TrimSpace(evidence.ProgramID) == "" {
+		evidence.ProgramID = firstNonEmpty(record.ProgramID, h.escrowProgramID)
+	}
+	if strings.TrimSpace(evidence.EscrowPDA) == "" {
+		evidence.EscrowPDA = record.EscrowPDA
+	}
+	if evidence.AmountAtomic == 0 {
+		evidence.AmountAtomic = record.AmountAtomic
+	}
+	if strings.TrimSpace(evidence.Currency) == "" {
+		evidence.Currency = record.Currency
+	}
+	if strings.TrimSpace(evidence.Mint) == "" {
+		evidence.Mint = record.Mint
+	}
+	if evidence.Decimals == 0 {
+		evidence.Decimals = record.Decimals
+	}
+	if record.NativeSOL {
+		evidence.NativeSOL = true
+	}
+	updated, err := h.payments.ApplyEvidence(evidence)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "payment": updated, "evidence": evidence})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"payment":    updated,
+		"evidence":   evidence,
+		"nextAction": paymentEvidenceNextAction(updated),
+		"source":     "dock_payment_evidence_sync",
+	})
+}
+
+func (h *Handler) FindPaymentEvidence(w http.ResponseWriter, r *http.Request) {
+	if h.payments == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "payment ledger service not configured"})
+		return
+	}
+	record, ok := h.payments.Get(chi.URLParam(r, "id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "payment not found"})
+		return
+	}
+	intent, _ := payment.BuildPaymentIntent(record, h.defaultChainIntentRequest(record, payment.ChainIntentRequest{}))
+	nextAction := paymentEvidenceNextAction(record)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"payment":      record,
+		"intent":       intent,
+		"evidence":     paymentEvidenceSummary(record),
+		"nextAction":   nextAction,
+		"source":       "dock_payment_ledger",
+		"cloudAction":  "Call Exora Cloud /v1/payment-evidence/resolve or /v1/payment-evidence/{paymentId}; do not submit paid worker jobs until status is found_finalized.",
+		"mustVerify":   true,
+		"safeForAgent": true,
+	})
+}
+
+func (h *Handler) defaultChainIntentRequest(record payment.Record, req payment.ChainIntentRequest) payment.ChainIntentRequest {
+	req.BuyerPubkey = firstNonEmpty(req.BuyerPubkey, record.BuyerPubkey, h.selfPubkey)
+	req.SellerPubkey = firstNonEmpty(req.SellerPubkey, record.ProviderPubkey)
+	req.Network = firstNonEmpty(req.Network, record.Network, h.solanaNetwork, "devnet")
+	req.ProgramID = firstNonEmpty(req.ProgramID, record.ProgramID, h.escrowProgramID)
+	req.TaskID = firstNonEmpty(req.TaskID, record.TaskID)
+	req.Currency = firstNonEmpty(req.Currency, record.Currency, "USDC")
+	req.AmountLamports = firstPositiveUint64(req.AmountLamports, record.AmountLamports, payment.LamportsFromAmount(record.Amount, req.Currency))
+	req.AmountAtomic = firstPositiveUint64(req.AmountAtomic, record.AmountAtomic)
+	if req.AmountAtomic == 0 {
+		amountAtomic, mint, decimals, nativeSOL := payment.AtomicAmountFromAmount(record.Amount, req.Currency, h.usdcMint, h.usdcDecimals)
+		req.AmountAtomic = amountAtomic
+		req.Mint = firstNonEmpty(req.Mint, record.Mint, mint)
+		if req.Decimals == 0 {
+			req.Decimals = decimals
+		}
+		if nativeSOL {
+			req.NativeSOL = true
+		}
+	}
+	if req.AmountLamports > 0 {
+		req.AmountAtomic = firstPositiveUint64(req.AmountAtomic, req.AmountLamports)
+		req.Decimals = firstNonZeroUint8(req.Decimals, 9)
+		req.NativeSOL = true
+		req.Mint = ""
+	} else {
+		req.Mint = firstNonEmpty(req.Mint, record.Mint, h.usdcMint)
+		req.Decimals = firstNonZeroUint8(req.Decimals, record.Decimals, h.usdcDecimals, 6)
+	}
+	return req
+}
+
+func paymentEvidenceSummary(record payment.Record) map[string]any {
+	status := record.EvidenceStatus
+	if status == "" && record.Status == payment.StatusChainConfirmed {
+		status = payment.EvidenceFoundFinalized
+	}
+	return map[string]any{
+		"evidenceId":     record.EvidenceID,
+		"paymentId":      record.ID,
+		"status":         status,
+		"chain":          record.Chain,
+		"network":        record.Network,
+		"programId":      record.ProgramID,
+		"escrowPda":      record.EscrowPDA,
+		"txSignature":    record.TxSignature,
+		"slot":           record.Slot,
+		"finality":       record.Finality,
+		"buyerPubkey":    record.BuyerPubkey,
+		"sellerPubkey":   record.ProviderPubkey,
+		"amountLamports": record.AmountLamports,
+		"amountAtomic":   record.AmountAtomic,
+		"currency":       record.Currency,
+		"mint":           record.Mint,
+		"decimals":       record.Decimals,
+		"nativeSol":      record.NativeSOL,
+		"source":         "chain_scan_required",
+	}
+}
+
+func paymentEvidenceNextAction(record payment.Record) string {
+	switch record.EvidenceStatus {
+	case payment.EvidenceFoundFinalized, payment.EvidenceReleased:
+		return "submit_worker_job"
+	case payment.EvidenceMismatch:
+		return "stop_and_show_payment_evidence_mismatch"
+	default:
+		return "sync_payment_evidence"
+	}
+}
+
+func providerPaymentEvidenceFromRecord(record payment.Record) *providerprotocol.PaymentEvidence {
+	if record.EvidenceStatus != payment.EvidenceFoundFinalized && record.EvidenceStatus != payment.EvidenceReleased {
+		return nil
+	}
+	return &providerprotocol.PaymentEvidence{
+		EvidenceID:     record.EvidenceID,
+		PaymentID:      record.ID,
+		Status:         string(record.EvidenceStatus),
+		Chain:          record.Chain,
+		Network:        record.Network,
+		ProgramID:      record.ProgramID,
+		EscrowPDA:      record.EscrowPDA,
+		TxSignature:    record.TxSignature,
+		Slot:           record.Slot,
+		Finality:       record.Finality,
+		BuyerPubkey:    record.BuyerPubkey,
+		SellerPubkey:   record.ProviderPubkey,
+		AmountLamports: record.AmountLamports,
+		AmountAtomic:   record.AmountAtomic,
+		Currency:       record.Currency,
+		Mint:           record.Mint,
+		Decimals:       record.Decimals,
+		NativeSOL:      record.NativeSOL,
+		Source:         "chain_scan",
+	}
+}
+
+func providerPaymentEvidenceFinalized(evidence *providerprotocol.PaymentEvidence) bool {
+	if evidence == nil {
+		return false
+	}
+	status := strings.ToLower(strings.TrimSpace(evidence.Status))
+	if status != string(payment.EvidenceFoundFinalized) && status != string(payment.EvidenceReleased) {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(evidence.Chain), "solana") &&
+		strings.TrimSpace(evidence.EscrowPDA) != "" &&
+		strings.TrimSpace(evidence.PaymentID) != "" &&
+		strings.EqualFold(strings.TrimSpace(evidence.Source), "chain_scan") &&
+		strings.EqualFold(strings.TrimSpace(evidence.Finality), "finalized")
+}
+
+func (h *Handler) ensurePaymentIntentForApproval(a approval.Approval, orderPlanID string) (payment.Record, payment.PaymentIntent, error) {
+	if h.payments == nil {
+		return payment.Record{}, payment.PaymentIntent{}, fmt.Errorf("payment ledger service not configured")
+	}
+	record, err := h.payments.EnsureIntent(a)
+	if err != nil {
+		return payment.Record{}, payment.PaymentIntent{}, err
+	}
+	if strings.TrimSpace(h.escrowProgramID) == "" {
+		return record, payment.PaymentIntent{}, nil
+	}
+	req := h.defaultChainIntentRequest(record, payment.ChainIntentRequest{
+		OrderPlanID:  strings.TrimSpace(orderPlanID),
+		TaskID:       a.TaskID,
+		SellerPubkey: firstNonEmpty(a.ProviderPubkey, a.Quote.ProviderPubkey),
+	})
+	return h.payments.AttachChainIntent(record.ID, req)
+}
+
+func (h *Handler) confirmApprovalPayment(a approval.Approval, orderPlanID string) (payment.Record, payment.PaymentIntent, error) {
+	if h.payments == nil {
+		return payment.Record{}, payment.PaymentIntent{}, fmt.Errorf("payment ledger service not configured")
+	}
+	if strings.TrimSpace(h.escrowProgramID) == "" {
+		record, err := h.payments.ConfirmSimulated(a)
+		return record, payment.PaymentIntent{}, err
+	}
+	record, intent, err := h.ensurePaymentIntentForApproval(a, orderPlanID)
+	if err != nil {
+		return payment.Record{}, payment.PaymentIntent{}, err
+	}
+	record, err = h.payments.MarkChainConfirming(record.ID, "", 0)
+	if err != nil {
+		return payment.Record{}, payment.PaymentIntent{}, err
+	}
+	return record, intent, nil
 }
 
 // --- Cache endpoints ---
@@ -2643,11 +3340,33 @@ func decorateApproval(a approval.Approval, baseURL string) approval.Approval {
 	if a.NextAction == "" {
 		switch a.Status {
 		case approval.StatusPending:
-			a.NextAction = "approve_or_reject"
+			switch a.Action {
+			case "submit_remote_task_manifest":
+				a.NextAction = "review_remote_task_manifest"
+			case "seller_execution_plan":
+				a.NextAction = "review_seller_execution_plan"
+			default:
+				a.NextAction = "approve_or_reject"
+			}
 		case approval.StatusApproved:
-			a.NextAction = "wait_for_task_execution"
+			switch a.Action {
+			case "submit_remote_task_manifest":
+				a.NextAction = "submit_manifest_for_matching"
+			case "seller_execution_plan":
+				a.NextAction = "run_seller_execution_plan"
+			default:
+				if strings.TrimSpace(a.TaskID) == "" {
+					a.NextAction = "approval_recorded"
+				} else {
+					a.NextAction = "wait_for_task_execution"
+				}
+			}
 		case approval.StatusRejected:
-			a.NextAction = "task_rejected"
+			if strings.TrimSpace(a.TaskID) == "" {
+				a.NextAction = "approval_rejected"
+			} else {
+				a.NextAction = "task_rejected"
+			}
 		case approval.StatusExpired:
 			a.NextAction = "create_new_approval"
 		}
@@ -2711,7 +3430,70 @@ func (h *Handler) orderPlanResponse(plan orderplan.Plan, includePayment bool) ma
 			resp["payment"] = p
 		}
 	}
+	resp["orderState"] = h.orderStateForPlan(plan)
 	return resp
+}
+
+func (h *Handler) orderStateForPlan(plan orderplan.Plan) map[string]any {
+	state := "quote_review"
+	owner := "buyer_user"
+	waitingFor := "user_input"
+	terminalReason := ""
+	switch plan.Status {
+	case orderplan.StatusPendingSelection:
+		state = "quote_review"
+	case orderplan.StatusSelected:
+		state = "order_authorized"
+		if h.tasks != nil && strings.TrimSpace(plan.TaskID) != "" {
+			if t, ok := h.tasks.Get(plan.TaskID); ok {
+				switch t.Status {
+				case task.StatusPendingConsent:
+					state = "order_authorized"
+					waitingFor = "user_input"
+				case task.StatusConsented, task.StatusClaimed:
+					state = "input_transfer"
+					owner = "provider_docker"
+					waitingFor = "provider_response"
+				case task.StatusRunning:
+					state = "provider_execution"
+					owner = "provider_docker"
+					waitingFor = "local_supervisor"
+				case task.StatusCompleted:
+					state = "buyer_verification"
+					waitingFor = "user_input"
+				case task.StatusFailed:
+					state = "settlement_or_dispute"
+					waitingFor = "user_input"
+					terminalReason = "provider_task_failed"
+				}
+			}
+		}
+		if strings.TrimSpace(plan.ProviderJobID) != "" && state != "buyer_verification" && state != "settlement_or_dispute" {
+			state = "provider_execution"
+			owner = "provider_docker"
+			waitingFor = "local_supervisor"
+		}
+	case orderplan.StatusExpired:
+		state = "closed"
+		owner = "cloud"
+		waitingFor = "none"
+		terminalReason = "expired"
+	case orderplan.StatusInvalidated:
+		state = "closed"
+		owner = "cloud"
+		waitingFor = "none"
+		terminalReason = firstNonEmpty(plan.InvalidationCause, "invalidated")
+	}
+	return map[string]any{
+		"planId":         plan.ID,
+		"orderId":        plan.ID,
+		"taskId":         plan.TaskID,
+		"state":          state,
+		"owner":          owner,
+		"waitingFor":     waitingFor,
+		"terminalReason": terminalReason,
+		"updatedAt":      plan.UpdatedAt,
+	}
 }
 
 func firstNonEmpty(values ...string) string {
@@ -2721,6 +3503,35 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func firstPositiveUint64(values ...uint64) uint64 {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func firstNonZeroUint8(values ...uint8) uint8 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func decodeMapValue(value any, out any) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(data, out); err != nil {
+		return fmt.Errorf("invalid payment evidence: %w", err)
+	}
+	return nil
 }
 
 func providerEndpoint(base, path string) (string, error) {

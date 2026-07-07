@@ -78,22 +78,32 @@ func windowsRAMGB() int {
 }
 
 func windowsGPUInfo() []GPUInfo {
-	out, ok := windowsPowerShellOutput(3000*time.Millisecond, "Get-CimInstance Win32_VideoController | Where-Object { $_.Name } | ForEach-Object { \"$($_.Name)|$($_.AdapterRAM)\" }")
+	out, ok := windowsPowerShellOutput(3000*time.Millisecond, "Get-CimInstance Win32_VideoController | Where-Object { $_.Name } | ForEach-Object { \"$($_.Name)|$($_.VideoProcessor)|$($_.PNPDeviceID)|$($_.DriverVersion)|$($_.AdapterRAM)\" }")
 	if !ok {
 		return nil
 	}
 	gpus := []GPUInfo{}
 	for _, line := range strings.Split(out, "\n") {
-		name, ramText, _ := strings.Cut(strings.TrimSpace(line), "|")
-		name = strings.TrimSpace(name)
+		parts := strings.Split(strings.TrimSpace(line), "|")
+		name := fieldAt(parts, 0)
 		if name == "" || strings.Contains(strings.ToLower(name), "basic render") {
 			continue
 		}
+		chip := fieldAt(parts, 1)
+		if strings.EqualFold(chip, name) {
+			chip = ""
+		}
 		vram := 0
-		if bytes := parseUint(ramText); bytes > 0 {
+		if bytes := parseUint(fieldAt(parts, 4)); bytes > 0 {
 			vram = bytesToGB(bytes)
 		}
-		gpus = append(gpus, GPUInfo{Name: name, VRAMGB: vram})
+		gpus = append(gpus, GPUInfo{
+			Name:          name,
+			Chip:          chip,
+			DeviceID:      normalizeDeviceID(fieldAt(parts, 2)),
+			DriverVersion: fieldAt(parts, 3),
+			VRAMGB:        vram,
+		})
 	}
 	return gpus
 }

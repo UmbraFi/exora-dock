@@ -1,4 +1,8 @@
 type ExoraBridge = {
+  initialLocale?: {
+    language?: 'en' | 'zh'
+    chromiumLocale?: string
+  }
   invoke<T = unknown>(command: string, payload?: Record<string, unknown>): Promise<T>
 }
 

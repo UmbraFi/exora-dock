@@ -31,11 +31,11 @@ func TestMCPInitializeAndToolsList(t *testing.T) {
 	listResp := responseMap(t, server.HandleJSON(context.Background(), []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)))
 	listResult := listResp["result"].(map[string]any)
 	tools := listResult["tools"].([]any)
-	if len(tools) != 21 {
-		t.Fatalf("tools len = %d, want 21", len(tools))
+	if len(tools) != 26 {
+		t.Fatalf("tools len = %d, want 26", len(tools))
 	}
 	toolsJSON := mustJSON(t, tools)
-	if !strings.Contains(toolsJSON, "exora.search_offers") || !strings.Contains(toolsJSON, "exora.search_agent_cards") || !strings.Contains(toolsJSON, "exora.negotiate_task") || !strings.Contains(toolsJSON, "exora.run_buyer_work") {
+	if !strings.Contains(toolsJSON, "exora.search_offers") || !strings.Contains(toolsJSON, "exora.search_agent_cards") || !strings.Contains(toolsJSON, "exora.negotiate_task") || !strings.Contains(toolsJSON, "exora.run_buyer_work") || !strings.Contains(toolsJSON, "exora.resume_work_run") || !strings.Contains(toolsJSON, "exora.find_payment_evidence") {
 		t.Fatalf("tools missing expected entries: %#v", tools)
 	}
 }
@@ -204,6 +204,8 @@ func TestMCPRunBuyerWorkResolvesWorkUIDProjectFolder(t *testing.T) {
 	if info, err := os.Stat(projectPath); err != nil || !info.IsDir() {
 		t.Fatalf("work project folder was not created: info=%#v err=%v", info, err)
 	}
+	stateMap := readDesktopStateForTest(t, filepath.Join(dir, "desktop-state.json"))
+	assertActiveWorkLease(t, stateMap, "work-abc", projectPath)
 }
 
 func TestMCPWorkUIDExplicitProjectPathRegistersProjectFolder(t *testing.T) {
@@ -255,6 +257,8 @@ func TestMCPWorkUIDExplicitProjectPathRegistersProjectFolder(t *testing.T) {
 	if !strings.Contains(stateJSON, `"workUid": "work-explicit"`) || !strings.Contains(stateJSON, `"projectFolders"`) || !strings.Contains(stateJSON, filepath.Base(projectPath)) {
 		t.Fatalf("desktop state missing work UID/project folder: %s", stateJSON)
 	}
+	stateMap := readDesktopStateForTest(t, filepath.Join(dir, "desktop-state.json"))
+	assertActiveWorkLease(t, stateMap, "work-explicit", projectPath)
 }
 
 func TestMCPUnknownWorkUIDWithoutProjectPathReturnsToolError(t *testing.T) {
@@ -273,6 +277,9 @@ func TestMCPUnknownWorkUIDWithoutProjectPathReturnsToolError(t *testing.T) {
 	}
 	if !strings.Contains(mustJSON(t, result["structuredContent"]), "work_context_error") || !strings.Contains(mustJSON(t, result["structuredContent"]), "projectPath") {
 		t.Fatalf("missing work context error details: %#v", result)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "desktop-state.json")); !os.IsNotExist(err) {
+		t.Fatalf("desktop state should not be created for unknown UID without projectPath: %v", err)
 	}
 }
 
@@ -342,6 +349,8 @@ func TestMCPWorkContextPropagatesAcrossBuyerTools(t *testing.T) {
 	if seen["/v1/agent/search-sellers"] != 2 || seen["/v1/agent/buyer-work"] != 1 || seen["/v1/negotiations"] != 1 || seen["/v1/order-plans/from-negotiations"] != 1 || seen["/v1/tasks"] != 1 {
 		t.Fatalf("unexpected routed calls: %#v", seen)
 	}
+	stateMap := readDesktopStateForTest(t, filepath.Join(dir, "desktop-state.json"))
+	assertActiveWorkLease(t, stateMap, "work-table", projectPath)
 }
 
 func TestMCPSearchOffersProxiesToDaemon(t *testing.T) {
@@ -436,6 +445,46 @@ func responseMap(t *testing.T, value any) map[string]any {
 		t.Fatalf("unmarshal response: %v; data=%s", err, data)
 	}
 	return out
+}
+
+func readDesktopStateForTest(t *testing.T, path string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read desktop state: %v", err)
+	}
+	var state map[string]any
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatalf("desktop state json: %v; data=%s", err, data)
+	}
+	return state
+}
+
+func assertActiveWorkLease(t *testing.T, state map[string]any, workUID, projectPath string) {
+	t.Helper()
+	leases, ok := state["workMcpLeases"].([]any)
+	if !ok || len(leases) == 0 {
+		t.Fatalf("desktop state missing workMcpLeases: %#v", state)
+	}
+	for _, item := range leases {
+		lease, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if lease["workUid"] != workUID {
+			continue
+		}
+		if lease["projectPath"] != projectPath || lease["controller"] != "external-mcp" || lease["status"] != "active" {
+			t.Fatalf("lease fields = %#v", lease)
+		}
+		sessionID, _ := lease["sessionId"].(string)
+		expiresAt, _ := lease["expiresAt"].(string)
+		if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(expiresAt) == "" {
+			t.Fatalf("lease missing session/expiry: %#v", lease)
+		}
+		return
+	}
+	t.Fatalf("active lease for %s not found in %#v", workUID, leases)
 }
 
 func mustJSON(t *testing.T, value any) string {

@@ -13,10 +13,15 @@ const DAEMON_LOG_NAME = 'daemon.log'
 const DEFAULT_PROJECT_NAME = 'AgenStaff_Project'
 const DESKTOP_STATE_NAME = 'desktop-state.json'
 const PERSISTENCE_DIR_NAME = 'exora-data'
+const WORK_MCP_LEASE_LIMIT = 100
 const DEV_URL = process.env.EXORA_DOCK_DESKTOP_DEV_URL || 'http://127.0.0.1:1420'
 const WINDOW_ICON = process.platform === 'win32'
   ? path.join(__dirname, 'assets', 'icon.ico')
   : path.join(__dirname, 'assets', 'icon.png')
+const STARTUP_LANGUAGE = readStartupLanguageSync()
+const MASKED_API_KEY_VALUE = '************'
+
+app.commandLine.appendSwitch('lang', chromiumLocaleForLanguage(STARTUP_LANGUAGE))
 
 let mainWindow
 
@@ -40,6 +45,10 @@ function createWindow() {
     icon: WINDOW_ICON,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
+      additionalArguments: [
+        `--exora-language=${STARTUP_LANGUAGE}`,
+        `--exora-chromium-locale=${chromiumLocaleForLanguage(STARTUP_LANGUAGE)}`,
+      ],
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -87,12 +96,16 @@ function registerIpc() {
     copy_opencode_config,
     copy_rest_base_url,
     create_work_mcp_uid,
+    release_work_mcp_lease,
+    stop_work_run,
     llm_profiles,
     save_llm_profile,
     delete_llm_profile,
     apply_llm_profile,
     desktop_persistence_load,
     save_app_settings,
+    locale_status,
+    set_locale,
     save_chat_thread,
     archive_chat_threads,
     save_transactions,
@@ -129,7 +142,9 @@ function registerIpc() {
     remove_project_folder,
     wallet_status,
     wallet_create,
-    wallet_bind,
+    wallet_unlock,
+    wallet_restore,
+    wallet_withdraw,
     security_status,
     daemon_status,
     start_daemon,
@@ -396,14 +411,17 @@ async function save_llm_profile(payload = {}) {
   const now = new Date().toISOString()
   const id = String(input.id || '').trim() || `llm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const existing = profiles.find((profile) => profile.id === id) || {}
+  const requestedName = String(input.name || existing.name || '').trim() || defaultLLMProfileName(input)
+  const name = uniqueLLMProfileName(requestedName, profiles, id)
   const profile = normalizeStoredLLMProfile({
     ...existing,
     ...input,
     id,
+    name,
     createdAt: existing.createdAt || now,
     updatedAt: now,
   })
-  const apiKey = String(input.apiKey || '').trim()
+  const apiKey = explicitApiKeyInput(input)
   if (input.clearApiKey) {
     delete profile.encryptedApiKey
     delete profile.keyStorage
@@ -423,6 +441,17 @@ async function save_llm_profile(payload = {}) {
   }
   state.llmProfiles = [profile, ...profiles.filter((item) => item.id !== id)]
   state.activeLLMProfileId = state.activeLLMProfileId || id
+  const hasBuyerRole = Object.prototype.hasOwnProperty.call(input, 'useForBuyer')
+  const hasSellerRole = Object.prototype.hasOwnProperty.call(input, 'useForSeller')
+  if (hasBuyerRole) {
+    if (input.useForBuyer) state.buyerLLMProfileId = id
+    else if (state.buyerLLMProfileId === id) state.buyerLLMProfileId = ''
+  }
+  if (hasSellerRole) {
+    if (input.useForSeller) state.sellerLLMProfileId = id
+    else if (state.sellerLLMProfileId === id) state.sellerLLMProfileId = ''
+  }
+  state.llmProfileRoleDefaultsInitialized = true
   await writeDesktopState(paths, state)
   return llmProfileStatus(paths)
 }
@@ -434,9 +463,26 @@ async function delete_llm_profile(payload = {}) {
   const input = objectOr(payload.input || payload)
   const id = String(input.id || '').trim()
   const state = await readDesktopState(paths)
+  const wasForBuyer = state.buyerLLMProfileId === id
+  const wasForSeller = state.sellerLLMProfileId === id
   const profiles = (Array.isArray(state.llmProfiles) ? state.llmProfiles : []).filter((profile) => profile.id !== id)
   state.llmProfiles = profiles
+  if (wasForBuyer) state.buyerLLMProfileId = ''
+  if (wasForSeller) state.sellerLLMProfileId = ''
   if (state.activeLLMProfileId === id) state.activeLLMProfileId = profiles[0]?.id || ''
+  state.llmProfileRoleDefaultsInitialized = true
+  if (wasForBuyer || wasForSeller) {
+    const raw = await readTextOr(paths.configPath, defaultLocalConfig(paths))
+    const value = objectOr(YAML.parse(raw) || {})
+    if (wasForBuyer) delete value.buyer_llm
+    if (wasForSeller) delete value.seller_llm
+    await fsp.writeFile(paths.configPath, ensureTrailingNewline(YAML.stringify(value)))
+    await writeDiscoveryManifest(paths)
+    if (await trackedDaemonRunning(paths)) {
+      await stopTrackedDaemon(paths)
+      await start_dock()
+    }
+  }
   await writeDesktopState(paths, state)
   await ensureLLMProfiles(paths)
   return llmProfileStatus(paths)
@@ -451,15 +497,27 @@ async function apply_llm_profile(payload = {}) {
   const state = await readDesktopState(paths)
   const profile = (Array.isArray(state.llmProfiles) ? state.llmProfiles : []).find((item) => item.id === id)
   if (!profile) throw new Error('API profile not found.')
-  const raw = await readTextOr(paths.configPath, defaultLocalConfig(paths))
-  const current = sellerSettingsFromYaml(raw)
   const apiKey = decryptLLMProfileKey(profile)
-  const updated = updateSellerSettingsYaml(raw, llmProfileToSellerInput(profile, current, apiKey))
-  await fsp.writeFile(paths.configPath, updated)
-  state.activeLLMProfileId = profile.id
+  const roles = llmProfileRolesFromInput(input)
+  const previousRoles = {
+    buyer: Boolean(input.wasForBuyer) || state.buyerLLMProfileId === profile.id,
+    seller: Boolean(input.wasForSeller) || state.sellerLLMProfileId === profile.id,
+  }
+  const shouldTouchConfig = roles.buyer || roles.seller || previousRoles.buyer || previousRoles.seller
+  if (shouldTouchConfig) {
+    const raw = await readTextOr(paths.configPath, defaultLocalConfig(paths))
+    const updated = updateRoleLLMSettingsYaml(raw, profile, apiKey, roles, previousRoles)
+    await fsp.writeFile(paths.configPath, updated)
+  }
+  if (roles.buyer) state.buyerLLMProfileId = profile.id
+  else if (previousRoles.buyer) state.buyerLLMProfileId = ''
+  if (roles.seller) state.sellerLLMProfileId = profile.id
+  else if (previousRoles.seller) state.sellerLLMProfileId = ''
+  if (roles.buyer || roles.seller) state.activeLLMProfileId = profile.id
+  state.llmProfileRoleDefaultsInitialized = true
   await writeDesktopState(paths, state)
-  await writeDiscoveryManifest(paths)
-  if (await trackedDaemonRunning(paths)) {
+  if (shouldTouchConfig) await writeDiscoveryManifest(paths)
+  if (shouldTouchConfig && await trackedDaemonRunning(paths)) {
     await stopTrackedDaemon(paths)
     await start_dock()
   }
@@ -488,6 +546,43 @@ async function save_app_settings(payload = {}) {
     settings,
   })
   return { saved: true, path: paths.appSettingsPath }
+}
+
+async function locale_status() {
+  const paths = await dockPaths()
+  await ensurePersistenceLayout(paths)
+  const language = await readPersistedLanguage(paths)
+  return {
+    language,
+    chromiumLocale: chromiumLocaleForLanguage(language),
+    htmlLang: htmlLangForLanguage(language),
+    appLocale: app.getLocale(),
+    systemLocale: app.getSystemLocale(),
+    preferredSystemLanguages: app.getPreferredSystemLanguages(),
+  }
+}
+
+async function set_locale(payload = {}) {
+  const paths = await dockPaths()
+  await ensurePersistenceLayout(paths)
+  const input = objectOr(payload.input || payload)
+  const language = normalizeAppLanguage(input.language || input.locale || input.lang)
+  const current = objectOr(await readJsonOr(paths.appSettingsPath, {}))
+  const settings = objectOr(current.settings || current)
+  settings.language = language
+  await writeJsonAtomic(paths.appSettingsPath, {
+    ...current,
+    version: current.version || 1,
+    savedAt: new Date().toISOString(),
+    settings,
+  })
+  return {
+    saved: true,
+    language,
+    chromiumLocale: chromiumLocaleForLanguage(language),
+    htmlLang: htmlLangForLanguage(language),
+    path: paths.appSettingsPath,
+  }
 }
 
 async function save_chat_thread(payload = {}) {
@@ -554,26 +649,42 @@ async function test_llm_connection(payload) {
   const raw = await readTextOr(paths.configPath, defaultLocalConfig(paths))
   const apiKey = await effectiveLlmApiKeyForInput(paths, raw, input)
   const model = defaultIfBlank(input.researchModel, 'gpt-5.5')
-  const wire = normalizeWireApi(input.wireApi)
-  if (wire === 'responses' && !capValue(input.capabilities, 'supportsResponses')) {
-    return {
-      ok: false,
-      status: 'provider_does_not_support_responses',
-      message: 'This provider preset is Chat Completions compatible but does not advertise Responses support.',
-      route: '/responses',
+  const baseUrl = String(input.llmBaseUrl || '').trim()
+  const providerPreset = normalizeProviderPreset(input.providerPreset || inferProviderPreset(baseUrl))
+  const preferredWire = normalizeWireApi(input.wireApi || defaultWireForPreset(providerPreset))
+  let last = { message: 'LLM request failed', route: preferredWire === 'responses' ? '/responses' : '/chat/completions' }
+  for (const wire of uniqueList([preferredWire, preferredWire === 'responses' ? 'chat_completions' : 'responses'])) {
+    const route = wire === 'responses' ? '/responses' : '/chat/completions'
+    const body = wire === 'responses'
+      ? { model, instructions: 'Reply with exactly: ok', input: 'connection test', store: false }
+      : { model, messages: [{ role: 'user', content: 'Reply with exactly: ok' }], max_tokens: 8 }
+    try {
+      const posted = await llmPostJsonWithBase(baseUrl, route, apiKey, body)
+      let models = []
+      try {
+        models = await llmGetModels(posted.baseUrl, apiKey)
+      } catch {
+        models = []
+      }
+      return {
+        ok: true,
+        status: 'ready',
+        message: `LLM provider responded successfully using ${wire === 'responses' ? 'Responses' : 'Chat Completions'}.`,
+        route,
+        llmBaseUrl: posted.baseUrl,
+        wireApi: wire,
+        providerPreset,
+        capabilities: capabilitiesForWire(providerPreset, wire),
+        models,
+      }
+    } catch (error) {
+      const message = errorMessage(error)
+      const status = classifyLlmError(message)
+      last = { message, route, status }
+      if (status === 'auth_failed') break
     }
   }
-  const route = wire === 'responses' ? '/responses' : '/chat/completions'
-  const body = wire === 'responses'
-    ? { model, instructions: 'Reply with exactly: ok', input: 'connection test', store: false }
-    : { model, messages: [{ role: 'user', content: 'Reply with exactly: ok' }], max_tokens: 8 }
-  try {
-    await llmPostJson(input.llmBaseUrl, route, apiKey, body)
-    return { ok: true, status: 'ready', message: 'LLM provider responded successfully.', route }
-  } catch (error) {
-    const message = errorMessage(error)
-    return { ok: false, status: classifyLlmError(message), message, route }
-  }
+  return { ok: false, status: last.status || classifyLlmError(last.message), message: last.message, route: last.route }
 }
 
 async function list_llm_models(payload) {
@@ -583,8 +694,8 @@ async function list_llm_models(payload) {
   const raw = await readTextOr(paths.configPath, defaultLocalConfig(paths))
   const apiKey = await effectiveLlmApiKeyForInput(paths, raw, input)
   try {
-    const models = await llmGetModels(input.llmBaseUrl, apiKey)
-    return { ok: true, models, message: 'Model list loaded.' }
+    const result = await llmGetModelsWithBase(input.llmBaseUrl, apiKey)
+    return { ok: true, models: result.models, llmBaseUrl: result.baseUrl, message: 'Model list loaded.' }
   } catch (error) {
     return { ok: false, models: [], message: errorMessage(error) }
   }
@@ -601,7 +712,7 @@ async function agent_card_diagnostics() {
   await ensureLocalLayout(paths)
   await ensureLLMProfiles(paths)
   await ensureDockReady()
-  return httpJson('POST', '/v1/agent-cards/diagnostics', {}, await localOwnerToken(paths), { timeoutMs: 20000 })
+  return agentCardDiagnosticsWithDesktop(paths)
 }
 
 async function agent_card_draft(payload) {
@@ -610,7 +721,95 @@ async function agent_card_draft(payload) {
   await ensureLocalLayout(paths)
   await ensureLLMProfiles(paths)
   await ensureDockReady()
-  return httpJson('POST', '/v1/agent-cards/draft', input, await localOwnerToken(paths), { timeoutMs: 20000 })
+  const requestInput = { ...input }
+  if (!requestInput.diagnostics?.collectedAt) {
+    const body = await agentCardDiagnosticsWithDesktop(paths)
+    requestInput.diagnostics = body.diagnostics
+  }
+  return httpJson('POST', '/v1/agent-cards/draft', requestInput, await localOwnerToken(paths), { timeoutMs: 20000 })
+}
+
+async function agentCardDiagnosticsWithDesktop(paths) {
+  const body = await httpJson('POST', '/v1/agent-cards/diagnostics', {}, await localOwnerToken(paths), { timeoutMs: 20000 })
+  return {
+    ...body,
+    diagnostics: mergeAgentCardDiagnostics(body?.diagnostics, await desktopAgentCardDiagnostics()),
+  }
+}
+
+async function desktopAgentCardDiagnostics() {
+  const packagePath = path.join(__dirname, '..', 'package.json')
+  const lockPath = path.join(__dirname, '..', 'package-lock.json')
+  const packageJson = objectOr(await readJsonOr(packagePath, {}))
+  const packageLock = objectOr(await readJsonOr(lockPath, {}))
+  const codeEnvironment = [
+    dependencyInfo('Exora Dock Desktop', String(packageJson.version || app.getVersion() || ''), 'desktop package'),
+    dependencyInfo('Electron', process.versions.electron ? `Electron ${process.versions.electron}` : '', 'desktop runtime'),
+    dependencyInfo('Chromium', process.versions.chrome ? `Chromium ${process.versions.chrome}` : '', 'desktop runtime'),
+    dependencyInfo('Electron Node.js', process.versions.node ? `Node ${process.versions.node}` : '', 'desktop runtime'),
+    dependencyInfo('V8', process.versions.v8 ? `V8 ${process.versions.v8}` : '', 'desktop runtime'),
+  ].filter(Boolean)
+  return {
+    codeEnvironment,
+    dependencies: desktopPackageDependencies(packageJson, packageLock),
+  }
+}
+
+function desktopPackageDependencies(packageJson, packageLock) {
+  const packages = objectOr(packageLock.packages)
+  const out = []
+  for (const [section, source] of [
+    ['dependencies', 'desktop dependency'],
+    ['devDependencies', 'desktop devDependency'],
+  ]) {
+    const deps = objectOr(packageJson[section])
+    for (const name of Object.keys(deps).sort()) {
+      const locked = objectOr(packages[`node_modules/${name}`])
+      const version = String(locked.version || deps[name] || '').trim()
+      const item = dependencyInfo(name, version, source)
+      if (item) out.push(item)
+    }
+  }
+  return out
+}
+
+function mergeAgentCardDiagnostics(diagnostics, desktop) {
+  if (!diagnostics || typeof diagnostics !== 'object') return diagnostics
+  return {
+    ...diagnostics,
+    codeEnvironment: mergeDependencyInfo(diagnostics.codeEnvironment, desktop.codeEnvironment),
+    dependencies: mergeDependencyInfo(desktop.dependencies, diagnostics.dependencies),
+  }
+}
+
+function mergeDependencyInfo(primary, secondary) {
+  const out = []
+  const seen = new Set()
+  for (const item of [...asArray(primary), ...asArray(secondary)]) {
+    if (!item || typeof item !== 'object') continue
+    const normalized = dependencyInfo(item.name, item.version, item.source, item.location)
+    if (!normalized) continue
+    const key = `${normalized.source || ''}:${normalized.name}`.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(normalized)
+  }
+  return out
+}
+
+function dependencyInfo(name, version, source, location) {
+  name = String(name || '').trim()
+  version = String(version || '').trim()
+  source = String(source || '').trim()
+  location = String(location || '').trim()
+  if (!name || !version) return undefined
+  const item = { name, version, source }
+  if (location) item.location = location
+  return item
+}
+
+function asArray(value) {
+  return Array.isArray(value) ? value : []
 }
 
 async function save_agent_card(payload) {
@@ -658,6 +857,7 @@ async function agent_search_sellers(payload) {
     projectPath: input.projectPath,
     workUid: input.workUid,
     agentId: String(input.agentId || '').trim() || 'exora-desktop-agent',
+    buyerAgentCardId: String(input.buyerAgentCardId || '').trim() || undefined,
     maxResults: input.maxResults ?? 8,
     maxCandidates: input.maxCandidates ?? 3,
     maxOptions: input.maxOptions ?? 6,
@@ -702,8 +902,9 @@ async function workspace_snapshot() {
   const paths = await dockPaths()
   await ensureLocalLayout(paths)
   const folderStatus = await projectFoldersStatus(paths)
+  const workMcpLeases = await activeWorkMCPLeases(paths)
   if (!(await healthOk())) {
-    return { online: false, orderPlans: [], approvals: [], tasks: [], payments: [], mcpConnections: [], ...folderStatus, errors: ['local daemon is offline'] }
+    return { online: false, orderPlans: [], approvals: [], tasks: [], payments: [], mcpConnections: [], workMcpLeases, workRuns: [], ...folderStatus, errors: ['local daemon is offline'] }
   }
   const token = await localOwnerToken(paths)
   const errors = []
@@ -712,10 +913,12 @@ async function workspace_snapshot() {
   const tasks = await snapshotArray(httpJson('GET', '/v1/tasks', undefined, token), 'tasks', errors)
   const payments = await snapshotArray(httpJson('GET', '/v1/payments', undefined, token), 'payments', errors)
   const mcpConnections = await snapshotArray(httpJson('GET', '/v1/mcp/connections', undefined, token), 'mcpConnections', errors)
+  const workRuns = await snapshotArray(httpJson('GET', '/v1/work-runs', undefined, token), 'workRuns', errors)
+  const workRunEvents = await snapshotWorkRunEvents(workRuns, token, errors)
   await addConnectionProjectFolders(paths, mcpConnections)
   await addActivityProjectFolders(paths, orderPlans, tasks)
   const updatedFolderStatus = await projectFoldersStatus(paths)
-  return { online: true, orderPlans, approvals, tasks, payments, mcpConnections, ...updatedFolderStatus, errors }
+  return { online: true, orderPlans, approvals, tasks, payments, mcpConnections, workMcpLeases, workRuns, workRunEvents, ...updatedFolderStatus, errors }
 }
 
 async function create_work_mcp_uid(payload = {}) {
@@ -740,6 +943,59 @@ async function create_work_mcp_uid(payload = {}) {
   state.workMcpUids = [entry, ...previous.filter((item) => item?.workUid !== workUid)].slice(0, 100)
   await writeDesktopState(paths, state)
   return entry
+}
+
+async function release_work_mcp_lease(payload = {}) {
+  const input = objectOr(payload.input || payload)
+  const paths = await dockPaths()
+  await ensureLocalLayout(paths)
+  const state = await readDesktopState(paths)
+  const workUid = String(input.workUid || input.uid || '').trim()
+  const projectPath = normalizeProjectPath(paths, input.projectPath || '')
+  const now = new Date().toISOString()
+  let released = 0
+  const leases = Array.isArray(state.workMcpLeases) ? state.workMcpLeases : []
+  state.workMcpLeases = leases.map((item) => {
+    const lease = objectOr(item)
+    const sameUid = workUid && String(lease.workUid || '').trim() === workUid
+    const samePath = projectPath && lease.projectPath && sameResolvedPath(lease.projectPath, projectPath)
+    if (!sameUid && !samePath) return item
+    released += 1
+    return {
+      ...lease,
+      status: 'released',
+      releasedAt: now,
+      expiresAt: now,
+      updatedAt: now,
+    }
+  }).slice(0, WORK_MCP_LEASE_LIMIT)
+  await writeDesktopState(paths, state)
+  return {
+    released,
+    workMcpLeases: await activeWorkMCPLeases(paths),
+  }
+}
+
+async function stop_work_run(payload = {}) {
+  const input = objectOr(payload.input || payload)
+  const paths = await dockPaths()
+  await ensureLocalLayout(paths)
+  const token = await localOwnerToken(paths)
+  let runId = String(input.runId || '').trim()
+  const workUid = String(input.workUid || input.uid || '').trim()
+  if (!runId && workUid) {
+    const listed = await httpJson('GET', `/v1/work-runs?workUid=${encodeURIComponent(workUid)}`, undefined, token)
+    const runs = Array.isArray(listed.workRuns) ? listed.workRuns : []
+    runId = String(runs[0]?.runId || '').trim()
+  }
+  if (!runId) throw new Error('work run id required')
+  const stopped = await httpJson('POST', `/v1/work-runs/${encodeURIComponent(runId)}/stop`, {
+    reason: String(input.reason || 'Stopped from Exora Dock owner control.'),
+  }, token)
+  if (workUid || input.projectPath) {
+    await release_work_mcp_lease({ input: { workUid, projectPath: input.projectPath } })
+  }
+  return stopped
 }
 
 async function list_tasks() {
@@ -798,20 +1054,94 @@ async function set_payment_pin(payload) {
 async function wallet_status() {
   const paths = await dockPaths()
   await ensureLocalLayout(paths)
-  return httpJson('GET', '/v1/wallet', undefined, await localOwnerToken(paths))
+  return ensureDefaultWallet(paths)
 }
 
-async function wallet_create() {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  return httpJson('POST', '/v1/wallet/create', {}, await localOwnerToken(paths))
-}
-
-async function wallet_bind(payload) {
+async function wallet_create(payload) {
   const input = payload?.input ?? {}
   const paths = await dockPaths()
   await ensureLocalLayout(paths)
-  return httpJson('POST', '/v1/wallet/bind', { address: input.address || '' }, await localOwnerToken(paths))
+  const recoveryPassword = input.recoveryPassword || await desktopWalletRecoveryPassword(paths)
+  return httpJson('POST', '/v1/wallet/create', {
+    recoveryPassword,
+    overwrite: input.overwrite === true,
+  }, await localOwnerToken(paths))
+}
+
+async function wallet_unlock(payload) {
+  const input = payload?.input ?? {}
+  const paths = await dockPaths()
+  await ensureLocalLayout(paths)
+  const recoveryPassword = input.recoveryPassword || await desktopWalletRecoveryPassword(paths)
+  return httpJson('POST', '/v1/wallet/unlock', { recoveryPassword }, await localOwnerToken(paths))
+}
+
+async function wallet_restore(payload) {
+  const input = payload?.input ?? {}
+  const paths = await dockPaths()
+  await ensureLocalLayout(paths)
+  return httpJson('POST', '/v1/wallet/restore', { recoveryPassword: input.recoveryPassword || '', backup: input.backup }, await localOwnerToken(paths))
+}
+
+async function wallet_withdraw(payload) {
+  const input = payload?.input ?? {}
+  const paths = await dockPaths()
+  await ensureLocalLayout(paths)
+  return httpJson('POST', '/v1/wallet/withdraw', {
+    toAddress: input.toAddress || '',
+    amountAtomic: Number(input.amountAtomic || 0),
+    paymentPin: input.paymentPin || '',
+  }, await localOwnerToken(paths))
+}
+
+async function ensureDefaultWallet(paths) {
+  const token = await localOwnerToken(paths)
+  let response = await httpJson('GET', '/v1/wallet', undefined, token)
+  const status = objectOr(response.wallet)
+  if (status.configured !== true || status.boundOnly === true) {
+    const recoveryPassword = await desktopWalletRecoveryPassword(paths)
+    return httpJson('POST', '/v1/wallet/create', {
+      recoveryPassword,
+      overwrite: status.configured === true || status.boundOnly === true,
+    }, token)
+  }
+  if (status.accountBound !== false && status.unlocked !== true && String(status.encryptedKeypairPath || '').trim()) {
+    const recoveryPassword = await desktopWalletRecoveryPassword(paths)
+    try {
+      response = await httpJson('POST', '/v1/wallet/unlock', { recoveryPassword }, token)
+    } catch {
+      // Existing wallets created with a user-set password still show their receive address.
+    }
+  }
+  return response
+}
+
+async function desktopWalletRecoveryPassword(paths) {
+  const state = await readDesktopState(paths)
+  const existing = objectOr(state.walletAutoRecovery)
+  if (existing.keyStorage === 'safeStorage' && existing.encryptedSecret && safeStorage.isEncryptionAvailable()) {
+    try {
+      return safeStorage.decryptString(Buffer.from(String(existing.encryptedSecret), 'base64'))
+    } catch {
+      // Fall through and rotate the local auto recovery secret.
+    }
+  }
+  if (existing.secret) return String(existing.secret)
+
+  const secret = `exora-wallet-${crypto.randomBytes(32).toString('base64url')}`
+  const record = {
+    createdAt: new Date().toISOString(),
+    keyStorage: 'plain',
+    secret,
+  }
+  if (safeStorage.isEncryptionAvailable()) {
+    record.keyStorage = 'safeStorage'
+    record.encryptedSecret = safeStorage.encryptString(secret).toString('base64')
+    delete record.secret
+  }
+  state.walletAutoRecovery = record
+  await writeDesktopState(paths, state)
+  return secret
 }
 
 async function security_status() {
@@ -1154,6 +1484,60 @@ async function addActivityProjectFolders(paths, ...groups) {
   await writeDesktopState(paths, state)
 }
 
+async function activeWorkMCPLeases(paths) {
+  const state = await readDesktopState(paths)
+  const leases = Array.isArray(state.workMcpLeases) ? state.workMcpLeases : []
+  const nowMs = Date.now()
+  let changed = false
+  const stored = []
+  const active = []
+  for (const item of leases) {
+    const lease = normalizeWorkMCPLease(paths, item)
+    if (!lease) {
+      stored.push(item)
+      continue
+    }
+    if (lease.status === 'active' && lease.expiresAt && Date.parse(lease.expiresAt) <= nowMs) {
+      lease.status = 'expired'
+      lease.updatedAt = new Date(nowMs).toISOString()
+      changed = true
+    }
+    stored.push(lease)
+    if (workMCPLeaseIsActive(lease, nowMs)) active.push(lease)
+  }
+  if (changed || stored.length > WORK_MCP_LEASE_LIMIT) {
+    state.workMcpLeases = stored.slice(0, WORK_MCP_LEASE_LIMIT)
+    await writeDesktopState(paths, state)
+  }
+  return active.sort((a, b) => leaseTimeValue(b) - leaseTimeValue(a))
+}
+
+function normalizeWorkMCPLease(paths, item) {
+  const lease = objectOr(item)
+  const workUid = String(lease.workUid || lease.uid || '').trim()
+  const projectPath = normalizeProjectPath(paths, lease.projectPath || '')
+  if (!workUid || !projectPath) return undefined
+  return {
+    ...lease,
+    workUid,
+    projectPath,
+    projectName: String(lease.projectName || '').trim() || path.basename(projectPath),
+    controller: String(lease.controller || 'external-mcp').trim(),
+    status: String(lease.status || 'active').trim(),
+  }
+}
+
+function workMCPLeaseIsActive(lease, nowMs = Date.now()) {
+  if (!lease || lease.status !== 'active') return false
+  const expiresAt = Date.parse(lease.expiresAt || '')
+  return Number.isFinite(expiresAt) && expiresAt > nowMs
+}
+
+function leaseTimeValue(lease) {
+  const parsed = Date.parse(lease?.lastSeenAt || lease?.updatedAt || lease?.startedAt || '')
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
 function dedupeProjectFolders(paths, folders) {
   const out = []
   const push = (folder) => {
@@ -1458,6 +1842,37 @@ function appDataRoot() {
   throw new Error('Cannot resolve local app data directory')
 }
 
+function readStartupLanguageSync() {
+  const envLanguage = process.env.EXORA_DOCK_LANGUAGE || process.env.EXORA_LANGUAGE
+  if (envLanguage) return normalizeAppLanguage(envLanguage)
+  try {
+    const settingsPath = path.join(app.getPath('userData'), PERSISTENCE_DIR_NAME, 'settings', 'settings.json')
+    const raw = fs.readFileSync(settingsPath, 'utf8')
+    const value = JSON.parse(raw)
+    return normalizeAppLanguage(value?.settings?.language || value?.language)
+  } catch {
+    return 'en'
+  }
+}
+
+async function readPersistedLanguage(paths) {
+  const value = objectOr(await readJsonOr(paths.appSettingsPath, {}))
+  return normalizeAppLanguage(value?.settings?.language || value?.language || STARTUP_LANGUAGE)
+}
+
+function normalizeAppLanguage(value) {
+  const text = String(value || '').trim().toLowerCase()
+  return text === 'zh' || text.startsWith('zh-') || text.startsWith('zh_') ? 'zh' : 'en'
+}
+
+function chromiumLocaleForLanguage(language) {
+  return normalizeAppLanguage(language) === 'zh' ? 'zh-CN' : 'en-US'
+}
+
+function htmlLangForLanguage(language) {
+  return normalizeAppLanguage(language) === 'zh' ? 'zh-CN' : 'en'
+}
+
 async function startNativeDaemon(paths) {
   await fsp.mkdir(paths.logsDir, { recursive: true })
   const logPath = path.join(paths.logsDir, DAEMON_LOG_NAME)
@@ -1592,29 +2007,30 @@ function sellerSettingsFromYaml(raw) {
   const seller = objectOr(value.seller_agent)
   const provider = objectOr(value.provider)
   const docker = objectOr(provider.docker)
-  const apiKey = stringAt(value, 'llm_api_key', '')
-  const legacyModel = stringAt(value, 'llm_model', 'gpt-5.5')
-  const llmBaseUrl = stringAt(value, 'llm_base_url', 'https://api.openai.com/v1')
-  const providerPreset = normalizeProviderPreset(stringAt(value, 'llm_provider_preset', 'openai_responses'))
+  const sellerLLM = roleLLMSettingsFromYaml(value, 'seller_llm')
+  const apiKey = sellerLLM.apiKey
+  const llmBaseUrl = sellerLLM.llmBaseUrl
+  const providerPreset = sellerLLM.providerPreset
   const requiresApiKey = providerRequiresApiKey(providerPreset, llmBaseUrl)
   return {
     enabled: boolAt(seller, 'enabled', false),
     autoQuote: boolAt(seller, 'auto_quote', true),
+    autoAcceptLowRisk: boolAt(seller, 'auto_accept_low_risk', boolAt(seller, 'auto_complete_text_tasks', false)),
     autoCompleteTextTasks: boolAt(seller, 'auto_complete_text_tasks', false),
     llmBaseUrl,
     hasApiKey: apiKey !== '' || !requiresApiKey,
     keyFormat: apiKey === '' && !requiresApiKey ? 'not_required' : apiKeyFormat(apiKey),
     providerPreset,
-    wireApi: normalizeWireApi(stringAt(value, 'llm_wire_api', 'responses')),
-    capabilities: llmCapabilitiesFromYaml(value),
-    researchModel: stringAt(value, 'llm_research_model', legacyModel),
-    researchReasoningEffort: stringAt(value, 'llm_research_reasoning_effort', 'high'),
-    utilityModel: stringAt(value, 'llm_utility_model', legacyModel),
-    utilityReasoningEffort: stringAt(value, 'llm_utility_reasoning_effort', 'low'),
-    disableResponseStorage: boolAt(value, 'llm_disable_response_storage', true),
+    wireApi: sellerLLM.wireApi,
+    capabilities: sellerLLM.capabilities,
+    researchModel: sellerLLM.researchModel,
+    researchReasoningEffort: sellerLLM.researchReasoningEffort,
+    utilityModel: sellerLLM.utilityModel,
+    utilityReasoningEffort: sellerLLM.utilityReasoningEffort,
+    disableResponseStorage: sellerLLM.disableResponseStorage,
     providerId: stringAt(seller, 'provider_pubkey', 'local-dev-miner'),
     quotePrice: numberAt(seller, 'default_quote_price', 0),
-    currency: stringAt(seller, 'default_quote_currency', 'USD'),
+    currency: stringAt(seller, 'default_quote_currency', 'USDC'),
     estimatedSeconds: integerAt(seller, 'default_estimated_seconds', 60),
     dockerEnabled: boolAt(docker, 'enabled', false),
     dockerDefaultImage: stringAt(docker, 'default_image', ''),
@@ -1633,46 +2049,136 @@ async function ensureLLMProfiles(paths) {
   const profiles = Array.isArray(state.llmProfiles) ? state.llmProfiles.map(normalizeStoredLLMProfile).filter(Boolean) : []
   if (!profiles.length) {
     const raw = await readTextOr(paths.configPath, defaultLocalConfig(paths))
-    profiles.push(llmProfileFromYaml(raw))
+    profiles.push(...llmProfilesFromYaml(raw))
   }
   state.llmProfiles = profiles
-  if (!profiles.some((profile) => profile.id === state.activeLLMProfileId)) state.activeLLMProfileId = profiles[0]?.id || ''
+  const profileIds = new Set(profiles.map((profile) => profile.id))
+  if (!state.llmProfileRoleDefaultsInitialized) {
+    const fallbackBuyer = profileIds.has('default-buyer-api')
+      ? 'default-buyer-api'
+      : profileIds.has('default-api')
+        ? 'default-api'
+        : profiles[0]?.id || ''
+    const fallbackSeller = profileIds.has('default-seller-api')
+      ? 'default-seller-api'
+      : profileIds.has('default-api')
+        ? 'default-api'
+        : fallbackBuyer
+    state.buyerLLMProfileId = state.buyerLLMProfileId || fallbackBuyer
+    state.sellerLLMProfileId = state.sellerLLMProfileId || fallbackSeller
+    state.llmProfileRoleDefaultsInitialized = true
+  }
+  if (state.buyerLLMProfileId && !profileIds.has(state.buyerLLMProfileId)) state.buyerLLMProfileId = ''
+  if (state.sellerLLMProfileId && !profileIds.has(state.sellerLLMProfileId)) state.sellerLLMProfileId = ''
+  if (!profileIds.has(state.activeLLMProfileId)) state.activeLLMProfileId = state.sellerLLMProfileId || state.buyerLLMProfileId || profiles[0]?.id || ''
   await writeDesktopState(paths, state)
 }
 
 async function llmProfileStatus(paths) {
+  await ensureLLMProfiles(paths)
   const state = await readDesktopState(paths)
   const profiles = Array.isArray(state.llmProfiles) ? state.llmProfiles.map(normalizeStoredLLMProfile).filter(Boolean) : []
   return {
-    profiles: profiles.map(profileForRenderer),
+    profiles: profiles.map((profile) => profileForRenderer(profile, state)),
     activeProfileId: state.activeLLMProfileId || profiles[0]?.id || '',
+    buyerProfileId: state.buyerLLMProfileId || '',
+    sellerProfileId: state.sellerLLMProfileId || '',
     keyStorageAvailable: safeStorage.isEncryptionAvailable(),
   }
 }
 
-function llmProfileFromYaml(raw) {
-  const value = YAML.parse(raw) || {}
-  const preset = normalizeProviderPreset(stringAt(value, 'llm_provider_preset', 'openai_responses'))
+function topLevelLLMSettingsFromYaml(value) {
   const legacyModel = stringAt(value, 'llm_model', 'gpt-5.5')
-  const apiKey = stringAt(value, 'llm_api_key', '')
-  const now = new Date().toISOString()
-  const profile = normalizeStoredLLMProfile({
-    id: 'default-api',
-    name: 'Default API',
-    providerPreset: preset,
-    llmBaseUrl: stringAt(value, 'llm_base_url', 'https://api.openai.com/v1'),
-    wireApi: normalizeWireApi(stringAt(value, 'llm_wire_api', 'responses')),
+  const llmBaseUrl = stringAt(value, 'llm_base_url', 'https://api.openai.com/v1')
+  const providerPreset = normalizeProviderPreset(stringAt(value, 'llm_provider_preset', inferProviderPreset(llmBaseUrl)))
+  const wireApi = normalizeWireApi(stringAt(value, 'llm_wire_api', defaultWireForPreset(providerPreset)))
+  return {
+    llmBaseUrl,
+    apiKey: stringAt(value, 'llm_api_key', ''),
+    providerPreset,
+    wireApi,
     capabilities: llmCapabilitiesFromYaml(value),
     researchModel: stringAt(value, 'llm_research_model', legacyModel),
     researchReasoningEffort: stringAt(value, 'llm_research_reasoning_effort', 'high'),
     utilityModel: stringAt(value, 'llm_utility_model', legacyModel),
     utilityReasoningEffort: stringAt(value, 'llm_utility_reasoning_effort', 'low'),
     disableResponseStorage: boolAt(value, 'llm_disable_response_storage', true),
+  }
+}
+
+function roleLLMSettingsFromYaml(value, key) {
+  const fallback = topLevelLLMSettingsFromYaml(value)
+  const role = objectOr(value[key])
+  if (!roleLLMBlockConfigured(role)) return fallback
+  const llmBaseUrl = stringAt(role, 'base_url', fallback.llmBaseUrl)
+  const providerPreset = normalizeProviderPreset(stringAt(role, 'provider_preset', inferProviderPreset(llmBaseUrl)))
+  const wireApi = normalizeWireApi(stringAt(role, 'wire_api', defaultWireForPreset(providerPreset)))
+  const legacyModel = stringAt(role, 'model', fallback.researchModel)
+  const researchModel = stringAt(role, 'research_model', legacyModel)
+  return {
+    llmBaseUrl,
+    apiKey: stringAt(role, 'api_key', ''),
+    providerPreset,
+    wireApi,
+    capabilities: roleLLMCapabilitiesFromYaml(role, providerPreset, wireApi),
+    researchModel,
+    researchReasoningEffort: stringAt(role, 'research_reasoning_effort', fallback.researchReasoningEffort),
+    utilityModel: stringAt(role, 'utility_model', researchModel),
+    utilityReasoningEffort: stringAt(role, 'utility_reasoning_effort', fallback.utilityReasoningEffort),
+    disableResponseStorage: boolAt(role, 'disable_response_storage', fallback.disableResponseStorage),
+  }
+}
+
+function roleLLMBlockConfigured(role) {
+  return Boolean(
+    stringAt(role, 'base_url', '') ||
+    stringAt(role, 'api_key', '') ||
+    stringAt(role, 'provider_preset', '') ||
+    stringAt(role, 'model', '') ||
+    stringAt(role, 'wire_api', '') ||
+    Object.keys(objectOr(role.capabilities)).length ||
+    Object.keys(objectOr(role.extra_headers)).length ||
+    stringAt(role, 'research_model', '') ||
+    stringAt(role, 'research_reasoning_effort', '') ||
+    stringAt(role, 'utility_model', '') ||
+    stringAt(role, 'utility_reasoning_effort', '') ||
+    role.disable_response_storage === true
+  )
+}
+
+function llmProfilesFromYaml(raw) {
+  const value = YAML.parse(raw) || {}
+  const buyerLLM = roleLLMSettingsFromYaml(value, 'buyer_llm')
+  const sellerLLM = roleLLMSettingsFromYaml(value, 'seller_llm')
+  if (roleLLMBlockConfigured(objectOr(value.buyer_llm)) || roleLLMBlockConfigured(objectOr(value.seller_llm))) {
+    const profiles = [
+      llmProfileFromSettings('default-buyer-api', 'Buyer API', buyerLLM),
+      llmProfileFromSettings('default-seller-api', 'Seller API', sellerLLM),
+    ]
+    return profiles.filter((profile, index) => profiles.findIndex((item) => item.llmBaseUrl === profile.llmBaseUrl && item.researchModel === profile.researchModel) === index)
+  }
+  return [llmProfileFromSettings('default-api', 'Default API', topLevelLLMSettingsFromYaml(value))]
+}
+
+function llmProfileFromSettings(id, name, settings) {
+  const now = new Date().toISOString()
+  const profile = normalizeStoredLLMProfile({
+    id,
+    name,
+    providerPreset: settings.providerPreset,
+    llmBaseUrl: settings.llmBaseUrl,
+    wireApi: settings.wireApi,
+    capabilities: settings.capabilities,
+    researchModel: settings.researchModel,
+    researchReasoningEffort: settings.researchReasoningEffort,
+    utilityModel: settings.utilityModel,
+    utilityReasoningEffort: settings.utilityReasoningEffort,
+    disableResponseStorage: settings.disableResponseStorage,
     createdAt: now,
     updatedAt: now,
   })
-  if (apiKey && safeStorage.isEncryptionAvailable()) {
-    profile.encryptedApiKey = safeStorage.encryptString(apiKey).toString('base64')
+  if (settings.apiKey && safeStorage.isEncryptionAvailable()) {
+    profile.encryptedApiKey = safeStorage.encryptString(settings.apiKey).toString('base64')
     profile.keyStorage = 'safeStorage'
   }
   return profile
@@ -1683,15 +2189,17 @@ function normalizeStoredLLMProfile(input) {
   const now = new Date().toISOString()
   const id = String(profile.id || '').trim()
   if (!id) return undefined
-  const providerPreset = normalizeProviderPreset(profile.providerPreset || 'openai_responses')
+  const llmBaseUrl = String(profile.llmBaseUrl || '').trim() || 'https://api.openai.com/v1'
+  const providerPreset = normalizeProviderPreset(profile.providerPreset || inferProviderPreset(llmBaseUrl))
   const researchModel = defaultIfBlank(profile.researchModel, 'gpt-5.5')
+  const wireApi = normalizeWireApi(profile.wireApi || defaultWireForPreset(providerPreset))
   return {
     id,
     name: defaultIfBlank(profile.name, 'API Profile'),
     providerPreset,
-    llmBaseUrl: String(profile.llmBaseUrl || '').trim() || 'https://api.openai.com/v1',
-    wireApi: normalizeWireApi(profile.wireApi),
-    capabilities: objectOr(profile.capabilities),
+    llmBaseUrl,
+    wireApi,
+    capabilities: Object.keys(objectOr(profile.capabilities)).length ? objectOr(profile.capabilities) : capabilitiesForWire(providerPreset, wireApi),
     researchModel,
     researchReasoningEffort: defaultIfBlank(profile.researchReasoningEffort, 'high'),
     utilityModel: defaultIfBlank(profile.utilityModel, researchModel),
@@ -1704,7 +2212,7 @@ function normalizeStoredLLMProfile(input) {
   }
 }
 
-function profileForRenderer(profile) {
+function profileForRenderer(profile, state = {}) {
   const hasApiKey = Boolean(profile.encryptedApiKey)
   return {
     id: profile.id,
@@ -1720,6 +2228,8 @@ function profileForRenderer(profile) {
     disableResponseStorage: profile.disableResponseStorage,
     hasApiKey,
     keyFormat: hasApiKey ? apiKeyFormat(decryptLLMProfileKey(profile)) : providerRequiresApiKey(profile.providerPreset, profile.llmBaseUrl) ? 'missing' : 'not_required',
+    useForBuyer: profile.id === state.buyerLLMProfileId,
+    useForSeller: profile.id === state.sellerLLMProfileId,
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
   }
@@ -1752,44 +2262,99 @@ function llmProfileToSellerInput(profile, current, apiKey) {
   }
 }
 
+function updateRoleLLMSettingsYaml(raw, profile, apiKey, roles, previousRoles = {}) {
+  const value = objectOr(YAML.parse(raw) || {})
+  if (roles.buyer) value.buyer_llm = llmProfileYamlBlock(profile, apiKey)
+  else if (previousRoles.buyer) delete value.buyer_llm
+  if (roles.seller) value.seller_llm = llmProfileYamlBlock(profile, apiKey)
+  else if (previousRoles.seller) delete value.seller_llm
+  if (roles.buyer || roles.seller) writeTopLevelLLMFields(value, profile, apiKey)
+  return ensureTrailingNewline(YAML.stringify(value))
+}
+
+function llmProfileYamlBlock(profile, apiKey) {
+  return {
+    base_url: String(profile.llmBaseUrl || '').trim(),
+    api_key: String(apiKey || '').trim(),
+    provider_preset: normalizeProviderPreset(profile.providerPreset || inferProviderPreset(profile.llmBaseUrl)),
+    model: defaultIfBlank(profile.researchModel, 'gpt-5.5'),
+    wire_api: normalizeWireApi(profile.wireApi || defaultWireForPreset(profile.providerPreset)),
+    capabilities: capabilitiesToYaml(profile.capabilities || capabilitiesForWire(profile.providerPreset, profile.wireApi)),
+    research_model: defaultIfBlank(profile.researchModel, 'gpt-5.5'),
+    research_reasoning_effort: defaultIfBlank(profile.researchReasoningEffort, 'high'),
+    utility_model: defaultIfBlank(profile.utilityModel, profile.researchModel || 'gpt-5.5'),
+    utility_reasoning_effort: defaultIfBlank(profile.utilityReasoningEffort, 'low'),
+    disable_response_storage: profile.disableResponseStorage !== false,
+  }
+}
+
+function writeTopLevelLLMFields(value, profile, apiKey) {
+  const block = llmProfileYamlBlock(profile, apiKey)
+  value.llm_base_url = block.base_url
+  value.llm_api_key = block.api_key
+  value.llm_provider_preset = block.provider_preset
+  value.llm_wire_api = block.wire_api
+  value.llm_capabilities = block.capabilities
+  value.llm_research_model = block.research_model
+  value.llm_research_reasoning_effort = block.research_reasoning_effort
+  value.llm_utility_model = block.utility_model
+  value.llm_utility_reasoning_effort = block.utility_reasoning_effort
+  value.llm_disable_response_storage = block.disable_response_storage
+  value.llm_model = block.research_model
+}
+
+function llmProfileRolesFromInput(input) {
+  const hasBuyer = Object.prototype.hasOwnProperty.call(input, 'useForBuyer')
+  const hasSeller = Object.prototype.hasOwnProperty.call(input, 'useForSeller')
+  let buyer = hasBuyer ? Boolean(input.useForBuyer) : false
+  let seller = hasSeller ? Boolean(input.useForSeller) : false
+  if (!hasBuyer && !hasSeller) {
+    buyer = true
+    seller = true
+  }
+  return { buyer, seller }
+}
+
 function updateSellerSettingsYaml(raw, input) {
   const value = objectOr(YAML.parse(raw) || {})
-  const researchModel = defaultIfBlank(input.researchModel, 'gpt-5.5')
-  const utilityModel = defaultIfBlank(input.utilityModel, researchModel)
-  value.llm_base_url = String(input.llmBaseUrl || '').trim()
-  value.llm_provider_preset = normalizeProviderPreset(input.providerPreset)
-  value.llm_wire_api = normalizeWireApi(input.wireApi)
-  value.llm_capabilities = capabilitiesToYaml(input.capabilities || {})
-  value.llm_research_model = researchModel
-  value.llm_research_reasoning_effort = defaultIfBlank(input.researchReasoningEffort, 'high')
-  value.llm_utility_model = utilityModel
-  value.llm_utility_reasoning_effort = defaultIfBlank(input.utilityReasoningEffort, 'low')
-  value.llm_disable_response_storage = Boolean(input.disableResponseStorage)
-  value.llm_model = researchModel
-  if (input.clearApiKey) value.llm_api_key = ''
-  else if (String(input.apiKey || '').trim()) value.llm_api_key = String(input.apiKey).trim()
-
   value.seller_agent = objectOr(value.seller_agent)
   value.seller_agent.enabled = Boolean(input.enabled)
   value.seller_agent.auto_quote = Boolean(input.autoQuote)
-  value.seller_agent.auto_complete_text_tasks = Boolean(input.autoCompleteTextTasks)
+  value.seller_agent.auto_accept_low_risk = Boolean(input.autoAcceptLowRisk ?? input.autoCompleteTextTasks)
+  delete value.seller_agent.auto_complete_text_tasks
   value.seller_agent.provider_pubkey = String(input.providerId || '').trim()
   value.seller_agent.poll_interval_sec = 2
   value.seller_agent.default_quote_price = Math.max(0, Number(input.quotePrice || 0))
-  value.seller_agent.default_quote_currency = defaultIfBlank(input.currency, 'USD')
+  value.seller_agent.default_quote_currency = defaultIfBlank(input.currency, 'USDC')
   value.seller_agent.default_estimated_seconds = Math.max(1, Math.trunc(Number(input.estimatedSeconds || 60)))
-  value.provider = objectOr(value.provider)
-  value.provider.docker = objectOr(value.provider.docker)
-  value.provider.docker.enabled = Boolean(input.dockerEnabled)
-  value.provider.docker.default_image = String(input.dockerDefaultImage || '').trim()
-  value.provider.docker.allowed_images = csvList(input.dockerAllowedImages)
-  value.provider.docker.network_mode = defaultIfBlank(input.dockerNetworkMode, 'none')
-  value.provider.docker.allowed_network_modes = csvList(input.dockerAllowedNetworkModes, ['none'])
-  value.provider.docker.allow_gpu = Boolean(input.dockerAllowGpu)
-  value.provider.docker.max_cpus = Math.max(0, Number(input.dockerMaxCpus || 0))
-  value.provider.docker.max_memory_mb = Math.max(0, Math.trunc(Number(input.dockerMaxMemoryMb || 0)))
-  value.provider.docker.pull_policy = defaultIfBlank(input.dockerPullPolicy, 'missing')
+  if (sellerInputHasDockerSettings(input)) {
+    value.provider = objectOr(value.provider)
+    value.provider.docker = objectOr(value.provider.docker)
+    value.provider.docker.enabled = Boolean(input.dockerEnabled)
+    value.provider.docker.default_image = String(input.dockerDefaultImage || '').trim()
+    value.provider.docker.allowed_images = csvList(input.dockerAllowedImages)
+    value.provider.docker.network_mode = defaultIfBlank(input.dockerNetworkMode, 'none')
+    value.provider.docker.allowed_network_modes = csvList(input.dockerAllowedNetworkModes, ['none'])
+    value.provider.docker.allow_gpu = Boolean(input.dockerAllowGpu)
+    value.provider.docker.max_cpus = Math.max(0, Number(input.dockerMaxCpus || 0))
+    value.provider.docker.max_memory_mb = Math.max(0, Math.trunc(Number(input.dockerMaxMemoryMb || 0)))
+    value.provider.docker.pull_policy = defaultIfBlank(input.dockerPullPolicy, 'missing')
+  }
   return ensureTrailingNewline(YAML.stringify(value))
+}
+
+function sellerInputHasDockerSettings(input) {
+  return [
+    'dockerEnabled',
+    'dockerDefaultImage',
+    'dockerAllowedImages',
+    'dockerNetworkMode',
+    'dockerAllowedNetworkModes',
+    'dockerAllowGpu',
+    'dockerMaxCpus',
+    'dockerMaxMemoryMb',
+    'dockerPullPolicy',
+  ].some((key) => Object.prototype.hasOwnProperty.call(input, key))
 }
 
 function apiKeyFormat(apiKey) {
@@ -1823,6 +2388,20 @@ function normalizeProviderPreset(value) {
   return aliases[normalized] || normalized
 }
 
+function inferProviderPreset(baseUrl) {
+  const base = String(baseUrl || '').trim().toLowerCase()
+  if (base.includes('openrouter.ai')) return 'openrouter'
+  if (base.includes('api.openai.com')) return 'openai_responses'
+  if (base.includes('127.0.0.1:11434') || base.includes('localhost:11434')) return 'ollama'
+  if (base.includes('127.0.0.1:1234') || base.includes('localhost:1234')) return 'lm_studio'
+  if (base.includes('127.0.0.1') || base.includes('localhost') || base.includes('[::1]')) return 'custom_openai_compatible'
+  return 'custom_openai_compatible'
+}
+
+function defaultWireForPreset(preset) {
+  return normalizeProviderPreset(preset) === 'openai_responses' ? 'responses' : 'chat_completions'
+}
+
 function providerRequiresApiKey(preset, baseUrl) {
   const normalized = normalizeProviderPreset(preset)
   const base = String(baseUrl || '').trim().toLowerCase()
@@ -1844,6 +2423,21 @@ function llmCapabilitiesFromYaml(value) {
   }
   if (Object.values(parsed).some(Boolean)) return parsed
   return presetCapabilities(stringAt(value, 'llm_provider_preset', 'openai_responses'))
+}
+
+function roleLLMCapabilitiesFromYaml(role, preset, wire) {
+  const caps = objectOr(role.capabilities)
+  const parsed = {
+    supportsResponses: boolAt(caps, 'supports_responses', false),
+    supportsChatCompletions: boolAt(caps, 'supports_chat_completions', false),
+    supportsSystemMessage: boolAt(caps, 'supports_system_message', false),
+    supportsJsonResponseFormat: boolAt(caps, 'supports_json_response_format', false),
+    supportsStreaming: boolAt(caps, 'supports_streaming', false),
+    supportsTools: boolAt(caps, 'supports_tools', false),
+    supportsReasoningEffort: boolAt(caps, 'supports_reasoning_effort', false),
+  }
+  if (Object.values(parsed).some(Boolean)) return parsed
+  return capabilitiesForWire(preset, wire)
 }
 
 function presetCapabilities(preset) {
@@ -1881,6 +2475,24 @@ function presetCapabilities(preset) {
   }
 }
 
+function capabilitiesForWire(preset, wire) {
+  const caps = { ...presetCapabilities(preset) }
+  if (normalizeWireApi(wire) === 'responses') {
+    caps.supportsResponses = true
+    caps.supportsChatCompletions = true
+    caps.supportsSystemMessage = true
+    caps.supportsJsonResponseFormat = true
+    caps.supportsStreaming = true
+    caps.supportsTools = true
+    caps.supportsReasoningEffort = true
+    return caps
+  }
+  caps.supportsResponses = false
+  caps.supportsChatCompletions = true
+  caps.supportsReasoningEffort = false
+  return caps
+}
+
 function capabilitiesToYaml(caps) {
   return {
     supports_responses: capValue(caps, 'supportsResponses'),
@@ -1900,6 +2512,45 @@ function capValue(caps, key) {
 function defaultIfBlank(value, fallback) {
   const trimmed = String(value || '').trim()
   return trimmed || fallback
+}
+
+function defaultLLMProfileName(input) {
+  const baseUrl = String(input.llmBaseUrl || '').trim()
+  const model = String(input.researchModel || input.utilityModel || '').trim()
+  let host = 'API'
+  try {
+    host = new URL(baseUrl).host || host
+  } catch {
+    host = baseUrl.replace(/^https?:\/\//, '').split('/')[0] || host
+  }
+  return [host, model].filter(Boolean).join(' / ') || 'API Profile'
+}
+
+function uniqueLLMProfileName(name, profiles, currentId) {
+  const requested = defaultIfBlank(name, 'API Profile')
+  const current = String(currentId || '').trim()
+  const existingNames = new Set(
+    asArray(profiles)
+      .filter((profile) => String(profile?.id || '').trim() !== current)
+      .map((profile) => String(profile?.name || '').trim().toLowerCase())
+      .filter(Boolean),
+  )
+  if (!existingNames.has(requested.toLowerCase())) return requested
+
+  const numbered = requested.match(/^(.*?)\s+(\d+)$/)
+  const numberedBase = numbered?.[1]?.trim()
+  const base = numberedBase && existingNames.has(numberedBase.toLowerCase()) ? numberedBase : requested
+  let index = numberedBase && base === numberedBase ? Math.max(2, Number(numbered[2]) + 1) : 2
+  let candidate = `${base} ${index}`
+  while (existingNames.has(candidate.toLowerCase())) {
+    index += 1
+    candidate = `${base} ${index}`
+  }
+  return candidate
+}
+
+function uniqueList(values) {
+  return [...new Set(values.filter(Boolean))]
 }
 
 function quoteCommandArg(value) {
@@ -1999,11 +2650,11 @@ llm_model: "gpt-5.5"
 seller_agent:
   enabled: false
   auto_quote: true
-  auto_complete_text_tasks: false
+  auto_accept_low_risk: false
   provider_pubkey: ""
   poll_interval_sec: 2
   default_quote_price: 0
-  default_quote_currency: "USD"
+  default_quote_currency: "USDC"
   default_estimated_seconds: 60
 `
 }
@@ -2103,7 +2754,7 @@ function localRequestError(error, route, timeoutMs) {
     return new Error(`Local Exora Dock did not answer ${route} within ${timeoutMs}ms. The background task is still safe to retry.`)
   }
   if (isLocalConnectionFailure(error)) {
-    return new Error(`Local Exora Dock is not reachable at ${BASE_URL}. I tried to start it automatically, but ${route} is still unavailable. Wait a few seconds and try again, or start Dock from Runtime.`)
+    return new Error(`Local Exora Dock is not reachable at ${BASE_URL}. I tried to start it automatically, but ${route} is still unavailable. Wait a few seconds and try again.`)
   }
   return error instanceof Error ? error : new Error(message)
 }
@@ -2243,7 +2894,7 @@ async function refreshDaemonForCloudLink(paths) {
 }
 
 function effectiveLlmApiKey(rawConfig, input) {
-  const provided = String(input.apiKey || '').trim()
+  const provided = explicitApiKeyInput(input)
   if (provided) return provided
   let value = {}
   try {
@@ -2255,7 +2906,7 @@ function effectiveLlmApiKey(rawConfig, input) {
 }
 
 async function effectiveLlmApiKeyForInput(paths, rawConfig, input) {
-  const provided = String(input.apiKey || '').trim()
+  const provided = explicitApiKeyInput(input)
   if (provided) return provided
   if (input.clearApiKey) return ''
   const profileId = String(input.profileId || '').trim()
@@ -2268,13 +2919,31 @@ async function effectiveLlmApiKeyForInput(paths, rawConfig, input) {
   return effectiveLlmApiKey(rawConfig, input)
 }
 
+function explicitApiKeyInput(input = {}) {
+  const provided = String(input.apiKey || '').trim()
+  return provided === MASKED_API_KEY_VALUE ? '' : provided
+}
+
 function llmBaseCandidates(baseUrl) {
   const base = String(baseUrl || '').trim().replace(/\/+$/, '')
   if (!base) return ['']
-  return base.endsWith('/v1') ? [base] : [`${base}/v1`, base]
+  const candidates = base.endsWith('/v1') ? [base] : [`${base}/v1`, base]
+  try {
+    const url = new URL(base)
+    const pathName = url.pathname.replace(/\/+$/, '')
+    if (pathName && pathName !== '/v1') candidates.push(`${url.origin}/v1`)
+  } catch {
+    // Keep the literal user-entered candidates for non-URL local gateways.
+  }
+  return uniqueList(candidates)
 }
 
 async function llmPostJson(baseUrl, route, apiKey, body) {
+  const result = await llmPostJsonWithBase(baseUrl, route, apiKey, body)
+  return result.body
+}
+
+async function llmPostJsonWithBase(baseUrl, route, apiKey, body) {
   let lastError
   for (const base of llmBaseCandidates(baseUrl)) {
     const url = `${base}${route}`
@@ -2289,7 +2958,7 @@ async function llmPostJson(baseUrl, route, apiKey, body) {
         break
       }
       try {
-        return JSON.parse(text)
+        return { body: JSON.parse(text), baseUrl: base }
       } catch (error) {
         throw new Error(`LLM API returned non-JSON: ${error.message}`)
       }
@@ -2301,6 +2970,11 @@ async function llmPostJson(baseUrl, route, apiKey, body) {
 }
 
 async function llmGetModels(baseUrl, apiKey) {
+  const result = await llmGetModelsWithBase(baseUrl, apiKey)
+  return result.models
+}
+
+async function llmGetModelsWithBase(baseUrl, apiKey) {
   let lastError
   for (const base of llmBaseCandidates(baseUrl)) {
     const url = `${base}/models`
@@ -2320,7 +2994,7 @@ async function llmGetModels(baseUrl, apiKey) {
       } catch (error) {
         throw new Error(`LLM models returned non-JSON: ${error.message}`)
       }
-      return parseLlmModels(value)
+      return { models: parseLlmModels(value), baseUrl: base }
     } catch (error) {
       lastError = error
     }
@@ -2355,6 +3029,25 @@ async function snapshotArray(promise, key, errors) {
     errors.push(`${key}: ${errorMessage(error)}`)
     return []
   }
+}
+
+async function snapshotWorkRunEvents(workRuns, token, errors) {
+  const selectedRuns = [...(Array.isArray(workRuns) ? workRuns : [])]
+    .sort((a, b) => Date.parse(b?.updatedAt || b?.createdAt || '') - Date.parse(a?.updatedAt || a?.createdAt || ''))
+    .filter((run, index) => index < 20 || ['queued', 'running', 'waiting_owner_choice', 'waiting_owner_approval', 'waiting_worker', 'stop_requested'].includes(String(run?.status || '')))
+    .slice(0, 30)
+  const entries = await Promise.all(selectedRuns.map(async (run) => {
+    const runId = String(run?.runId || '').trim()
+    if (!runId) return undefined
+    try {
+      const value = await httpJson('GET', `/v1/work-runs/${encodeURIComponent(runId)}/events`, undefined, token, { timeoutMs: 1800, retryOnOffline: false })
+      return [runId, Array.isArray(value?.events) ? value.events.slice(-20) : []]
+    } catch (error) {
+      errors.push(`workRunEvents:${runId}: ${errorMessage(error)}`)
+      return [runId, []]
+    }
+  }))
+  return Object.fromEntries(entries.filter(Boolean))
 }
 
 async function fetchWithTimeout(url, options, timeoutMs) {

@@ -16,7 +16,6 @@ func Allowed(method string, path string) bool {
 	}
 	if strings.Contains(path, "/credentials") ||
 		strings.Contains(path, "/wallet/create") ||
-		strings.Contains(path, "/wallet/bind") ||
 		strings.Contains(path, "/payment-pin/set") ||
 		strings.Contains(path, "/ipfs/") {
 		return false
@@ -98,11 +97,27 @@ func taskAllowed(method string, path string) bool {
 	if path == "/v1/tasks" {
 		return method == http.MethodGet || method == http.MethodPost
 	}
-	if !strings.HasPrefix(path, "/v1/tasks/") || method != http.MethodGet {
+	if path == "/v1/provider/tasks/next" {
+		return method == http.MethodGet
+	}
+	if !strings.HasPrefix(path, "/v1/tasks/") {
 		return false
 	}
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	return len(parts) == 3 || (len(parts) == 4 && parts[3] == "artifacts")
+	if len(parts) == 3 {
+		return method == http.MethodGet
+	}
+	if len(parts) != 4 {
+		return false
+	}
+	switch parts[3] {
+	case "artifacts", "events":
+		return method == http.MethodGet
+	case "quote", "claim", "complete", "fail":
+		return method == http.MethodPost
+	default:
+		return false
+	}
 }
 
 func approvalAllowed(method string, path string) bool {
@@ -144,5 +159,14 @@ func paymentAllowed(method string, path string) bool {
 		return false
 	}
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	return len(parts) == 3 && method == http.MethodGet
+	if len(parts) == 3 {
+		return method == http.MethodGet
+	}
+	if len(parts) == 4 && parts[3] == "evidence" {
+		return method == http.MethodGet
+	}
+	if len(parts) == 4 && parts[3] == "pay-wallet" {
+		return method == http.MethodPost
+	}
+	return len(parts) == 5 && parts[3] == "chain" && (parts[4] == "intent" || parts[4] == "evidence") && method == http.MethodPost
 }

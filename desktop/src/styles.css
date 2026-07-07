@@ -402,6 +402,10 @@ h3 {
   background: #fff;
 }
 
+.app-shell.right-workspace-white {
+  background: #fff;
+}
+
 .app-shell.settings-mode .settings-return-cell {
   display: flex;
 }
@@ -1663,6 +1667,10 @@ h3 {
   background: #fff;
 }
 
+.app-shell.right-workspace-white .main-workspace {
+  background: #fff;
+}
+
 .main-head-actions {
   align-items: center;
   display: flex;
@@ -1952,8 +1960,7 @@ h3 {
   margin-left: auto;
 }
 
-.api-settings-form,
-.wallet-bind-form {
+.api-settings-form {
   display: grid;
   gap: 8px;
 }
@@ -1988,25 +1995,6 @@ h3 {
   padding: 12px 14px;
 }
 
-.api-profile-sidebar-head {
-  align-items: center;
-  display: flex;
-  justify-content: space-between;
-  min-width: 0;
-}
-
-.api-profile-sidebar-head strong {
-  font-size: 13px;
-}
-
-.api-profile-sidebar-head small {
-  color: rgb(23 33 30 / 0.54);
-  display: block;
-  font-size: 11px;
-  line-height: 1.35;
-  margin-top: 3px;
-}
-
 .api-profile-mini-action {
   min-height: 30px;
   padding: 6px 8px;
@@ -2014,22 +2002,67 @@ h3 {
 
 .api-profile-list {
   display: grid;
-  gap: 8px;
-  grid-template-columns: repeat(auto-fit, minmax(188px, 1fr));
+  gap: 6px;
   min-width: 0;
+}
+
+.api-profile-select-wrap {
+  display: grid;
+  min-width: 0;
+  position: relative;
+}
+
+.api-profile-select-wrap::after {
+  border-bottom: 1.5px solid rgb(38 58 52 / 0.58);
+  border-right: 1.5px solid rgb(38 58 52 / 0.58);
+  content: "";
+  height: 7px;
+  pointer-events: none;
+  position: absolute;
+  right: 12px;
+  top: calc(50% - 5px);
+  transform: rotate(45deg);
+  width: 7px;
+}
+
+.api-profile-select {
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--settings-input-bg, #fff);
+  border: var(--settings-input-border, 1px solid #cfd9d5);
+  border-radius: var(--settings-input-radius, 6px);
+  color: #17211e;
+  font-size: 12px;
+  font-weight: 650;
+  min-height: var(--settings-input-height, 34px);
+  overflow: hidden;
+  padding: 6px 34px 6px 10px;
+  text-overflow: ellipsis;
+  transition: background-color 140ms ease, border-color 140ms ease;
+  width: 100%;
+}
+
+.api-profile-select:hover,
+.api-profile-select:focus {
+  border-color: var(--settings-input-border-focus, #68a38f);
+}
+
+.api-profile-select:disabled {
+  color: rgb(23 33 30 / 0.48);
+  opacity: 1;
 }
 
 .api-profile-option {
   background: #f4f7f5;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 6px;
   color: #17211e;
   display: grid;
-  gap: 3px;
-  justify-items: start;
-  min-height: 58px;
+  gap: 2px 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 38px;
   min-width: 0;
-  padding: 8px;
+  padding: 6px 8px;
   text-align: left;
   width: 100%;
 }
@@ -2067,8 +2100,244 @@ h3 {
   text-transform: uppercase;
 }
 
+.api-profile-badges {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  grid-row: 1 / span 2;
+  justify-content: flex-end;
+  min-height: 14px;
+}
+
 .api-profile-empty {
   padding: 8px;
+}
+
+.api-model-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-inline: 0;
+}
+
+.api-role-controls {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  grid-area: control;
+  justify-self: start;
+}
+
+.agent-card-form label.api-role-choice {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: #27463d;
+  cursor: pointer;
+  display: inline-flex;
+  flex-direction: row;
+  font-size: 12px;
+  font-weight: 620;
+  gap: 8px;
+  height: 22px;
+  justify-content: flex-start;
+  line-height: 1;
+  min-width: 0;
+  padding: 0;
+  position: relative;
+  transition: color 150ms ease;
+}
+
+.agent-card-form label.api-role-choice:hover {
+  color: #1f3a33;
+}
+
+.agent-card-form label.api-role-choice:focus-within {
+  box-shadow: none;
+}
+
+.agent-card-form label.api-role-choice:has(.api-role-input:checked) {
+  color: #1f3a33;
+}
+
+.api-role-text {
+  color: inherit;
+  font-size: inherit;
+  order: 1;
+}
+
+.agent-card-form .api-role-choice > input.api-role-input {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 1px;
+  margin: 0;
+  min-height: 0;
+  opacity: 0;
+  outline: 0;
+  padding: 0;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+  width: 1px;
+}
+
+.api-role-dot {
+  align-items: center;
+  background: #fff;
+  border: 1px solid rgb(32 52 46 / 0.24);
+  border-radius: 999px;
+  box-sizing: border-box;
+  display: inline-flex;
+  flex: 0 0 18px;
+  height: 18px;
+  justify-content: center;
+  order: 2;
+  position: relative;
+  transition: background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+  width: 18px;
+}
+
+.api-role-dot::after {
+  background: transparent;
+  border: 1px solid rgb(32 52 46 / 0.18);
+  border-radius: 999px;
+  box-sizing: border-box;
+  content: "";
+  height: 14px;
+  transition: background-color 150ms ease, border-color 150ms ease;
+  width: 14px;
+}
+
+.api-role-input:focus-visible + .api-role-dot {
+  box-shadow: none;
+}
+
+.api-role-input:checked + .api-role-dot {
+  background: #fff;
+  border-color: #2f735e;
+  box-shadow: none;
+}
+
+.api-role-input:checked + .api-role-dot::after {
+  background: #2f735e;
+  border-color: #2f735e;
+}
+
+.api-form-actions {
+  align-items: center;
+  border-top: 1px solid rgb(32 52 46 / 0.08);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  justify-content: flex-end;
+  margin: 2px -12px 0;
+  padding: 8px 12px 0;
+}
+
+.api-check-row {
+  align-items: center;
+  display: grid;
+  gap: 2px 18px;
+  grid-template-areas: "label control";
+  grid-template-columns: minmax(178px, 0.44fr) minmax(0, 1fr);
+  min-height: 40px;
+}
+
+.api-check-row .field-label {
+  align-self: center;
+  grid-area: label;
+}
+
+.api-check-control {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  grid-area: control;
+  min-width: 0;
+}
+
+.api-check-status {
+  align-items: center;
+  color: rgb(23 33 30 / 0.58);
+  display: inline-flex;
+  flex: 1 1 auto;
+  font-size: 11px;
+  gap: 5px;
+  font-weight: 560;
+  line-height: 1.25;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.api-check-status .app-icon {
+  height: 14px;
+  width: 14px;
+}
+
+.api-check-status.passed {
+  color: #17845d;
+}
+
+.api-check-status.failed {
+  color: #b42318;
+}
+
+.api-status-check-control {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto max-content;
+}
+
+.api-profile-status {
+  color: rgb(23 33 30 / 0.7);
+  display: block;
+  font-size: 11px;
+  font-weight: 560;
+  line-height: 1.25;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: normal;
+}
+
+.api-status-check-control .api-check-status {
+  flex: initial;
+}
+
+.api-form-button {
+  align-items: center;
+  background: #fff;
+  border: 0;
+  border-radius: var(--settings-button-radius, 5px);
+  color: #263a34;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 650;
+  gap: 4px;
+  height: var(--settings-button-height, 24px);
+  justify-content: center;
+  min-width: 0;
+  padding: 0 8px;
+}
+
+.api-form-button svg.app-icon {
+  height: 12px;
+  width: 12px;
+}
+
+.api-form-button:hover {
+  background: #f7faf8;
+}
+
+.api-form-button.primary {
+  background: #1f3a33;
+  color: #fff;
 }
 
 .action-view {
@@ -2081,6 +2350,21 @@ h3 {
 }
 
 .settings-view {
+  --settings-button-bg: #d4e4dc;
+  --settings-button-bg-hover: #343a37;
+  --settings-button-color: #17211e;
+  --settings-button-color-hover: #fff;
+  --settings-button-height: 24px;
+  --settings-button-primary-bg: #d4e4dc;
+  --settings-button-primary-bg-hover: #343a37;
+  --settings-button-primary-color: #17211e;
+  --settings-button-primary-color-hover: #fff;
+  --settings-button-radius: 5px;
+  --settings-input-bg: #fff;
+  --settings-input-border: 1px solid #cfd9d5;
+  --settings-input-border-focus: #68a38f;
+  --settings-input-height: 34px;
+  --settings-input-radius: 6px;
   align-content: start;
   margin: 12px 0 0;
   max-width: none;
@@ -2088,6 +2372,11 @@ h3 {
   padding: 0 0 4px;
   scrollbar-gutter: stable both-edges;
   width: 100%;
+}
+
+.settings-view:has(.settings-page[data-settings-page="api"]:not(.hidden)) {
+  --settings-button-height: 26px;
+  --settings-input-height: 36px;
 }
 
 .action-view > .decision-content {
@@ -2403,6 +2692,41 @@ h3 {
   background: #e3ebe7;
   content: "";
   height: 1px;
+}
+
+.external-work-lock {
+  align-items: center;
+  background: #f4f8f6;
+  border: 1px solid #d6e0dc;
+  border-radius: 12px;
+  color: #43524e;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  margin: 0 auto;
+  max-width: var(--workspace-content-max);
+  padding: 8px 10px;
+  width: 100%;
+}
+
+.external-work-lock span {
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.compact-action {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  min-height: 30px;
+  padding: 6px 9px;
+}
+
+.compact-action svg.app-icon {
+  height: 15px;
+  width: 15px;
 }
 
 .chat-composer {
@@ -2726,6 +3050,7 @@ a,
 .chat-feed,
 .local-agent-card,
 .work-or-divider,
+.external-work-lock,
 .chat-composer,
 .settings-view {
   cursor: auto;
@@ -2738,6 +3063,7 @@ button *,
 .ledger-list *,
 .chat-feed *,
 .local-agent-card *,
+.external-work-lock *,
 .chat-composer *,
 .settings-view * {
   -webkit-app-region: no-drag;
@@ -3030,6 +3356,16 @@ button *,
   min-width: 0;
 }
 
+.card-scan-actionbar {
+  border-bottom: 1px solid rgb(32 52 46 / 0.1);
+  margin-bottom: 0;
+  padding-bottom: 8px;
+}
+
+.card-save-actionbar {
+  justify-content: flex-end;
+}
+
 .card-action-button {
   align-items: center;
   border-color: rgb(32 52 46 / 0.14);
@@ -3078,7 +3414,7 @@ button *,
 }
 
 .diagnose-card-action {
-  padding-bottom: 12px;
+  padding-bottom: 8px;
 }
 
 .save-card-action.is-dirty {
@@ -3102,42 +3438,6 @@ button *,
   background: #2b4a42;
   border-color: #2b4a42;
   color: #fff;
-}
-
-.diagnose-progress {
-  background: rgb(52 132 109 / 0.14);
-  border-radius: 999px;
-  bottom: 5px;
-  height: 2px;
-  left: 10px;
-  overflow: hidden;
-  position: absolute;
-  right: 10px;
-}
-
-.diagnose-progress span {
-  background: #34846d;
-  border-radius: inherit;
-  display: block;
-  height: 100%;
-  opacity: 0.45;
-  width: 42%;
-}
-
-.diagnose-card-action.is-running .diagnose-progress span {
-  animation: cardDiagnoseProgress 1.05s ease-in-out infinite;
-  opacity: 1;
-  transform: translateX(-120%);
-}
-
-@keyframes cardDiagnoseProgress {
-  from {
-    transform: translateX(-120%);
-  }
-
-  to {
-    transform: translateX(260%);
-  }
 }
 
 .card-setup-section-row {
@@ -3193,7 +3493,7 @@ button *,
   grid-area: help;
 }
 
-.agent-card-form .card-field-row input,
+.agent-card-form .card-field-row input:not(.api-role-input):not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
 .agent-card-form .card-field-row select,
 .agent-card-form .card-field-row textarea,
 .card-diagnostic-row .diagnostic-value,
@@ -3201,7 +3501,7 @@ button *,
   grid-area: control;
 }
 
-.agent-card-form .card-field-row input,
+.agent-card-form .card-field-row input:not(.api-role-input):not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
 .agent-card-form .card-field-row select,
 .agent-card-form .card-field-row textarea {
   background: rgb(255 255 255 / 0.7);
@@ -3212,7 +3512,7 @@ button *,
   transition: background 140ms ease, border-color 140ms ease;
 }
 
-.agent-card-form .card-field-row input:focus,
+.agent-card-form .card-field-row input:not(.api-role-input):not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):focus,
 .agent-card-form .card-field-row select:focus,
 .agent-card-form .card-field-row textarea:focus {
   background: #fff;
@@ -3266,6 +3566,77 @@ button *,
 
 .muted-diagnostics .diagnostic-value {
   color: rgb(23 33 30 / 0.46);
+}
+
+.agent-env-empty {
+  border-top: 1px solid rgb(32 52 46 / 0.1);
+  color: rgb(23 33 30 / 0.62);
+  display: grid;
+  gap: 4px;
+  padding: 14px 0;
+}
+
+.agent-env-empty strong {
+  color: #17211e;
+  font-size: 13px;
+}
+
+.agent-env-empty span {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.agent-env-dashboard {
+  display: grid;
+  gap: 0;
+}
+
+.agent-env-group {
+  border-top: 1px solid rgb(32 52 46 / 0.1);
+  display: grid;
+  gap: 10px;
+  padding: 14px 0;
+}
+
+.agent-env-group h3 {
+  color: #17211e;
+  font-size: 12px;
+  line-height: 1.2;
+  margin: 0;
+}
+
+.agent-env-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.agent-env-group.wide .agent-env-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.agent-env-item {
+  background: rgb(255 255 255 / 0.34);
+  border: 1px solid rgb(32 52 46 / 0.1);
+  border-radius: 8px;
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 9px 10px;
+}
+
+.agent-env-item span {
+  color: rgb(23 33 30 / 0.54);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.agent-env-item strong {
+  color: #17211e;
+  font-size: 12px;
+  font-weight: 680;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .agent-card-form .card-message-row {
@@ -3472,6 +3843,232 @@ button *,
   gap: 4px;
 }
 
+.transaction-progress-panel {
+  background: #fff;
+  border: 1px solid #dce5e2;
+  border-radius: 8px;
+  box-shadow: 0 1px 0 rgb(23 33 30 / 0.03);
+  display: grid;
+  gap: 12px;
+  margin: 0 auto 12px;
+  max-width: 860px;
+  padding: 12px;
+  position: sticky;
+  top: 0;
+  width: 100%;
+  z-index: 2;
+}
+
+.transaction-progress-panel.terminal {
+  position: relative;
+}
+
+.transaction-progress-head {
+  align-items: start;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.transaction-progress-head h3 {
+  font-size: 18px;
+  line-height: 1.2;
+  margin: 7px 0 4px;
+}
+
+.transaction-progress-head p,
+.transaction-progress-summary span,
+.transaction-stage small,
+.transaction-event small,
+.transaction-event-title span {
+  color: #61716c;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.transaction-role-chip,
+.transaction-state-chip {
+  border: 1px solid #cbd8d4;
+  border-radius: 999px;
+  color: #28433b;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 4px 8px;
+}
+
+.transaction-role-chip {
+  background: #edf5f1;
+}
+
+.transaction-state-chip {
+  background: #eef4fa;
+  border-color: #c8d8e8;
+  color: #1e4d73;
+  white-space: nowrap;
+}
+
+.transaction-progress-summary {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.transaction-progress-summary div,
+.transaction-progress-facts div {
+  border: 1px solid #e5ece9;
+  border-radius: 7px;
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px;
+}
+
+.transaction-progress-summary strong,
+.transaction-progress-facts dd {
+  color: #17211e;
+  font-size: 13px;
+  font-weight: 750;
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transaction-progress-steps {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.transaction-stage {
+  align-items: start;
+  border: 1px solid #e5ece9;
+  border-radius: 7px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 24px minmax(0, 1fr);
+  min-height: 74px;
+  padding: 8px;
+}
+
+.transaction-stage-dot {
+  align-items: center;
+  background: #eef3f1;
+  border: 1px solid #d6e0dc;
+  border-radius: 999px;
+  color: #53635e;
+  display: flex;
+  font-size: 11px;
+  font-weight: 850;
+  height: 24px;
+  justify-content: center;
+  width: 24px;
+}
+
+.transaction-stage strong {
+  display: block;
+  font-size: 13px;
+  line-height: 1.25;
+  margin-bottom: 3px;
+}
+
+.transaction-stage.complete {
+  background: #f3f8f5;
+  border-color: #cde0d6;
+}
+
+.transaction-stage.complete .transaction-stage-dot,
+.transaction-stage.active .transaction-stage-dot {
+  background: #1f3a33;
+  border-color: #1f3a33;
+  color: #fff;
+}
+
+.transaction-stage.active {
+  border-color: #7ca693;
+  box-shadow: inset 0 0 0 1px rgb(124 166 147 / 0.28);
+}
+
+.transaction-stage.waiting,
+.transaction-stage.blocked {
+  background: #fff8df;
+  border-color: #e7cf7b;
+}
+
+.transaction-stage.failed {
+  background: #fff1ef;
+  border-color: #dfbbb6;
+}
+
+.transaction-stage.failed .transaction-stage-dot {
+  background: #8d3026;
+  border-color: #8d3026;
+  color: #fff;
+}
+
+.transaction-stage.pending {
+  opacity: 0.72;
+}
+
+.transaction-progress-facts {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin: 0;
+}
+
+.transaction-progress-facts dt {
+  color: #61716c;
+  font-size: 11px;
+  font-weight: 750;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.transaction-event-log {
+  border-top: 1px solid #edf2f0;
+  display: grid;
+  gap: 7px;
+  padding-top: 10px;
+}
+
+.transaction-event-title,
+.transaction-event {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.transaction-event {
+  border-left: 3px solid #dce5e2;
+  min-height: 28px;
+  padding-left: 8px;
+}
+
+.transaction-event span {
+  font-size: 13px;
+  font-weight: 750;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transaction-event.tone-good {
+  border-left-color: #438c65;
+}
+
+.transaction-event.tone-warn {
+  border-left-color: #c49a2e;
+}
+
+.transaction-event.tone-bad {
+  border-left-color: #8d3026;
+}
+
 .option-rank {
   align-items: center;
   border: 1px solid #dce5e2;
@@ -3639,6 +4236,18 @@ dd {
   display: none;
 }
 
+.settings-view .api-profiles-section {
+  background: var(--settings-container-bg);
+  border-color: rgb(32 52 46 / 0.12);
+  gap: 0;
+  padding: 14px;
+}
+
+.settings-view .api-profiles-layout {
+  gap: 0;
+  overflow: visible;
+}
+
 .settings-view .agent-card-form.card-setup-list,
 .settings-view .api-settings-form.card-setup-list,
 .settings-view .api-profile-sidebar {
@@ -3650,9 +4259,544 @@ dd {
   padding: 0;
 }
 
-.settings-view .agent-card-form.card-setup-list .card-setup-section-row {
+.settings-view .api-profile-sidebar {
+  border-bottom: 1px solid rgb(32 52 46 / 0.1);
+  margin: 0 0 10px;
+  padding: 0 0 12px;
+}
+
+.settings-view .agent-card-form.card-setup-list > .card-setup-row,
+.settings-view .api-settings-form.card-setup-list > .card-setup-row {
+  margin-inline: -14px;
+  padding-inline: 14px;
+}
+
+.settings-view .api-profile-config-form .card-setup-head-row {
+  grid-template-columns: 36px max-content minmax(0, 1fr) auto;
+  min-height: 48px;
+}
+
+.settings-view .api-profile-config-form .card-setup-actionbar {
+  border-bottom: 1px solid rgb(32 52 46 / 0.1);
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0 -12px;
+  padding: 12px;
+}
+
+.settings-view .api-profile-config-form .card-action-button {
+  grid-template-columns: auto minmax(0, auto);
+  justify-content: center;
+  min-width: 0;
+  padding-inline: 10px;
+  width: 100%;
+}
+
+.settings-view .api-profile-config-form .publish-card-action {
+  grid-column: span 2;
+}
+
+.settings-view .api-profile-config-form .card-field-row,
+.settings-view .api-profile-config-form .card-message-row {
+  align-items: center;
+  gap: 3px 20px;
+  grid-template-areas:
+    "label control"
+    "help control";
+  grid-template-columns: minmax(172px, 0.34fr) minmax(0, 1fr);
+  min-height: 56px;
+}
+
+.settings-view .api-profile-config-form .field-label {
+  align-self: end;
+  padding-top: 0;
+}
+
+.settings-view .api-profile-config-form .field-help {
+  align-self: start;
+  padding-top: 0;
+}
+
+.settings-view .api-profile-config-form .diagnostic-value,
+.settings-view .api-profile-config-form .inline-check-control {
+  align-self: center;
+}
+
+.settings-view .api-profile-config-form .diagnostic-value {
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.settings-view .api-profile-config-form .inline-check-control {
+  justify-self: start;
+}
+
+.settings-view .api-profile-config-form .api-check-row {
+  grid-template-areas: "label control";
+  grid-template-columns: minmax(172px, 0.34fr) minmax(0, 1fr);
+  min-height: 44px;
+}
+
+.settings-view .api-profile-config-form .api-check-row .field-label {
+  align-self: center;
+}
+
+.settings-view .api-profile-config-form .api-check-control {
+  justify-self: stretch;
+}
+
+.settings-view .api-status-check-control {
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto max-content;
+}
+
+.settings-view .api-profile-status {
+  overflow: hidden;
+  overflow-wrap: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-view .api-check-status {
+  overflow: hidden;
+  overflow-wrap: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-view .api-model-grid {
+  gap: 0;
+  margin-inline: -14px;
+}
+
+.settings-view .api-model-grid > .card-field-row {
   margin-inline: 0;
-  padding-inline: 0;
+  padding-inline: 14px;
+}
+
+.settings-view .api-model-grid > .card-field-row:first-child {
+  border-right: 1px solid rgb(32 52 46 / 0.1);
+}
+
+.settings-view .api-form-actions {
+  gap: 6px;
+  margin: 0 -14px 0;
+  min-height: 42px;
+  padding: 10px 14px 0;
+}
+
+.settings-view .api-form-actions .api-form-button {
+  min-width: 54px;
+}
+
+.settings-view .agent-card-settings-shell {
+  background: var(--settings-container-bg);
+  border-color: rgb(32 52 46 / 0.12);
+  border-bottom-color: transparent;
+  gap: 0 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 14px;
+}
+
+.settings-view .agent-card-settings-shell > .card-setup-actionbar {
+  align-items: center;
+  border-bottom: 0;
+  border-top: 0;
+  margin: 0;
+  min-height: 42px;
+  padding: 12px 0 0;
+}
+
+.settings-view .agent-card-settings-shell > .card-scan-actionbar {
+  grid-column: 1;
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+.settings-view .agent-card-settings-shell > .card-save-actionbar {
+  grid-column: 2;
+  justify-content: flex-end;
+}
+
+.settings-view .agent-card-settings-shell > .agent-card-settings-form {
+  border-bottom: 1px solid rgb(32 52 46 / 0.1);
+  grid-column: 1 / -1;
+}
+
+.settings-view .agent-card-settings-shell .card-action-button {
+  border-radius: var(--settings-button-radius);
+  height: var(--settings-button-height);
+  min-height: var(--settings-button-height);
+  padding: 0 10px;
+}
+
+.settings-view .agent-card-settings-shell .card-scan-status {
+  color: rgb(23 33 30 / 0.58);
+  font-size: 11px;
+  font-weight: 560;
+  line-height: 1.35;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-view .agent-card-settings-form .card-setup-row {
+  margin-inline: -14px;
+  padding-inline: 14px;
+}
+
+.settings-view .agent-card-settings-form .card-field-row,
+.settings-view .agent-card-settings-form .card-message-row {
+  align-items: center;
+  gap: 3px 20px;
+  grid-template-areas:
+    "label control"
+    "help control";
+  grid-template-columns: minmax(178px, 0.36fr) minmax(0, 1fr);
+  min-height: 58px;
+}
+
+.settings-view .agent-card-settings-form .field-label {
+  align-self: end;
+  padding-top: 0;
+}
+
+.settings-view .agent-card-settings-form .field-help {
+  align-self: start;
+  padding-top: 0;
+}
+
+.settings-view .agent-card-settings-form textarea {
+  min-height: 64px;
+}
+
+.settings-view .agent-card-settings-form .card-setup-section-row {
+  gap: 8px 20px;
+  grid-template-columns: minmax(178px, 0.36fr) minmax(0, 1fr);
+  min-height: 42px;
+  padding-block: 10px;
+}
+
+.settings-view .agent-card-settings-form .card-setup-section-row span {
+  align-self: center;
+  line-height: 1.35;
+}
+
+.settings-view .agent-card-settings-form .agent-env-empty {
+  background: transparent;
+  border: 0;
+  margin: 0 -14px;
+  padding: 14px;
+}
+
+.settings-view .agent-card-settings-form .agent-env-dashboard {
+  margin-inline: -14px;
+}
+
+.settings-view .agent-card-settings-form .agent-env-group:first-child {
+  border-top: 0;
+}
+
+.settings-view .agent-card-settings-form .agent-env-group {
+  padding-inline: 14px;
+}
+
+.settings-view .api-profile-empty {
+  background: rgb(255 255 255 / 0.48);
+  border: 1px dashed rgb(32 52 46 / 0.14);
+  border-radius: 8px;
+  color: rgb(23 33 30 / 0.55);
+  font-size: 12px;
+  margin: 2px 0 0;
+  padding: 9px 10px;
+}
+
+.settings-view button {
+  border: 0;
+  border-radius: var(--settings-button-radius);
+  box-shadow: none;
+  font-size: 11px;
+  font-weight: 650;
+  height: var(--settings-button-height);
+  line-height: 1;
+  min-height: var(--settings-button-height);
+  padding-block: 0;
+  transition: background-color 140ms ease, color 140ms ease, opacity 140ms ease;
+}
+
+.settings-view button:not(.api-profile-option):not(.api-profile-trigger):not(.api-profile-menu-option):not(.settings-record) {
+  background: var(--settings-button-bg);
+  color: var(--settings-button-color);
+  padding-inline: 8px;
+}
+
+.settings-view button:not(.api-profile-option):not(.api-profile-trigger):not(.api-profile-menu-option):not(.settings-record):hover,
+.settings-view button.secondary:hover,
+.settings-view button.ghost:hover,
+.settings-view button.danger.ghost:hover,
+.settings-view .api-form-button:hover,
+.settings-view .card-action-button:hover {
+  background: var(--settings-button-bg-hover);
+  border: 0;
+  color: var(--settings-button-color-hover);
+}
+
+.settings-view button.secondary,
+.settings-view button.ghost,
+.settings-view button.danger.ghost,
+.settings-view .api-form-button,
+.settings-view .card-action-button,
+.settings-view .settings-actions button,
+.settings-view .archive-record-actions button,
+.settings-view .card-market-search-button {
+  border: 0;
+  border-radius: var(--settings-button-radius);
+  height: var(--settings-button-height);
+  min-height: var(--settings-button-height);
+  padding-block: 0;
+}
+
+.settings-view .api-form-button.primary,
+.settings-view .publish-card-action,
+.settings-view form > button[type="submit"]:not(.secondary),
+.settings-view button[data-action="start"],
+.settings-view button[data-action="pwa-link-start"],
+.settings-view button[data-action="wallet-refresh"] {
+  background: var(--settings-button-primary-bg);
+  color: var(--settings-button-primary-color);
+}
+
+.settings-view .api-form-button.primary:hover,
+.settings-view .publish-card-action:hover,
+.settings-view form > button[type="submit"]:not(.secondary):hover,
+.settings-view button[data-action="start"]:hover,
+.settings-view button[data-action="pwa-link-start"]:hover,
+.settings-view button[data-action="wallet-refresh"]:hover {
+  background: var(--settings-button-primary-bg-hover);
+  color: var(--settings-button-primary-color-hover);
+}
+
+.settings-view .api-profile-option {
+  align-items: center;
+  border: 0;
+  border-radius: var(--settings-button-radius);
+  height: var(--settings-button-height);
+  min-height: var(--settings-button-height);
+  padding: 0 7px;
+}
+
+.settings-view .api-profile-option span {
+  display: none;
+}
+
+.settings-view .api-profile-badges {
+  grid-row: auto;
+}
+
+.settings-view .card-action-button {
+  align-items: center;
+  gap: 5px;
+  grid-template-columns: auto auto;
+  padding-inline: 8px;
+}
+
+.settings-view .card-action-text {
+  font-size: 11px;
+}
+
+.settings-view .icon-button {
+  height: var(--settings-button-height);
+  min-height: var(--settings-button-height);
+  padding: 0;
+  width: var(--settings-button-height);
+}
+
+.settings-view input:not(.api-role-input):not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+.settings-view select,
+.settings-view textarea,
+.settings-view .agent-card-form .card-field-row input:not(.api-role-input):not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+.settings-view .agent-card-form .card-field-row select,
+.settings-view .agent-card-form .card-field-row textarea {
+  background: var(--settings-input-bg);
+  border: var(--settings-input-border);
+  border-radius: var(--settings-input-radius);
+  min-height: var(--settings-input-height);
+  padding: 6px 9px;
+}
+
+.settings-view input:not(.api-role-input):not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):focus,
+.settings-view select:focus,
+.settings-view textarea:focus,
+.settings-view .agent-card-form .card-field-row input:not(.api-role-input):not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):focus,
+.settings-view .agent-card-form .card-field-row select:focus,
+.settings-view .agent-card-form .card-field-row textarea:focus {
+  background: var(--settings-input-bg);
+  border-color: var(--settings-input-border-focus);
+}
+
+.settings-view .api-profile-select {
+  -webkit-appearance: none;
+  appearance: none;
+  padding-right: 34px;
+}
+
+.settings-view .api-profile-menu {
+  display: grid;
+  min-width: 0;
+  position: relative;
+}
+
+.settings-view .api-profile-trigger {
+  align-items: center;
+  background: var(--settings-input-bg);
+  border: var(--settings-input-border);
+  border-radius: var(--settings-input-radius);
+  color: #17211e;
+  display: grid;
+  font-size: 12px;
+  font-weight: 650;
+  height: var(--settings-input-height);
+  line-height: 1.2;
+  min-height: var(--settings-input-height);
+  min-width: 0;
+  padding: 0 34px 0 10px;
+  position: relative;
+  text-align: left;
+  width: 100%;
+}
+
+.settings-view .api-profile-trigger::after {
+  border-bottom: 1.5px solid rgb(38 58 52 / 0.58);
+  border-right: 1.5px solid rgb(38 58 52 / 0.58);
+  content: "";
+  height: 7px;
+  pointer-events: none;
+  position: absolute;
+  right: 12px;
+  top: 11px;
+  transform: rotate(45deg);
+  transition: transform 140ms ease, top 140ms ease;
+  width: 7px;
+}
+
+.settings-view .api-profile-menu.open .api-profile-trigger::after {
+  top: 14px;
+  transform: rotate(225deg);
+}
+
+.settings-view .api-profile-trigger:hover,
+.settings-view .api-profile-trigger:focus-visible {
+  background: var(--settings-input-bg);
+  border-color: var(--settings-input-border-focus);
+  color: #17211e;
+}
+
+.settings-view .api-profile-trigger:disabled {
+  color: rgb(23 33 30 / 0.48);
+  cursor: default;
+}
+
+.settings-view .api-profile-trigger-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-view .api-profile-menu-list {
+  background: #fff;
+  border: var(--settings-input-border);
+  border-radius: 8px;
+  box-shadow: 0 12px 28px rgb(23 33 30 / 0.14);
+  display: grid;
+  gap: 2px;
+  left: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 4px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 5px);
+  z-index: 40;
+}
+
+.settings-view .api-profile-menu-option {
+  align-items: center;
+  background: var(--settings-button-bg);
+  border: 0;
+  border-radius: 6px;
+  color: var(--settings-button-color);
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  height: auto;
+  line-height: 1.25;
+  min-height: 42px;
+  min-width: 0;
+  padding: 7px 8px;
+  text-align: left;
+  width: 100%;
+}
+
+.settings-view .api-profile-menu-option:hover {
+  background: var(--settings-button-bg-hover);
+  color: var(--settings-button-color-hover);
+}
+
+.settings-view .api-profile-menu-option.active {
+  background: #e2e9e6;
+  box-shadow: inset 2px 0 0 var(--settings-input-border-focus);
+  color: var(--settings-button-color);
+}
+
+.settings-view .api-profile-option-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settings-view .api-profile-option-copy strong,
+.settings-view .api-profile-option-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-view .api-profile-option-copy strong {
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.settings-view .api-profile-option-copy small {
+  color: #6f7c77;
+  font-size: 11px;
+  font-weight: 420;
+  line-height: 1.3;
+}
+
+.settings-view .api-profile-menu-option .api-profile-badges {
+  align-items: center;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  grid-row: auto;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.settings-view .api-profile-menu-option .api-profile-badges em {
+  background: rgb(47 115 94 / 0.09);
+  border-radius: 999px;
+  color: #2f735e;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 750;
+  line-height: 1.2;
+  padding: 3px 5px 2px;
+  text-transform: uppercase;
 }
 
 .icon-button {
@@ -3685,7 +4829,8 @@ dd {
 .settings-section.agent-card-settings-shell {
   background: var(--settings-container-bg);
   border: 1px solid #dce5e2;
-  box-shadow: 0 1px 0 rgb(23 33 30 / 0.03);
+  border-bottom-color: transparent;
+  box-shadow: none;
   gap: 10px;
   justify-self: center;
   max-width: none;
@@ -3765,31 +4910,173 @@ dd {
   padding: 5px 8px;
 }
 
-.pwa-link-grid {
+.wallet-receive {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.settings-qr-layout,
+.pwa-link-grid,
+.wallet-dashboard {
   align-items: start;
   display: grid;
   gap: 12px;
   grid-template-columns: 252px minmax(0, 1fr);
+  min-width: 0;
 }
 
-.pwa-qr-frame {
+.wallet-visual {
+  align-content: start;
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  min-width: 0;
+}
+
+.settings-qr-frame,
+.pwa-qr-frame,
+.wallet-qr {
   align-items: center;
   aspect-ratio: 1;
-  background: #f7faf8;
-  border: 1px solid #dce5e2;
+  background: #fff;
+  border: 1px solid rgb(32 52 46 / 0.14);
   border-radius: 8px;
-  color: #8a9892;
+  box-shadow: none;
+  color: #7e9089;
   display: flex;
   justify-content: center;
   overflow: hidden;
   padding: 8px;
-  width: 100%;
+  width: min(252px, 100%);
 }
 
-.pwa-qr-frame svg {
+.settings-qr-frame svg,
+.pwa-qr-frame svg,
+.wallet-qr svg {
   display: block;
   height: 100%;
   width: 100%;
+}
+
+.wallet-token-row {
+  align-items: center;
+  color: #53635e;
+  display: flex;
+  font-size: 11px;
+  font-weight: 720;
+  gap: 8px;
+  justify-content: center;
+  letter-spacing: 0;
+  min-width: 0;
+  text-transform: uppercase;
+}
+
+.wallet-token-row span {
+  line-height: 1;
+  padding: 2px 0;
+}
+
+.settings-qr-details,
+.pwa-link-details,
+.wallet-details {
+  align-content: start;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-qr-meta,
+.wallet-metadata {
+  background: #fff;
+  border: 1px solid rgb(32 52 46 / 0.12);
+  border-radius: 8px;
+  display: grid;
+  gap: 0;
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.settings-qr-meta div,
+.wallet-metadata div {
+  align-items: center;
+  border-bottom: 1px solid rgb(32 52 46 / 0.08);
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(104px, 0.34fr) minmax(0, 1fr);
+  min-height: 34px;
+  min-width: 0;
+  padding: 7px 10px;
+}
+
+.settings-qr-meta div:last-child,
+.wallet-metadata div:last-child {
+  border-bottom: 0;
+}
+
+.settings-qr-meta dt {
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.settings-qr-meta dd {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wallet-metadata dd {
+  color: #17211e;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.wallet-address-card {
+  align-items: center;
+  background: #fff;
+  border: 1px solid rgb(32 52 46 / 0.12);
+  border-radius: 8px;
+  box-shadow: none;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(104px, 0.34fr) minmax(0, 1fr);
+  min-height: 38px;
+  min-width: 0;
+  padding: 8px 10px;
+}
+
+.wallet-address-card span {
+  color: #61716c;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.wallet-address-card code {
+  color: #17211e;
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.35;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.wallet-actions button {
+  align-items: center;
+  display: inline-flex;
+  gap: 5px;
+  justify-content: center;
+}
+
+.wallet-actions svg.app-icon {
+  height: 13px;
+  width: 13px;
 }
 
 .pwa-link-meta {
@@ -3797,7 +5084,14 @@ dd {
 }
 
 .pwa-link-note {
-  line-height: 1.45;
+  font-size: 12px;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.pwa-link-actions,
+.wallet-actions {
+  margin-top: 2px;
 }
 
 .seller-form {
@@ -3883,6 +5177,20 @@ label span {
 :root[data-theme="dark"] .new-chat-button,
 :root[data-theme="dark"] .order-side-state {
   color: #eaf2ee;
+}
+
+:root[data-theme="dark"] .settings-view {
+  --settings-button-bg: #d4e4dc;
+  --settings-button-bg-hover: #343a37;
+  --settings-button-color: #17211e;
+  --settings-button-color-hover: #fff;
+  --settings-button-primary-bg: #d4e4dc;
+  --settings-button-primary-bg-hover: #343a37;
+  --settings-button-primary-color: #17211e;
+  --settings-button-primary-color-hover: #fff;
+  --settings-input-bg: #111816;
+  --settings-input-border: 1px solid #34453f;
+  --settings-input-border-focus: #68a38f;
 }
 
 :root[data-theme="dark"] .app-shell,
@@ -3983,7 +5291,9 @@ label span {
 :root[data-theme="dark"] .market-project-dialog,
 :root[data-theme="dark"] .settings-section,
 :root[data-theme="dark"] .decision-card,
+:root[data-theme="dark"] .transaction-progress-panel,
 :root[data-theme="dark"] .local-agent-card,
+:root[data-theme="dark"] .external-work-lock,
 :root[data-theme="dark"] .chat-composer,
 :root[data-theme="dark"] .chat-message,
 :root[data-theme="dark"] .chat-order-event,
@@ -3993,6 +5303,53 @@ label span {
   background: #17211e;
   border-color: #2c3b35;
   color: #eaf2ee;
+}
+
+:root[data-theme="dark"] .transaction-progress-summary div,
+:root[data-theme="dark"] .transaction-progress-facts div,
+:root[data-theme="dark"] .transaction-stage {
+  background: #17211e;
+  border-color: #2c3b35;
+}
+
+:root[data-theme="dark"] .transaction-progress-summary strong,
+:root[data-theme="dark"] .transaction-progress-facts dd,
+:root[data-theme="dark"] .transaction-stage strong,
+:root[data-theme="dark"] .transaction-event span {
+  color: #eaf2ee;
+}
+
+:root[data-theme="dark"] .transaction-progress-head p,
+:root[data-theme="dark"] .transaction-progress-summary span,
+:root[data-theme="dark"] .transaction-stage small,
+:root[data-theme="dark"] .transaction-event small,
+:root[data-theme="dark"] .transaction-event-title span,
+:root[data-theme="dark"] .transaction-progress-facts dt {
+  color: #9baaa4;
+}
+
+:root[data-theme="dark"] .transaction-stage.complete {
+  background: #1b2a24;
+  border-color: #365245;
+}
+
+:root[data-theme="dark"] .transaction-stage.active {
+  border-color: #7ca693;
+}
+
+:root[data-theme="dark"] .transaction-stage.waiting,
+:root[data-theme="dark"] .transaction-stage.blocked {
+  background: #332c18;
+  border-color: #7b6427;
+}
+
+:root[data-theme="dark"] .transaction-stage.failed {
+  background: #321f1d;
+  border-color: #74443e;
+}
+
+:root[data-theme="dark"] .transaction-event-log {
+  border-top-color: #2c3b35;
 }
 
 :root[data-theme="dark"] .profile-menu-item,
@@ -4013,10 +5370,32 @@ label span {
   color: #eaf2ee;
 }
 
-:root[data-theme="dark"] .pwa-qr-frame {
-  background: #111816;
+:root[data-theme="dark"] .settings-qr-frame,
+:root[data-theme="dark"] .pwa-qr-frame,
+:root[data-theme="dark"] .wallet-qr {
+  background: #fff;
   border-color: #34453f;
-  color: #9baaa4;
+  color: #17211e;
+}
+
+:root[data-theme="dark"] .wallet-token-row {
+  color: #9caaa4;
+}
+
+:root[data-theme="dark"] .settings-qr-meta,
+:root[data-theme="dark"] .wallet-address-card {
+  background: #151d1a;
+  border-color: #2c3b35;
+}
+
+:root[data-theme="dark"] .settings-qr-meta div {
+  border-bottom-color: #2c3b35;
+}
+
+:root[data-theme="dark"] .settings-qr-meta dd,
+:root[data-theme="dark"] .wallet-metadata dd,
+:root[data-theme="dark"] .wallet-address-card code {
+  color: #eaf2ee;
 }
 
 :root[data-theme="dark"] .profile-menu-item:hover,
@@ -4136,6 +5515,18 @@ label span {
   border-color: #2c3b35;
 }
 
+:root[data-theme="dark"] .api-profile-select {
+  color: #eaf2ee;
+}
+
+:root[data-theme="dark"] .api-profile-select-wrap::after {
+  border-color: #9caaa4;
+}
+
+:root[data-theme="dark"] .api-profile-select:disabled {
+  color: #73837c;
+}
+
 :root[data-theme="dark"] .api-profile-option {
   color: #eaf2ee;
 }
@@ -4152,6 +5543,69 @@ label span {
 
 :root[data-theme="dark"] .api-profile-option em {
   color: #9ccabb;
+}
+
+:root[data-theme="dark"] .agent-card-form label.api-role-choice {
+  background: transparent;
+  color: #c9d6d0;
+}
+
+:root[data-theme="dark"] .api-role-text {
+  color: inherit;
+}
+
+:root[data-theme="dark"] .agent-card-form label.api-role-choice:hover {
+  color: #d8f4ec;
+}
+
+:root[data-theme="dark"] .agent-card-form label.api-role-choice:focus-within {
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .agent-card-form label.api-role-choice:has(.api-role-input:checked) {
+  color: #d8f4ec;
+}
+
+:root[data-theme="dark"] .api-role-dot {
+  background: #202b26;
+  border-color: #5a7168;
+}
+
+:root[data-theme="dark"] .api-role-dot::after {
+  border-color: #5a7168;
+}
+
+:root[data-theme="dark"] .api-role-input:checked + .api-role-dot {
+  background: #202b26;
+  border-color: #d8f4ec;
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .api-role-input:checked + .api-role-dot::after {
+  background: #d8f4ec;
+  border-color: #d8f4ec;
+}
+
+:root[data-theme="dark"] .api-form-actions {
+  border-top-color: #2c3b35;
+}
+
+:root[data-theme="dark"] .api-form-button {
+  background: #1b2521;
+  border-color: #34453f;
+  color: #c9d6d0;
+}
+
+:root[data-theme="dark"] .api-form-button:hover {
+  background: #202b26;
+  border-color: #466056;
+  color: #eaf2ee;
+}
+
+:root[data-theme="dark"] .api-form-button.primary {
+  background: #d8f4ec;
+  border-color: #d8f4ec;
+  color: #14211d;
 }
 
 :root[data-theme="dark"] .card-setup-row {
@@ -4203,12 +5657,145 @@ label span {
   color: #16221e;
 }
 
-:root[data-theme="dark"] .diagnose-progress {
-  background: rgb(156 202 187 / 0.18);
+:root[data-theme="dark"] .settings-view button,
+:root[data-theme="dark"] .settings-view button.secondary,
+:root[data-theme="dark"] .settings-view button.ghost,
+:root[data-theme="dark"] .settings-view button.danger.ghost,
+:root[data-theme="dark"] .settings-view .api-form-button,
+:root[data-theme="dark"] .settings-view .card-action-button,
+:root[data-theme="dark"] .settings-view .settings-actions button,
+:root[data-theme="dark"] .settings-view .archive-record-actions button,
+:root[data-theme="dark"] .settings-view .card-market-search-button {
+  border: 0;
 }
 
-:root[data-theme="dark"] .diagnose-progress span {
-  background: #9ccabb;
+:root[data-theme="dark"] .settings-view .api-profiles-section {
+  background: #151d1a;
+  border-color: #2c3b35;
+}
+
+:root[data-theme="dark"] .settings-view .api-profile-sidebar {
+  border-bottom-color: #2c3b35;
+}
+
+:root[data-theme="dark"] .settings-view .api-model-grid > .card-field-row:first-child {
+  border-right-color: #2c3b35;
+}
+
+:root[data-theme="dark"] .settings-view .agent-card-settings-shell {
+  background: #151d1a;
+  border-color: #2c3b35;
+  border-bottom-color: transparent;
+}
+
+:root[data-theme="dark"] .settings-view .agent-card-settings-shell > .agent-card-settings-form {
+  border-bottom-color: #2c3b35;
+}
+
+:root[data-theme="dark"] .settings-view .agent-card-settings-form .agent-env-empty {
+  background: transparent;
+}
+
+:root[data-theme="dark"] .settings-view .agent-card-settings-shell .card-scan-status {
+  color: #9caaa4;
+}
+
+:root[data-theme="dark"] .settings-view button:not(.api-profile-trigger):not(.api-profile-menu-option),
+:root[data-theme="dark"] .settings-view .api-form-button.primary,
+:root[data-theme="dark"] .settings-view .publish-card-action,
+:root[data-theme="dark"] .settings-view form > button[type="submit"]:not(.secondary),
+:root[data-theme="dark"] .settings-view button[data-action="start"],
+:root[data-theme="dark"] .settings-view button[data-action="pwa-link-start"],
+:root[data-theme="dark"] .settings-view button[data-action="wallet-refresh"] {
+  background: var(--settings-button-bg);
+  color: var(--settings-button-color);
+}
+
+:root[data-theme="dark"] .settings-view button:not(.api-profile-option):not(.api-profile-trigger):not(.api-profile-menu-option):not(.settings-record):hover,
+:root[data-theme="dark"] .settings-view button.secondary:hover,
+:root[data-theme="dark"] .settings-view button.ghost:hover,
+:root[data-theme="dark"] .settings-view button.danger.ghost:hover,
+:root[data-theme="dark"] .settings-view .api-form-button:hover,
+:root[data-theme="dark"] .settings-view .card-action-button:hover {
+  background: var(--settings-button-bg-hover);
+  color: var(--settings-button-color-hover);
+}
+
+:root[data-theme="dark"] .settings-view .api-form-button.primary:hover,
+:root[data-theme="dark"] .settings-view .publish-card-action:hover,
+:root[data-theme="dark"] .settings-view form > button[type="submit"]:not(.secondary):hover,
+:root[data-theme="dark"] .settings-view button[data-action="start"]:hover,
+:root[data-theme="dark"] .settings-view button[data-action="pwa-link-start"]:hover,
+:root[data-theme="dark"] .settings-view button[data-action="wallet-refresh"]:hover {
+  background: var(--settings-button-primary-bg-hover);
+  color: var(--settings-button-primary-color-hover);
+}
+
+:root[data-theme="dark"] .settings-view .api-profile-trigger {
+  background: var(--settings-input-bg);
+  border: var(--settings-input-border);
+  color: #eaf2ee;
+}
+
+:root[data-theme="dark"] .settings-view .api-profile-trigger::after {
+  border-color: #9caaa4;
+}
+
+:root[data-theme="dark"] .settings-view .api-profile-trigger:hover,
+:root[data-theme="dark"] .settings-view .api-profile-trigger:focus-visible {
+  background: var(--settings-input-bg);
+  border-color: var(--settings-input-border-focus);
+  color: #eaf2ee;
+}
+
+:root[data-theme="dark"] .settings-view .api-profile-trigger:disabled {
+  color: #73837c;
+}
+
+:root[data-theme="dark"] .settings-view .api-profile-menu-list {
+  background: #151d1a;
+  border-color: #2c3b35;
+  box-shadow: 0 14px 32px rgb(0 0 0 / 0.34);
+}
+
+:root[data-theme="dark"] .settings-view .api-profile-menu-option {
+  background: var(--settings-button-bg);
+  color: var(--settings-button-color);
+}
+
+:root[data-theme="dark"] .settings-view .api-profile-menu-option:hover {
+  background: var(--settings-button-bg-hover);
+  color: var(--settings-button-color-hover);
+}
+
+:root[data-theme="dark"] .settings-view .api-profile-menu-option.active {
+  background: #e2e9e6;
+  color: var(--settings-button-color);
+}
+
+:root[data-theme="dark"] .settings-view .api-profile-option-copy small {
+  color: #9caaa4;
+}
+
+:root[data-theme="dark"] .settings-view .api-profile-menu-option .api-profile-badges em {
+  background: rgb(156 202 187 / 0.12);
+  color: #9ccabb;
+}
+
+:root[data-theme="dark"] .settings-view .api-check-status {
+  color: #9caaa4;
+}
+
+:root[data-theme="dark"] .settings-view .api-check-status.passed {
+  color: #7ee1b0;
+}
+
+:root[data-theme="dark"] .settings-view .api-check-status.failed {
+  color: #ff9a8f;
+}
+
+:root[data-theme="dark"] .settings-view .api-profile-status {
+  color: #c9d6d0;
 }
 
 :root[data-theme="dark"] .local-agent-card strong,
@@ -4225,23 +5812,42 @@ label span {
 :root[data-theme="dark"] .system-attributes-head span,
 :root[data-theme="dark"] .market-project-head small,
 :root[data-theme="dark"] .permission-menu-text small,
+:root[data-theme="dark"] .external-work-lock span,
 :root[data-theme="dark"] .work-or-divider {
   color: #9caaa4;
 }
 
 :root[data-theme="dark"] .field-label,
-:root[data-theme="dark"] .diagnostic-value {
+:root[data-theme="dark"] .diagnostic-value,
+:root[data-theme="dark"] .agent-env-empty strong,
+:root[data-theme="dark"] .agent-env-group h3,
+:root[data-theme="dark"] .agent-env-item strong {
   color: #eaf2ee;
 }
 
-:root[data-theme="dark"] .agent-card-form .card-field-row input,
+:root[data-theme="dark"] .agent-env-empty,
+:root[data-theme="dark"] .agent-env-group {
+  border-color: #2c3b35;
+}
+
+:root[data-theme="dark"] .agent-env-empty span,
+:root[data-theme="dark"] .agent-env-item span {
+  color: #9caaa4;
+}
+
+:root[data-theme="dark"] .agent-env-item {
+  background: #18211e;
+  border-color: #2c3b35;
+}
+
+:root[data-theme="dark"] .agent-card-form .card-field-row input:not(.api-role-input):not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
 :root[data-theme="dark"] .agent-card-form .card-field-row select,
 :root[data-theme="dark"] .agent-card-form .card-field-row textarea {
   background: #111816;
   border-color: #34453f;
 }
 
-:root[data-theme="dark"] .agent-card-form .card-field-row input:focus,
+:root[data-theme="dark"] .agent-card-form .card-field-row input:not(.api-role-input):not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):focus,
 :root[data-theme="dark"] .agent-card-form .card-field-row select:focus,
 :root[data-theme="dark"] .agent-card-form .card-field-row textarea:focus {
   background: #0e1412;
@@ -4389,6 +5995,87 @@ label span {
     grid-column: 1 / -1;
   }
 
+  .settings-view .api-profile-config-form .card-field-row,
+  .settings-view .api-profile-config-form .card-message-row {
+    align-items: stretch;
+    gap: 7px;
+    grid-template-areas:
+      "label"
+      "help"
+      "control";
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-view .api-profile-config-form .api-check-row {
+    align-items: stretch;
+    gap: 7px;
+    grid-template-areas:
+      "label"
+      "control";
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .api-status-check-control {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .settings-view .api-status-check-control {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .api-status-check-control .api-profile-status {
+    grid-column: 1 / -1;
+  }
+
+  .settings-view .api-status-check-control .api-profile-status {
+    grid-column: 1 / -1;
+  }
+
+  .api-model-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-view .api-model-grid > .card-field-row:first-child {
+    border-right: 0;
+  }
+
+  .settings-view .api-profile-config-form .card-setup-actionbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-view .api-profile-config-form .publish-card-action {
+    grid-column: auto;
+  }
+
+  .settings-view .agent-card-settings-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-view .agent-card-settings-shell > .card-scan-actionbar,
+  .settings-view .agent-card-settings-shell > .card-save-actionbar {
+    grid-column: 1;
+  }
+
+  .settings-view .agent-card-settings-shell > .card-save-actionbar {
+    border-top: 0;
+    padding-top: 0;
+  }
+
+  .settings-view .agent-card-settings-form .card-field-row,
+  .settings-view .agent-card-settings-form .card-message-row {
+    align-items: stretch;
+    gap: 7px;
+    grid-template-areas:
+      "label"
+      "help"
+      "control";
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-view .agent-card-settings-form .card-setup-section-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .card-status-chip {
     justify-self: start;
   }
@@ -4411,6 +6098,11 @@ label span {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .external-work-lock {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .chat-composer {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -4429,10 +6121,34 @@ label span {
 
   .two,
   .agent-card-grid,
+  .agent-env-grid,
   .three,
+  .settings-qr-layout,
   .pwa-link-grid,
+  .wallet-dashboard,
+  .settings-qr-meta,
+  .wallet-metadata,
+  .wallet-address-card,
   .settings-actions.two-col {
     grid-template-columns: 1fr;
+  }
+
+  .settings-qr-frame,
+  .pwa-qr-frame,
+  .wallet-qr {
+    justify-self: center;
+  }
+
+  .settings-qr-meta div,
+  .wallet-address-card {
+    align-items: start;
+    gap: 3px;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-qr-meta dd {
+    overflow-wrap: anywhere;
+    white-space: normal;
   }
 
   .card-market-form {

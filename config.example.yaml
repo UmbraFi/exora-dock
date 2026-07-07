@@ -6,6 +6,10 @@ cache_max_mb: 256
 data_dir: "./data"
 fetch_interval_sec: 10
 program_id: ""         # Solana program ID for miner registry
+escrow_program_id: ""  # Solana escrow program ID for chain-backed payments
+solana_network: "devnet"
+usdc_mint: ""          # USDC mint for SPL-token escrow (devnet/mainnet-specific)
+usdc_decimals: 6
 mode: "hybrid"         # requester, provider, or hybrid
 cloud_url: ""          # Exora Cloud URL; empty keeps MVP flows local
 cloud_token_path: ""   # Defaults to data_dir/cloud-token.json
@@ -61,9 +65,9 @@ llm_model: "gpt-5.5"                         # Legacy fallback; mirrors research
 seller_agent:
   enabled: false
   auto_quote: true
-  auto_complete_text_tasks: false
+  auto_accept_low_risk: false
   provider_pubkey: ""              # Defaults to this Dock's local provider id
   poll_interval_sec: 2
   default_quote_price: 0
-  default_quote_currency: "USD"
+  default_quote_currency: "USDC"
   default_estimated_seconds: 60

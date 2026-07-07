@@ -67,6 +67,110 @@ func TestAgentCardDraftSaveAndPublishValidation(t *testing.T) {
 	}
 }
 
+func TestAgentCardBuyerSellerNotesPersistIndependently(t *testing.T) {
+	c, err := cache.New(128, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	cards := agentcard.NewStore(c)
+	handler := NewHandler(c, nil, nil, chat.NewHub(), dht.NewRing(), nil, nil, nil, nil, nil, nil, nil, nil, "dock-test", RuntimeStores{
+		AgentCards: cards,
+		CardDiagnostics: agentcard.DiagnosticsConfig{
+			LLMProvider:   "https://api.openai.com/v1",
+			LLMConfigured: true,
+			MCPAvailable:  true,
+		},
+	})
+	router := chi.NewRouter()
+	router.Post("/agent-cards/draft", handler.DraftAgentCard)
+	router.Put("/agent-cards/{role}", handler.SaveAgentCard)
+
+	buyerDraft := draftAgentCardForTest(t, router, `{"role":"buyer","buyer":{"displayName":"Buyer Desk","notes":"Buyer owner note"}}`)
+	if buyerDraft.ManualFields.Buyer.Notes != "Buyer owner note" {
+		t.Fatalf("buyer draft note = %q", buyerDraft.ManualFields.Buyer.Notes)
+	}
+	buyerSaved, _ := saveAgentCardForTest(t, router, "buyer", buyerDraft)
+	if buyerSaved.ManualFields.Buyer.Notes != "Buyer owner note" {
+		t.Fatalf("buyer saved note = %q", buyerSaved.ManualFields.Buyer.Notes)
+	}
+
+	sellerDraft := draftAgentCardForTest(t, router, `{"role":"seller","seller":{"displayName":"Seller Desk","capabilitySummary":"Seller provider note"}}`)
+	if sellerDraft.ManualFields.Seller.CapabilitySummary != "Seller provider note" {
+		t.Fatalf("seller draft note = %q", sellerDraft.ManualFields.Seller.CapabilitySummary)
+	}
+	sellerSaved, _ := saveAgentCardForTest(t, router, "seller", sellerDraft)
+	if sellerSaved.ManualFields.Seller.CapabilitySummary != "Seller provider note" {
+		t.Fatalf("seller saved note = %q", sellerSaved.ManualFields.Seller.CapabilitySummary)
+	}
+
+	buyerAfterSeller, ok := cards.Get(agentcard.RoleBuyer)
+	if !ok || buyerAfterSeller.ManualFields.Buyer.Notes != "Buyer owner note" {
+		t.Fatalf("seller save should not overwrite buyer note: ok=%v card=%#v", ok, buyerAfterSeller.ManualFields.Buyer)
+	}
+
+	buyerAfterSeller.ManualFields.Buyer.Notes = ""
+	clearedBuyer, raw := saveAgentCardForTest(t, router, "buyer", buyerAfterSeller)
+	if clearedBuyer.ManualFields.Buyer.Notes != "" {
+		t.Fatalf("empty buyer note should clear note, got %q", clearedBuyer.ManualFields.Buyer.Notes)
+	}
+	if bytes.Contains(raw, []byte(`"notes"`)) {
+		t.Fatalf("empty buyer note should be omitted from saved response: %s", string(raw))
+	}
+
+	sellerAfterBuyerClear, ok := cards.Get(agentcard.RoleSeller)
+	if !ok || sellerAfterBuyerClear.ManualFields.Seller.CapabilitySummary != "Seller provider note" {
+		t.Fatalf("buyer save should not overwrite seller note: ok=%v card=%#v", ok, sellerAfterBuyerClear.ManualFields.Seller)
+	}
+
+	sellerAfterBuyerClear.ManualFields.Seller.CapabilitySummary = ""
+	clearedSeller, raw := saveAgentCardForTest(t, router, "seller", sellerAfterBuyerClear)
+	if clearedSeller.ManualFields.Seller.CapabilitySummary != "" {
+		t.Fatalf("empty seller note should clear note, got %q", clearedSeller.ManualFields.Seller.CapabilitySummary)
+	}
+	if bytes.Contains(raw, []byte(`"capabilitySummary"`)) {
+		t.Fatalf("empty seller note should be omitted from saved response: %s", string(raw))
+	}
+}
+
+func draftAgentCardForTest(t *testing.T, router http.Handler, body string) agentcard.AgentCard {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/agent-cards/draft", bytes.NewReader([]byte(body)))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("draft status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Card agentcard.AgentCard `json:"card"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	return response.Card
+}
+
+func saveAgentCardForTest(t *testing.T, router http.Handler, role string, card agentcard.AgentCard) (agentcard.AgentCard, []byte) {
+	t.Helper()
+	body, err := json.Marshal(agentcard.SaveRequest{Card: card})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPut, "/agent-cards/"+role, bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Card agentcard.AgentCard `json:"card"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	return response.Card, rec.Body.Bytes()
+}
+
 func TestAgentCardPublishPropagatesCloudReviewRejection(t *testing.T) {
 	handler, cards := agentCardPublishHandler(t, http.StatusUnprocessableEntity, map[string]any{
 		"error": "agent card rejected by review",

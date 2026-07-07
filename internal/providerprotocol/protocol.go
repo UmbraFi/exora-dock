@@ -86,6 +86,12 @@ type NegotiationReply struct {
 	DataProvenance       string             `json:"dataProvenance,omitempty"`
 	RetentionCommitment  string             `json:"retentionCommitment,omitempty"`
 	SellerApprovalMode   string             `json:"sellerApprovalMode,omitempty"`
+	ValuationDecision    string             `json:"valuationDecision,omitempty"`
+	SellerAgentCardID    string             `json:"sellerAgentCardId,omitempty"`
+	CapabilitySummary    string             `json:"capabilitySummary,omitempty"`
+	PricingPolicyID      string             `json:"pricingPolicyId,omitempty"`
+	ValuationHash        string             `json:"valuationHash,omitempty"`
+	QuoteBindingHash     string             `json:"quoteBindingHash,omitempty"`
 	Notes                string             `json:"notes,omitempty"`
 	Runtime              string             `json:"runtime,omitempty"`
 	Docker               task.DockerRunSpec `json:"docker,omitempty"`
@@ -93,6 +99,7 @@ type NegotiationReply struct {
 	RejectReason         string             `json:"rejectReason,omitempty"`
 	RejectRiskSummary    string             `json:"rejectRiskSummary,omitempty"`
 	RejectMissingInputs  []string           `json:"rejectMissingInputs,omitempty"`
+	NeedsNegotiationReason string           `json:"needsNegotiationReason,omitempty"`
 	Error                string             `json:"error,omitempty"`
 	Timestamp            string             `json:"timestamp"`
 	Signature            string             `json:"signature,omitempty"`
@@ -108,8 +115,32 @@ type JobRequest struct {
 	QuoteID         string            `json:"quoteId,omitempty"`
 	ApprovalID      string            `json:"approvalId,omitempty"`
 	PaymentID       string            `json:"paymentId,omitempty"`
+	PaymentEvidence *PaymentEvidence  `json:"paymentEvidence,omitempty"`
 	Timestamp       string            `json:"timestamp"`
 	Signature       string            `json:"signature"`
+}
+
+type PaymentEvidence struct {
+	EvidenceID     string `json:"evidenceId,omitempty"`
+	PaymentID      string `json:"paymentId,omitempty"`
+	Status         string `json:"status,omitempty"`
+	Chain          string `json:"chain,omitempty"`
+	Network        string `json:"network,omitempty"`
+	ProgramID      string `json:"programId,omitempty"`
+	EscrowPDA      string `json:"escrowPda,omitempty"`
+	TxSignature    string `json:"txSignature,omitempty"`
+	Slot           uint64 `json:"slot,omitempty"`
+	Finality       string `json:"finality,omitempty"`
+	BuyerPubkey    string `json:"buyerPubkey,omitempty"`
+	SellerPubkey   string `json:"sellerPubkey,omitempty"`
+	AmountLamports uint64 `json:"amountLamports,omitempty"`
+	AmountAtomic   uint64 `json:"amountAtomic,omitempty"`
+	Currency       string `json:"currency,omitempty"`
+	Mint           string `json:"mint,omitempty"`
+	Decimals       uint8  `json:"decimals,omitempty"`
+	NativeSOL      bool   `json:"nativeSol,omitempty"`
+	ContentHash    string `json:"contentHash,omitempty"`
+	Source         string `json:"source,omitempty"`
 }
 
 type JobReply struct {

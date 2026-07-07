@@ -208,32 +208,12 @@ func main() {
 		},
 	})
 
-	llmConfig := agent.LLMClientConfig{
-		BaseURL:        cfg.LLMBaseURL,
-		APIKey:         cfg.LLMAPIKey,
-		ProviderPreset: cfg.LLMProviderPreset,
-		WireAPI:        cfg.LLMWireAPI,
-		Capabilities: agent.LLMCapabilities{
-			SupportsResponses:          cfg.LLMCapabilities.SupportsResponses,
-			SupportsChatCompletions:    cfg.LLMCapabilities.SupportsChatCompletions,
-			SupportsSystemMessage:      cfg.LLMCapabilities.SupportsSystemMessage,
-			SupportsJSONResponseFormat: cfg.LLMCapabilities.SupportsJSONResponseFormat,
-			SupportsStreaming:          cfg.LLMCapabilities.SupportsStreaming,
-			SupportsTools:              cfg.LLMCapabilities.SupportsTools,
-			SupportsReasoningEffort:    cfg.LLMCapabilities.SupportsReasoningEffort,
-		},
-		ExtraHeaders:            cfg.LLMExtraHeaders,
-		DisableResponseStorage:  cfg.LLMDisableResponseStorage,
-		ResearchModel:           cfg.LLMResearchModel,
-		ResearchReasoningEffort: cfg.LLMResearchReasoningEffort,
-		UtilityModel:            cfg.LLMUtilityModel,
-		UtilityReasoningEffort:  cfg.LLMUtilityReasoningEffort,
-	}
+	buyerLLMConfig := llmClientConfigFromRole(cfg.BuyerLLM)
 
 	// Review agent
-	reviewAgent := agent.NewReviewAgentWithConfig(llmConfig, ipfsClient)
+	reviewAgent := agent.NewReviewAgentWithConfig(buyerLLMConfig, ipfsClient)
 	if reviewAgent.Configured() {
-		log.Printf("[agent] review agent configured with model %s", cfg.LLMResearchModel)
+		log.Printf("[agent] review agent configured with model %s", cfg.BuyerLLM.ResearchModel)
 	}
 
 	sellerProvider := strings.TrimSpace(cfg.SellerAgent.ProviderPubkey)
@@ -241,34 +221,29 @@ func main() {
 		sellerProvider = selfPubkey
 	}
 	sellerAgent := agent.NewSellerAgent(agent.SellerAgentConfig{
-		Enabled:               cfg.SellerAgent.Enabled,
-		AutoQuote:             cfg.SellerAgent.AutoQuote,
-		AutoCompleteTextTasks: cfg.SellerAgent.AutoCompleteTextTasks,
-		ProviderPubkey:        sellerProvider,
-		PollInterval:          time.Duration(cfg.SellerAgent.PollIntervalSec) * time.Second,
-		DefaultQuotePrice:     cfg.SellerAgent.DefaultQuotePrice,
-		DefaultQuoteCurrency:  cfg.SellerAgent.DefaultQuoteCurrency,
-		DefaultEstimatedSec:   cfg.SellerAgent.DefaultEstimatedSec,
-		LLMBaseURL:            cfg.LLMBaseURL,
-		LLMAPIKey:             cfg.LLMAPIKey,
-		LLMProviderPreset:     cfg.LLMProviderPreset,
-		LLMModel:              cfg.LLMModel,
-		LLMWireAPI:            cfg.LLMWireAPI,
-		LLMCapabilities: agent.LLMCapabilities{
-			SupportsResponses:          cfg.LLMCapabilities.SupportsResponses,
-			SupportsChatCompletions:    cfg.LLMCapabilities.SupportsChatCompletions,
-			SupportsSystemMessage:      cfg.LLMCapabilities.SupportsSystemMessage,
-			SupportsJSONResponseFormat: cfg.LLMCapabilities.SupportsJSONResponseFormat,
-			SupportsStreaming:          cfg.LLMCapabilities.SupportsStreaming,
-			SupportsTools:              cfg.LLMCapabilities.SupportsTools,
-			SupportsReasoningEffort:    cfg.LLMCapabilities.SupportsReasoningEffort,
-		},
-		LLMExtraHeaders:            cfg.LLMExtraHeaders,
-		LLMResearchModel:           cfg.LLMResearchModel,
-		LLMResearchReasoningEffort: cfg.LLMResearchReasoningEffort,
-		LLMUtilityModel:            cfg.LLMUtilityModel,
-		LLMUtilityReasoningEffort:  cfg.LLMUtilityReasoningEffort,
-		LLMDisableResponseStorage:  cfg.LLMDisableResponseStorage,
+		Enabled:                    cfg.SellerAgent.Enabled,
+		AutoQuote:                  cfg.SellerAgent.AutoQuote,
+		AutoAcceptLowRisk:          cfg.SellerAgent.AutoAcceptLowRisk,
+		AutoCompleteTextTasks:      cfg.SellerAgent.AutoCompleteTextTasks,
+		ProviderPubkey:             sellerProvider,
+		PollInterval:               time.Duration(cfg.SellerAgent.PollIntervalSec) * time.Second,
+		DefaultQuotePrice:          cfg.SellerAgent.DefaultQuotePrice,
+		DefaultQuoteCurrency:       cfg.SellerAgent.DefaultQuoteCurrency,
+		DefaultEstimatedSec:        cfg.SellerAgent.DefaultEstimatedSec,
+		DataDir:                    cfg.DataDir,
+		PricingPolicyPath:          filepath.Join(cfg.DataDir, "seller_pricing_policy.json"),
+		LLMBaseURL:                 cfg.SellerLLM.BaseURL,
+		LLMAPIKey:                  cfg.SellerLLM.APIKey,
+		LLMProviderPreset:          cfg.SellerLLM.ProviderPreset,
+		LLMModel:                   cfg.SellerLLM.Model,
+		LLMWireAPI:                 cfg.SellerLLM.WireAPI,
+		LLMCapabilities:            llmCapabilitiesFromConfig(cfg.SellerLLM.Capabilities),
+		LLMExtraHeaders:            cfg.SellerLLM.ExtraHeaders,
+		LLMResearchModel:           cfg.SellerLLM.ResearchModel,
+		LLMResearchReasoningEffort: cfg.SellerLLM.ResearchReasoningEffort,
+		LLMUtilityModel:            cfg.SellerLLM.UtilityModel,
+		LLMUtilityReasoningEffort:  cfg.SellerLLM.UtilityReasoningEffort,
+		LLMDisableResponseStorage:  cfg.SellerLLM.DisableResponseStorage,
 	}, taskStore, resourceStore).AttachNegotiations(negotiationStore).AttachExecutor(taskExecutor)
 	if sellerAgent.Configured() {
 		go sellerAgent.Run(ctx)
@@ -316,10 +291,10 @@ func main() {
 			Discovery:      &discoveryManifest,
 			AgentCards:     agentCardStore,
 			AgentRuns:      agentRunStore,
-			AgentLLMConfig: llmConfig,
+			AgentLLMConfig: buyerLLMConfig,
 			CardDiagnostics: agentcard.DiagnosticsConfig{
-				LLMProvider:        cfg.LLMBaseURL,
-				LLMConfigured:      strings.TrimSpace(cfg.LLMAPIKey) != "" || providerDoesNotRequireAPIKey(cfg.LLMProviderPreset, cfg.LLMBaseURL),
+				LLMProvider:        cfg.BuyerLLM.BaseURL,
+				LLMConfigured:      strings.TrimSpace(cfg.BuyerLLM.APIKey) != "" || providerDoesNotRequireAPIKey(cfg.BuyerLLM.ProviderPreset, cfg.BuyerLLM.BaseURL),
 				SellerAgentEnabled: cfg.SellerAgent.Enabled,
 				CommandExecutor:    cfg.Provider.AllowCommandExecutor,
 				MCPAvailable:       discoveryManifest.ExecutablePath != "",
@@ -329,8 +304,15 @@ func main() {
 				TokenPath: cfg.CloudTokenPath,
 				DockID:    cfg.DockID,
 			},
-			Auth:           authStore,
-			AllowedOrigins: cfg.CORSAllowedOrigins,
+			EscrowProgramID: cfg.EscrowProgramID,
+			SolanaNetwork:   cfg.SolanaNetwork,
+			USDCMint:        cfg.USDCMint,
+			USDCDecimals:    cfg.USDCDecimals,
+			CloudURL:        cfg.CloudURL,
+			CloudTokenPath:  cfg.CloudTokenPath,
+			DockID:          cfg.DockID,
+			Auth:            authStore,
+			AllowedOrigins:  cfg.CORSAllowedOrigins,
 		}),
 	}
 
@@ -423,6 +405,34 @@ func providerDoesNotRequireAPIKey(preset, baseURL string) bool {
 	}
 }
 
+func llmClientConfigFromRole(role config.RoleLLMConfig) agent.LLMClientConfig {
+	return agent.LLMClientConfig{
+		BaseURL:                 role.BaseURL,
+		APIKey:                  role.APIKey,
+		ProviderPreset:          role.ProviderPreset,
+		WireAPI:                 role.WireAPI,
+		Capabilities:            llmCapabilitiesFromConfig(role.Capabilities),
+		ExtraHeaders:            role.ExtraHeaders,
+		DisableResponseStorage:  role.DisableResponseStorage,
+		ResearchModel:           role.ResearchModel,
+		ResearchReasoningEffort: role.ResearchReasoningEffort,
+		UtilityModel:            role.UtilityModel,
+		UtilityReasoningEffort:  role.UtilityReasoningEffort,
+	}
+}
+
+func llmCapabilitiesFromConfig(caps config.LLMCapabilities) agent.LLMCapabilities {
+	return agent.LLMCapabilities{
+		SupportsResponses:          caps.SupportsResponses,
+		SupportsChatCompletions:    caps.SupportsChatCompletions,
+		SupportsSystemMessage:      caps.SupportsSystemMessage,
+		SupportsJSONResponseFormat: caps.SupportsJSONResponseFormat,
+		SupportsStreaming:          caps.SupportsStreaming,
+		SupportsTools:              caps.SupportsTools,
+		SupportsReasoningEffort:    caps.SupportsReasoningEffort,
+	}
+}
+
 func runWalletCommand(args []string) error {
 	cfgPath := "config.yaml"
 	if raw := strings.TrimSpace(os.Getenv("EXORA_CONFIG")); raw != "" {
@@ -434,20 +444,11 @@ func runWalletCommand(args []string) error {
 	}
 	store := wallet.NewStore(cfg.WalletPath)
 	if len(args) == 0 {
-		return fmt.Errorf("usage: exora-dock wallet create|bind|show")
+		return fmt.Errorf("usage: exora-dock wallet create|show")
 	}
 	switch args[0] {
 	case "create":
 		status, err := store.Create(wallet.CreateRequest{})
-		if err != nil {
-			return err
-		}
-		return printJSON(status)
-	case "bind":
-		if len(args) < 2 {
-			return fmt.Errorf("usage: exora-dock wallet bind <solana-address>")
-		}
-		status, err := store.Bind(wallet.BindRequest{Address: args[1]})
 		if err != nil {
 			return err
 		}

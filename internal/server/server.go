@@ -25,6 +25,7 @@ import (
 	"github.com/exora-dock/exora-dock/internal/resource"
 	"github.com/exora-dock/exora-dock/internal/task"
 	"github.com/exora-dock/exora-dock/internal/wallet"
+	"github.com/exora-dock/exora-dock/internal/workrun"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
@@ -45,6 +46,14 @@ type RuntimeStores struct {
 	AgentLLMConfig  agent.LLMClientConfig
 	CardDiagnostics agentcard.DiagnosticsConfig
 	CardPublisher   agentcard.CloudPublisher
+	WorkRuns        *workrun.Store
+	EscrowProgramID string
+	SolanaNetwork   string
+	USDCMint        string
+	USDCDecimals    uint8
+	CloudURL        string
+	CloudTokenPath  string
+	DockID          string
 	Auth            *localauth.Store
 	AllowedOrigins  []string
 }
@@ -69,6 +78,14 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 		AgentLLMConfig:  stores.AgentLLMConfig,
 		CardDiagnostics: stores.CardDiagnostics,
 		CardPublisher:   stores.CardPublisher,
+		WorkRuns:        stores.WorkRuns,
+		EscrowProgramID: stores.EscrowProgramID,
+		SolanaNetwork:   stores.SolanaNetwork,
+		USDCMint:        stores.USDCMint,
+		USDCDecimals:    stores.USDCDecimals,
+		CloudURL:        stores.CloudURL,
+		CloudTokenPath:  stores.CloudTokenPath,
+		DockID:          stores.DockID,
 	})
 	r := chi.NewRouter()
 
@@ -98,7 +115,9 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 		// Local wallet endpoints
 		r.Get("/wallet", h.GetWallet)
 		r.Post("/wallet/create", h.CreateWallet)
-		r.Post("/wallet/bind", h.BindWallet)
+		r.Post("/wallet/restore", h.RestoreWallet)
+		r.Post("/wallet/unlock", h.UnlockWallet)
+		r.Post("/wallet/withdraw", h.WithdrawWallet)
 		r.Delete("/wallet", h.ClearWallet)
 
 		// MCP connection registry
@@ -113,6 +132,12 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 		r.Get("/agent/runs/{id}", h.GetAgentRun)
 		r.Post("/agent/runs/{id}/resume", h.ResumeAgentRun)
 		r.Post("/agent/runs/{id}/stop", h.StopAgentRun)
+		r.Post("/work-runs", h.CreateWorkRun)
+		r.Get("/work-runs", h.ListWorkRuns)
+		r.Get("/work-runs/{id}", h.GetWorkRun)
+		r.Post("/work-runs/{id}/resume", h.ResumeWorkRun)
+		r.Post("/work-runs/{id}/stop", h.StopWorkRun)
+		r.Get("/work-runs/{id}/events", h.ListWorkRunEvents)
 		r.Get("/dispute-evidence", h.GetDisputeEvidence)
 		r.Post("/negotiations", h.CreateNegotiations)
 		r.Get("/negotiations", h.ListNegotiations)
@@ -170,6 +195,7 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 		r.Get("/order-plans", h.ListOrderPlans)
 		r.Get("/order-plans/{id}", h.GetOrderPlan)
 		r.Post("/order-plans/{id}/select", h.SelectOrderPlan)
+		r.Post("/order-plans/{id}/submit-provider-job", h.SubmitOrderPlanProviderJob)
 		r.Post("/order-plans/{id}/cancel", h.CancelOrderPlan)
 
 		// Local payment confirmation endpoints
@@ -177,6 +203,10 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 		r.Post("/payment-pin/set", h.SetPaymentPIN)
 		r.Get("/payments", h.ListPayments)
 		r.Get("/payments/{id}", h.GetPayment)
+		r.Get("/payments/{id}/evidence", h.FindPaymentEvidence)
+		r.Post("/payments/{id}/pay-wallet", h.PayWithWallet)
+		r.Post("/payments/{id}/chain/intent", h.PreparePaymentChainIntent)
+		r.Post("/payments/{id}/chain/evidence", h.SyncPaymentEvidence)
 
 		// Order endpoints
 		r.Post("/orders", h.CreateOrders)
@@ -265,6 +295,14 @@ func requiredScope(r *http.Request) localauth.Scope {
 	if path == "/v1/agent/buyer-work" && method == http.MethodPost {
 		return localauth.ScopeAgent
 	}
+	if path == "/v1/work-runs" && (method == http.MethodGet || method == http.MethodPost) {
+		return localauth.ScopeAgent
+	}
+	if strings.HasPrefix(path, "/v1/work-runs/") {
+		if method == http.MethodGet || strings.HasSuffix(path, "/resume") || strings.HasSuffix(path, "/stop") {
+			return localauth.ScopeAgent
+		}
+	}
 	if path == "/v1/mcp/connections" && (method == http.MethodGet || method == http.MethodPost) {
 		return localauth.ScopeAgent
 	}
@@ -325,10 +363,19 @@ func requiredScope(r *http.Request) localauth.Scope {
 		return localauth.ScopeAgent
 	}
 	if strings.HasPrefix(path, "/v1/order-plans/") {
-		if strings.HasSuffix(path, "/select") || strings.HasSuffix(path, "/cancel") {
+		if strings.HasSuffix(path, "/select") || strings.HasSuffix(path, "/submit-provider-job") || strings.HasSuffix(path, "/cancel") {
 			return localauth.ScopeOwner
 		}
 		if method == http.MethodGet {
+			return localauth.ScopeAgent
+		}
+	}
+	if strings.HasPrefix(path, "/v1/payments/") {
+		parts := strings.Split(strings.Trim(path, "/"), "/")
+		if len(parts) == 4 && parts[3] == "evidence" && method == http.MethodGet {
+			return localauth.ScopeAgent
+		}
+		if len(parts) == 5 && parts[3] == "chain" && (parts[4] == "intent" || parts[4] == "evidence") && method == http.MethodPost {
 			return localauth.ScopeAgent
 		}
 	}

@@ -1,5 +1,15 @@
 import { invoke } from './bridge'
 import {
+  htmlLangForLanguage,
+  initialI18nLanguage,
+  normalizeAppLanguage,
+  setI18nLanguage,
+  t,
+  translateDom,
+  translatePhrase,
+  type AppLanguage,
+} from './i18n'
+import {
   Activity,
   Archive,
   ArrowLeft,
@@ -8,7 +18,6 @@ import {
   Check,
   ChevronRight,
   Copy,
-  Cpu,
   Ellipsis,
   Folder,
   FolderOpen,
@@ -28,6 +37,7 @@ import {
   PencilLine,
   Plus,
   QrCode,
+  RefreshCw,
   Save,
   Search,
   SendHorizontal,
@@ -109,9 +119,9 @@ type SelectedKind = 'plan' | 'approval' | 'task' | 'payment'
 type ActiveView = 'work' | 'market' | 'chat' | 'settings'
 type ChatMode = 'expanded' | 'compact'
 type OrderSide = 'buyer' | 'seller'
-type SettingsView = 'api' | 'runtime' | 'agents' | 'buyer-agent' | 'buyer-card' | 'seller-card' | 'seller' | 'pwa' | 'wallet' | 'security' | 'diagnostics' | 'archives'
-type AppLanguage = 'en' | 'zh'
+type SettingsView = 'api' | 'buyer-agent' | 'buyer-card' | 'seller-card' | 'seller' | 'pwa' | 'wallet' | 'archives'
 type AppTheme = 'light' | 'dark'
+type LLMTestStatus = 'passed' | 'failed'
 type ProfileSubmenu = 'language' | 'theme'
 type ProjectFolderMenuAction = 'open' | 'rename' | 'archive' | 'remove'
 type TaskMenuAction = 'pin' | 'rename' | 'archive' | 'unread' | 'open-project' | 'copy-id'
@@ -120,10 +130,6 @@ type PermissionMode = 'ask' | 'approve' | 'full' | 'custom'
 type BuyerAgentSettings = {
   enabled: boolean
   agentId: string
-  negotiationFirst: boolean
-  maxResults: number
-  maxCandidates: number
-  maxOptions: number
 }
 
 type CardDiagnosticsTask = {
@@ -247,7 +253,6 @@ type TransactionSnapshotRecord = {
 type PinAction =
   | { kind: 'select_plan'; planId: string; optionId: string }
   | { kind: 'approve'; approvalId: string }
-  | { kind: 'settings_pin' }
 
 type PinStep = {
   action: PinAction
@@ -264,6 +269,9 @@ type WorkspaceSnapshot = {
   tasks?: Task[]
   payments?: PaymentRecord[]
   mcpConnections?: MCPConnection[]
+  workMcpLeases?: WorkMCPLease[]
+  workRuns?: WorkRun[]
+  workRunEvents?: Record<string, WorkRunEvent[]>
   projectFolder?: ProjectFolder
   projectFolders?: ProjectFolder[]
   activeProjectFolderPath?: string
@@ -281,6 +289,123 @@ type WorkMCPContext = {
   projectPath: string
   projectName?: string
   task?: string
+}
+
+type WorkMCPLease = {
+  workUid: string
+  projectPath: string
+  projectName?: string
+  controller?: string
+  source?: string
+  clientName?: string
+  sessionId?: string
+  status?: string
+  startedAt?: string
+  lastSeenAt?: string
+  expiresAt?: string
+  updatedAt?: string
+}
+
+type WorkRun = {
+  schemaVersion?: string
+  runId: string
+  workUid?: string
+  projectPath?: string
+  controller?: string
+  status?: string
+  currentStep?: string
+  nextAction?: string
+  lastCheckpointId?: string
+  intent?: string
+  summary?: string
+  error?: string
+  entities?: {
+    orderPlanId?: string
+    orderPlanIds?: string[]
+    negotiationIds?: string[]
+    taskId?: string
+    approvalId?: string
+    paymentId?: string
+    paymentEvidenceId?: string
+    escrowPda?: string
+    txSignature?: string
+    providerJobId?: string
+    workerId?: string
+  }
+  activeWorker?: {
+    workerId?: string
+    type?: string
+    status?: string
+    providerPubkey?: string
+    jobId?: string
+    updatedAt?: string
+  }
+  publicDisclosure?: Record<string, unknown>
+  ownerDisclosure?: Record<string, unknown>
+  updatedAt?: string
+  createdAt?: string
+  completedAt?: string
+}
+
+type WorkRunEvent = {
+  eventId: string
+  type: string
+  runId: string
+  workUid?: string
+  checkpointId?: string
+  stepId?: string
+  step?: string
+  status?: string
+  summary?: string
+  data?: Record<string, unknown>
+  createdAt?: string
+}
+
+type TransactionProgressStage = {
+  id: string
+  title: string
+  detail: string
+  status: 'complete' | 'active' | 'waiting' | 'blocked' | 'failed' | 'pending'
+}
+
+type TransactionProgressEvent = {
+  id: string
+  type: string
+  label: string
+  detail?: string
+  timestamp?: string
+  tone?: 'normal' | 'good' | 'warn' | 'bad'
+}
+
+type TransactionProgressSnapshot = {
+  title: string
+  side: OrderSide
+  state: string
+  owner: string
+  waitingFor: string
+  nextAction: string
+  updatedAt: string
+  syncStatus: string
+  currentStageId: string
+  terminal: boolean
+  needsFastRefresh: boolean
+  stages: TransactionProgressStage[]
+  events: TransactionProgressEvent[]
+  ids: Array<{ label: string; value?: string }>
+  quote?: string
+  payment?: string
+  provider?: string
+  artifacts?: string
+}
+
+type TransactionProgressData = {
+  thread: WorkThread
+  plans: OrderPlan[]
+  tasks: Task[]
+  approvals: Approval[]
+  payments: PaymentRecord[]
+  workRuns: WorkRun[]
+  workRunEvents: WorkRunEvent[]
 }
 
 type MCPConnection = {
@@ -314,14 +439,14 @@ type WalletStatus = {
   address?: string
   localKeypair?: boolean
   keypairPath?: string
+  encryptedKeypairPath?: string
   boundOnly?: boolean
-}
-
-type SecurityStatus = {
-  paymentPinConfigured?: boolean
-  ownerTokenPresent?: boolean
-  agentTokenPresent?: boolean
-  authPath?: string
+  accountBound?: boolean
+  unlocked?: boolean
+  backupStatus?: string
+  usdcMint?: string
+  balances?: Record<string, { amountAtomic?: number; decimals?: number; currency?: string; mint?: string; status?: string; updatedAt?: string }>
+  feePolicy?: { currency?: string; relayFeeAtomic?: number; relayFeeDescription?: string; gasPaidBy?: string }
 }
 
 type PwaLinkStatus = {
@@ -344,12 +469,19 @@ type PwaLinkStatus = {
 const app = document.querySelector<HTMLDivElement>('#app')!
 const isMacPlatform = /Mac|iPhone|iPad|iPod/.test(navigator.platform)
 const TOP_WINDOW_DRAG_HEIGHT = 64
+const agentComposerPlaceholder = () => t('agentComposer.placeholder')
+const agentComposerLockedPlaceholder = () => t('agentComposer.lockedPlaceholder')
 const WORK_TASK_STATE_KEY = 'exora.workTaskState.v1'
 const APP_SETTINGS_SAVE_DELAY = 250
 const DEFAULT_SIDEBAR_WIDTH = 277
 const SIDEBAR_MIN_WIDTH = 236
 const SIDEBAR_MAX_WIDTH = 480
 const CHAT_SAVE_DELAY = 500
+const MASKED_API_KEY_VALUE = '************'
+const DRAFT_LLM_PROFILE_ID = '__draft_llm_profile__'
+const SETTINGS_QR_WIDTH = 236
+const SETTINGS_QR_MARGIN = 1
+const SETTINGS_QR_COLOR = { dark: '#17211e', light: '#ffffff' } as const
 app.dataset.platform = isMacPlatform ? 'mac' : 'windows'
 
 type LLMProviderPreset = {
@@ -376,6 +508,8 @@ type LLMProfile = {
   disableResponseStorage: boolean
   hasApiKey?: boolean
   keyFormat?: string
+  useForBuyer?: boolean
+  useForSeller?: boolean
   createdAt?: string
   updatedAt?: string
 }
@@ -383,6 +517,8 @@ type LLMProfile = {
 type LLMProfileStatus = {
   profiles: LLMProfile[]
   activeProfileId?: string
+  buyerProfileId?: string
+  sellerProfileId?: string
   keyStorageAvailable?: boolean
 }
 
@@ -510,6 +646,8 @@ const toolbarIcons = {
   folderPlus: icon(FolderPlus),
   projectMenu: icon(Ellipsis),
   plus: icon(Plus),
+  hand: icon(Hand),
+  refresh: icon(RefreshCw),
 }
 
 const profileIcons = {
@@ -519,18 +657,15 @@ const profileIcons = {
 
 const settingsNavIcons: Record<SettingsView, string> = {
   api: icon(KeyRound),
-  runtime: icon(Cpu),
-  agents: icon(Network),
   'buyer-agent': icon(ShoppingCart),
   'buyer-card': icon(IdCard),
   'seller-card': icon(BadgeCheck),
   seller: icon(ShoppingBag),
   pwa: icon(QrCode),
   wallet: icon(WalletCards),
-  security: icon(ShieldCheck),
-  diagnostics: icon(Activity),
   archives: icon(Archive),
 }
+const localAgentIcon = icon(Network)
 
 const profileMenuIcons = {
   language: icon(Languages),
@@ -547,21 +682,32 @@ const permissionIcons: Record<PermissionMode, string> = {
 
 const permissionCheckIcon = icon(Check)
 
-const permissionOptions: Array<{ mode: PermissionMode; label: string; description: string }> = [
-  { mode: 'ask', label: 'Ask for approval', description: 'Always ask to edit external files and use the internet' },
-  { mode: 'approve', label: 'Approve for me', description: 'Only ask for actions detected as potentially unsafe' },
-  { mode: 'full', label: 'Full access', description: 'Unrestricted access to the internet and any file on your computer' },
-  { mode: 'custom', label: 'Custom (config.toml)', description: 'Uses permissions defined in config.toml' },
+const permissionOptionDefs: Array<{ mode: PermissionMode; labelKey: string; descriptionKey: string }> = [
+  { mode: 'ask', labelKey: 'permission.ask.label', descriptionKey: 'permission.ask.description' },
+  { mode: 'approve', labelKey: 'permission.approve.label', descriptionKey: 'permission.approve.description' },
+  { mode: 'full', labelKey: 'permission.full.label', descriptionKey: 'permission.full.description' },
+  { mode: 'custom', labelKey: 'permission.custom.label', descriptionKey: 'permission.custom.description' },
 ]
+
+function permissionOptions(): Array<{ mode: PermissionMode; label: string; description: string }> {
+  return permissionOptionDefs.map((option) => ({
+    mode: option.mode,
+    label: t(option.labelKey),
+    description: t(option.descriptionKey),
+  }))
+}
 
 const DEFAULT_BUYER_AGENT_SETTINGS: BuyerAgentSettings = {
   enabled: true,
   agentId: 'exora-desktop-agent',
+}
+
+const BUYER_AGENT_SEARCH_DEFAULTS = {
   negotiationFirst: true,
   maxResults: 8,
   maxCandidates: 3,
   maxOptions: 6,
-}
+} as const
 
 const projectFolderMenuIcons = {
   open: icon(FolderOpen),
@@ -570,12 +716,14 @@ const projectFolderMenuIcons = {
   remove: icon(X),
 }
 
-const projectFolderMenuActions: Array<{ action: ProjectFolderMenuAction; label: string; icon: string }> = [
-  { action: 'open', label: 'Open in Explorer', icon: projectFolderMenuIcons.open },
-  { action: 'rename', label: 'Rename project', icon: projectFolderMenuIcons.rename },
-  { action: 'archive', label: 'Archive chats', icon: projectFolderMenuIcons.archive },
-  { action: 'remove', label: 'Remove', icon: projectFolderMenuIcons.remove },
-]
+function projectFolderMenuActions(): Array<{ action: ProjectFolderMenuAction; label: string; icon: string }> {
+  return [
+    { action: 'open', label: t('taskMenu.openProject'), icon: projectFolderMenuIcons.open },
+    { action: 'rename', label: t('prompt.renameProject'), icon: projectFolderMenuIcons.rename },
+    { action: 'archive', label: translatePhrase('Archive chats'), icon: projectFolderMenuIcons.archive },
+    { action: 'remove', label: translatePhrase('Remove'), icon: projectFolderMenuIcons.remove },
+  ]
+}
 
 const taskMenuIcons: Record<TaskMenuAction, string> = {
   pin: icon(BadgeCheck),
@@ -698,7 +846,7 @@ app.innerHTML = `
         <div class="chat-feed" data-chat-feed aria-live="polite"></div>
         <section class="local-agent-card" data-local-agent-card>
           <div class="local-agent-card-head">
-            <span class="local-agent-icon">${settingsNavIcons.agents}</span>
+            <span class="local-agent-icon">${localAgentIcon}</span>
             <div>
               <strong>Local agent via MCP</strong>
               <p>Copy a task prompt for an external local agent. It will operate through MCP while this app keeps seller choice, approvals, payment, and secrets under owner control.</p>
@@ -712,14 +860,18 @@ app.innerHTML = `
           </div>
         </section>
         <div class="work-or-divider" aria-hidden="true"><span>or</span></div>
+        <div class="external-work-lock hidden" data-external-work-lock>
+          <span data-external-work-lock-text>External local agent is working on this Work.</span>
+          <button class="secondary compact-action" type="button" data-action="take-over-work">${toolbarIcons.hand}<span>Take over</span></button>
+        </div>
         <form class="chat-composer" data-agent-chat-form>
-          <textarea data-agent-query rows="1" placeholder="Ask the built-in buyer agent to work inside Exora Dock..."></textarea>
+          <textarea data-agent-query rows="1" placeholder="${agentComposerPlaceholder()}"></textarea>
           <div class="composer-footer">
             <div class="permission-control">
               <button class="permission-button" type="button" data-action="toggle-permission-menu" aria-haspopup="menu" aria-expanded="false" title="Permission mode"></button>
               <div class="permission-menu hidden" data-permission-menu role="menu" aria-label="Permission mode"></div>
             </div>
-            <button class="composer-action-button" type="submit" aria-label="Send message" title="Send">${toolbarIcons.send}</button>
+            <button class="composer-action-button" type="submit" aria-label="Send message" title="Send" data-agent-send>${toolbarIcons.send}</button>
           </div>
         </form>
       </section>
@@ -734,99 +886,55 @@ app.innerHTML = `
           <section class="settings-page" data-settings-page="api">
             <div class="api-profiles-section">
               <div class="section-title">
-                <strong>LLM API Profiles</strong>
+                <strong>API Settings</strong>
                 <span data-key-state>No API key saved.</span>
               </div>
               <div class="api-profiles-layout">
                 <section class="api-profile-sidebar">
-                  <div class="api-profile-sidebar-head">
-                    <div>
-                      <strong>Use API</strong>
-                      <small>Select the provider profile used by Exora Dock.</small>
-                    </div>
-                  </div>
                   <div class="api-profile-list" data-llm-profile-list></div>
                 </section>
                 <form class="api-settings-form agent-card-form card-setup-list api-profile-config-form" data-llm-form>
-                  <div class="card-setup-row card-setup-head-row">
-                    <span class="local-agent-icon">${settingsNavIcons.api}</span>
-                    <strong data-llm-profile-heading>API Profile</strong>
-                    <small data-llm-profile-subtitle>Configure one reusable provider profile.</small>
-                    <span class="card-status-chip" data-llm-active-chip>inactive</span>
-                  </div>
-                  <div class="card-setup-actionbar">
-                    <button class="card-action-button api-profile-mini-action" type="button" data-action="new-llm-profile"><span class="card-action-icon">${toolbarIcons.plus}</span><span class="card-action-text">New API</span></button>
-                    <button class="card-action-button" type="button" data-action="duplicate-llm-profile"><span class="card-action-icon">${toolbarIcons.copy}</span><span class="card-action-text">Duplicate</span></button>
-                    <button class="card-action-button" type="button" data-action="delete-llm-profile"><span class="card-action-icon">${profileMenuIcons.logout}</span><span class="card-action-text">Delete</span></button>
-                    <button class="card-action-button" type="button" data-action="test-llm"><span class="card-action-text">Test Connection</span></button>
-                    <button class="card-action-button" type="button" data-action="load-models"><span class="card-action-text">Load Models</span></button>
-                    <button class="card-action-button save-card-action" type="button" data-action="save-llm-profile"><span class="card-action-text">Save Profile</span></button>
-                    <button class="card-action-button publish-card-action" type="submit"><span class="card-action-text">Save & Use</span></button>
-                  </div>
-                  <div class="card-setup-row card-message-row">
+                  <label class="card-setup-row card-field-row"><span class="field-label">API name</span><small class="field-help">Display name for this saved API profile.</small><input data-chat-api-field="profileName" placeholder="New API Setting" /></label>
+                  <div class="card-setup-row api-check-row api-status-check-row">
                     <span class="field-label">Status</span>
-                    <small class="field-help">Profile state and API key storage.</small>
-                    <strong class="diagnostic-value" data-llm-profile-status>No profile loaded.</strong>
+                    <div class="api-check-control api-status-check-control">
+                      <strong class="diagnostic-value api-profile-status" data-llm-profile-status>No profile loaded.</strong>
+                      <button class="api-form-button" type="button" data-action="test-llm"><span>Check</span></button>
+                      <strong class="diagnostic-value test-note api-check-status" data-llm-test-note>Not checked</strong>
+                    </div>
                   </div>
-                  <div class="card-setup-row card-setup-section-row"><strong>Profile</strong><span>Name and saved key metadata</span></div>
-                  <label class="card-setup-row card-field-row"><span class="field-label">Profile name</span><small class="field-help">Shown in the API profile list.</small><input data-chat-api-field="profileName" placeholder="OpenAI production" /></label>
-                  <label class="card-setup-row card-field-row"><span class="field-label">API key</span><small class="field-help">Stored per profile with Electron safeStorage. Leave blank to keep the saved key.</small><input data-chat-api-field="apiKey" type="password" autocomplete="off" placeholder="Leave blank to keep saved key" /></label>
-                  <label class="card-setup-row card-field-row inline-check-row"><span class="field-label">Clear key</span><small class="field-help">Remove the saved key from this profile.</small><span class="inline-check-control"><input data-chat-api-field="clearApiKey" type="checkbox" /> Clear saved API key</span></label>
-                  <div class="card-setup-row card-setup-section-row"><strong>Provider</strong><span data-provider-note></span></div>
-                  <label class="card-setup-row card-field-row"><span class="field-label">Provider</span><small class="field-help">Preset controls default URL, wire API, and capabilities.</small><select data-chat-api-field="providerPreset">${llmPresets.map((item) => `<option value="${escapeHTML(item.id)}">${escapeHTML(item.label)}</option>`).join('')}</select></label>
-                  <label class="card-setup-row card-field-row"><span class="field-label">Base URL</span><small class="field-help">OpenAI-compatible endpoint root.</small><input data-chat-api-field="llmBaseUrl" placeholder="https://api.openai.com/v1" /></label>
-                  <label class="card-setup-row card-field-row"><span class="field-label">Wire API</span><small class="field-help">Use Responses when supported, otherwise Chat Completions.</small><select data-chat-api-field="wireApi"><option value="responses">Responses</option><option value="chat_completions">Chat completions</option></select></label>
-                  <div class="card-setup-row card-setup-section-row"><strong>Models</strong><span>Research and utility model selection</span></div>
-                  <label class="card-setup-row card-field-row"><span class="field-label">Research model</span><small class="field-help">Used for planning, seller selection, and higher-reasoning work.</small><input data-chat-api-field="researchModel" list="llm-model-options" placeholder="gpt-5.5" /><datalist id="llm-model-options"></datalist></label>
-                  <label class="card-setup-row card-field-row"><span class="field-label">Research effort</span><small class="field-help">Provider-specific reasoning effort, usually high.</small><input data-chat-api-field="researchReasoningEffort" placeholder="high" /></label>
-                  <label class="card-setup-row card-field-row"><span class="field-label">Utility model</span><small class="field-help">Used for lower-latency utility calls.</small><input data-chat-api-field="utilityModel" list="llm-model-options" placeholder="gpt-5.5" /></label>
-                  <label class="card-setup-row card-field-row"><span class="field-label">Utility effort</span><small class="field-help">Provider-specific reasoning effort, usually low.</small><input data-chat-api-field="utilityReasoningEffort" placeholder="low" /></label>
-                  <div class="card-setup-row card-setup-section-row"><strong>Safety</strong><span data-capability-note></span></div>
-                  <label class="card-setup-row card-field-row inline-check-row"><span class="field-label">Response storage</span><small class="field-help">Keep disabled for providers that support response storage controls.</small><span class="inline-check-control"><input data-chat-api-field="disableResponseStorage" type="checkbox" /> Disable response storage</span></label>
-                  <div class="card-setup-row card-message-row">
-                    <span class="field-label">Test</span>
-                    <small class="field-help">Connection and model list feedback.</small>
-                    <strong class="diagnostic-value test-note hidden" data-llm-test-note></strong>
+                  <label class="card-setup-row card-field-row"><span class="field-label">API key</span><small class="field-help">Leave blank to keep the saved key.</small><input data-chat-api-field="apiKey" type="password" autocomplete="off" placeholder="Leave blank to keep saved key" /></label>
+                  <label class="card-setup-row card-field-row inline-check-row">
+                    <span class="field-label">Clear key</span>
+                    <small class="field-help">Remove the saved key from this profile.</small>
+                    <span class="inline-check-control"><input data-chat-api-field="clearApiKey" type="checkbox" /> Clear saved API key</span>
+                  </label>
+                  <label class="card-setup-row card-field-row"><span class="field-label">API website</span><small class="field-help">OpenAI-compatible endpoint, for example https://api.openai.com/v1.</small><input data-chat-api-field="llmBaseUrl" placeholder="https://api.openai.com/v1" /></label>
+                  <div class="api-model-grid">
+                    <label class="card-setup-row card-field-row"><span class="field-label">Main model</span><small class="field-help">Used for planning and harder work.</small><input data-chat-api-field="researchModel" list="llm-model-options" placeholder="gpt-5.5" /><datalist id="llm-model-options"></datalist></label>
+                    <label class="card-setup-row card-field-row"><span class="field-label">Secondary model</span><small class="field-help">Blank means same as main model.</small><input data-chat-api-field="utilityModel" list="llm-model-options" placeholder="same as main" /></label>
+                  </div>
+                  <div class="card-setup-row card-field-row inline-check-row">
+                    <span class="field-label">Use this setting for</span>
+                    <small class="field-help">One setting can serve buyer, seller, or both.</small>
+                    <span class="api-role-controls">
+                      <label class="api-role-choice"><span class="api-role-text">Buyer</span><input class="api-role-input" data-chat-api-field="useForBuyer" type="checkbox" /><span class="api-role-dot" aria-hidden="true"></span></label>
+                      <label class="api-role-choice"><span class="api-role-text">Seller</span><input class="api-role-input" data-chat-api-field="useForSeller" type="checkbox" /><span class="api-role-dot" aria-hidden="true"></span></label>
+                    </span>
+                  </div>
+                  <input data-chat-api-field="providerPreset" type="hidden" />
+                  <input data-chat-api-field="wireApi" type="hidden" />
+                  <input data-chat-api-field="researchReasoningEffort" type="hidden" value="high" />
+                  <input data-chat-api-field="utilityReasoningEffort" type="hidden" value="low" />
+                  <input data-chat-api-field="disableResponseStorage" type="checkbox" class="hidden" checked />
+                  <span class="hidden" data-provider-note></span>
+                  <span class="hidden" data-capability-note></span>
+                  <div class="api-form-actions">
+                    <button class="api-form-button" type="button" data-action="new-llm-profile">${toolbarIcons.plus}<span>New</span></button>
+                    <button class="api-form-button" type="button" data-action="delete-llm-profile"><span>Delete</span></button>
+                    <button class="api-form-button primary" type="submit"><span>Save</span></button>
                   </div>
                 </form>
-              </div>
-            </div>
-          </section>
-
-          <section class="settings-page hidden" data-settings-page="runtime">
-            <div class="settings-section">
-              <div class="section-title">
-                <strong>Runtime</strong>
-                <span data-runtime>checking</span>
-              </div>
-              <p class="muted" data-status-message>Checking local runtime...</p>
-              <div class="settings-actions">
-                <button data-action="start">Start / Repair</button>
-                <button class="secondary" data-action="stop">Stop</button>
-                <button class="secondary" data-action="restart">Restart</button>
-              </div>
-              <dl class="compact-list">
-                <div><dt>REST</dt><dd data-base-url>http://127.0.0.1:8080</dd></div>
-                <div><dt>Discovery</dt><dd data-discovery></dd></div>
-                <div><dt>MCP</dt><dd data-mcp></dd></div>
-                <div><dt>Binary</dt><dd data-image-tag></dd></div>
-                <div><dt>Data</dt><dd data-data-dir></dd></div>
-              </dl>
-            </div>
-          </section>
-
-          <section class="settings-page hidden" data-settings-page="agents">
-            <div class="settings-section">
-              <div class="section-title">
-                <strong>External agents</strong>
-                <span>Codex / Claude Code / OpenCode</span>
-              </div>
-              <p class="muted">Use this generic MCP setup for external agents. Task-specific Work prompts add a Work UID; agents can search, prepare order plans, and check status, but cannot approve payments or reveal secrets.</p>
-              <div class="settings-actions two-col">
-                <button data-action="copy-prompt">Copy Agent Prompt</button>
-                <button data-action="copy-opencode">Copy OpenCode Config</button>
-                <button data-action="copy-mcp">Copy MCP Command</button>
-                <button data-action="copy-rest">Copy REST URL</button>
               </div>
             </div>
           </section>
@@ -837,21 +945,23 @@ app.innerHTML = `
                 <strong>PWA connection</strong>
                 <span data-pwa-link-state>not started</span>
               </div>
-              <div class="pwa-link-grid">
-                <div class="pwa-qr-frame" data-pwa-qr>
+              <div class="pwa-link-grid settings-qr-layout">
+                <div class="pwa-qr-frame settings-qr-frame" data-pwa-qr>
                   <span>QR</span>
                 </div>
-                <dl class="compact-list pwa-link-meta">
-                  <div><dt>User code</dt><dd data-pwa-user-code>not generated</dd></div>
-                  <div><dt>Cloud</dt><dd data-pwa-cloud-url>not configured</dd></div>
-                  <div><dt>Expires</dt><dd data-pwa-expires>not started</dd></div>
-                  <div><dt>Token</dt><dd data-pwa-token-path>local after scan</dd></div>
-                </dl>
-              </div>
-              <p class="muted pwa-link-note" data-pwa-link-note>Start a QR session, then scan it from the Exora PWA Remote Console.</p>
-              <div class="settings-actions two-col">
-                <button type="button" data-action="pwa-link-start">New QR</button>
-                <button class="secondary" type="button" data-action="pwa-link-check">Check Link</button>
+                <div class="pwa-link-details settings-qr-details">
+                  <dl class="compact-list pwa-link-meta settings-qr-meta">
+                    <div><dt>User code</dt><dd data-pwa-user-code>not generated</dd></div>
+                    <div><dt>Cloud</dt><dd data-pwa-cloud-url>not configured</dd></div>
+                    <div><dt>Expires</dt><dd data-pwa-expires>not started</dd></div>
+                    <div><dt>Token</dt><dd data-pwa-token-path>local after scan</dd></div>
+                  </dl>
+                  <p class="muted pwa-link-note" data-pwa-link-note>Start a QR session, then scan it from the Exora PWA Remote Console.</p>
+                  <div class="settings-actions two-col pwa-link-actions">
+                    <button type="button" data-action="pwa-link-start">New QR</button>
+                    <button class="secondary" type="button" data-action="pwa-link-check">Check Link</button>
+                  </div>
+                </div>
               </div>
             </div>
           </section>
@@ -873,35 +983,7 @@ app.innerHTML = `
                   <small class="field-help">Written into plans, negotiations, tasks, and approvals.</small>
                   <input data-buyer-field="agentId" placeholder="exora-desktop-agent" />
                 </label>
-                <div class="card-setup-row card-setup-section-row"><strong>Routing</strong><span>Seller discovery and negotiation limits</span></div>
-                <label class="card-setup-row card-field-row inline-check-row">
-                  <span class="field-label">Negotiation first</span>
-                  <small class="field-help">Ask seller agents for quotes before creating owner choices.</small>
-                  <span class="inline-check-control"><input data-buyer-field="negotiationFirst" type="checkbox" /> Use seller-agent negotiation</span>
-                </label>
-                <label class="card-setup-row card-field-row">
-                  <span class="field-label">Search results</span>
-                  <small class="field-help">Maximum seller-card or resource matches to inspect.</small>
-                  <input data-buyer-field="maxResults" type="number" min="1" max="20" step="1" />
-                </label>
-                <label class="card-setup-row card-field-row">
-                  <span class="field-label">Seller negotiations</span>
-                  <small class="field-help">Maximum seller agents contacted per buyer request.</small>
-                  <input data-buyer-field="maxCandidates" type="number" min="1" max="6" step="1" />
-                </label>
-                <label class="card-setup-row card-field-row">
-                  <span class="field-label">Order options</span>
-                  <small class="field-help">Maximum choices prepared when negotiation-first is off.</small>
-                  <input data-buyer-field="maxOptions" type="number" min="1" max="6" step="1" />
-                </label>
-                <div class="card-setup-row card-setup-section-row"><strong>Owner control</strong><span>Default permission boundary</span></div>
-                <label class="card-setup-row card-field-row">
-                  <span class="field-label">Permission mode</span>
-                  <small class="field-help">Applied to new buyer-agent work.</small>
-                  <select data-buyer-field="permissionMode">
-                    ${permissionOptions.map((item) => `<option value="${escapeHTML(item.mode)}">${escapeHTML(item.label)}</option>`).join('')}
-                  </select>
-                </label>
+                <div class="card-setup-row card-setup-section-row"><strong>Local MCP entry</strong><span>Use the Work prompt controls to connect Codex, Claude Code, OpenCode, or another local agent.</span></div>
                 <button type="submit">Save Buyer Agent</button>
               </form>
             </div>
@@ -921,76 +1003,42 @@ app.innerHTML = `
                 <strong>Seller agent</strong>
                 <span data-seller-market-chip>checking</span>
               </div>
-              <form class="seller-form" data-seller-form>
-                <label class="toggle">
-                  <input type="checkbox" data-field="enabled" />
-                  <span>Enable seller agent</span>
+              <form class="agent-card-form card-setup-list seller-agent-form" data-seller-form>
+                <label class="card-setup-row card-field-row inline-check-row">
+                  <span class="field-label">Enabled</span>
+                  <small class="field-help">Lets this dock receive requests and quote work as a provider.</small>
+                  <span class="inline-check-control"><input type="checkbox" data-field="enabled" /> Enable seller agent</span>
                 </label>
-                <div class="two">
-                  <label>
-                    <span>Provider ID</span>
-                    <input data-field="providerId" placeholder="local-dev-miner" />
-                  </label>
-                  <label>
-                    <span>ETA Seconds</span>
-                    <input data-field="estimatedSeconds" type="number" min="1" step="1" />
-                  </label>
-                </div>
-                <div class="two">
-                  <label>
-                    <span>Quote Price</span>
-                    <input data-field="quotePrice" type="number" min="0" step="0.01" />
-                  </label>
-                  <label>
-                    <span>Currency</span>
-                    <input data-field="currency" />
-                  </label>
-                </div>
-                <label class="toggle">
-                  <input type="checkbox" data-field="autoQuote" />
-                  <span>Auto quote new tasks</span>
+                <label class="card-setup-row card-field-row">
+                  <span class="field-label">Provider ID</span>
+                  <small class="field-help">Public provider identity used in quotes, tasks, and market records.</small>
+                  <input data-field="providerId" placeholder="local-dev-miner" />
                 </label>
-                <label class="toggle">
-                  <input type="checkbox" data-field="autoCompleteTextTasks" />
-                  <span>Auto complete text tasks</span>
+                <div class="card-setup-row card-setup-section-row"><strong>Quote defaults</strong><span>Fallback terms used when the seller agent prepares a quote</span></div>
+                <label class="card-setup-row card-field-row">
+                  <span class="field-label">ETA seconds</span>
+                  <small class="field-help">Default estimated execution time for lightweight tasks.</small>
+                  <input data-field="estimatedSeconds" type="number" min="1" step="1" />
                 </label>
-                <label class="toggle">
-                  <input type="checkbox" data-field="dockerEnabled" />
-                  <span>Enable Docker jobs</span>
+                <label class="card-setup-row card-field-row">
+                  <span class="field-label">Quote price</span>
+                  <small class="field-help">Default amount offered before task-specific adjustments.</small>
+                  <input data-field="quotePrice" type="number" min="0" step="0.01" />
                 </label>
-                <div class="two">
-                  <label>
-                    <span>Default image</span>
-                    <input data-field="dockerDefaultImage" placeholder="python:3.12-alpine" />
-                  </label>
-                  <label>
-                    <span>Allowed images</span>
-                    <input data-field="dockerAllowedImages" placeholder="python:3.12-alpine, node:22-alpine" />
-                  </label>
-                </div>
-                <div class="two">
-                  <label>
-                    <span>Network mode</span>
-                    <input data-field="dockerNetworkMode" placeholder="none" />
-                  </label>
-                  <label>
-                    <span>Allowed networks</span>
-                    <input data-field="dockerAllowedNetworkModes" placeholder="none" />
-                  </label>
-                </div>
-                <div class="two">
-                  <label>
-                    <span>Max CPUs</span>
-                    <input data-field="dockerMaxCpus" type="number" min="0" step="0.1" />
-                  </label>
-                  <label>
-                    <span>Max memory MB</span>
-                    <input data-field="dockerMaxMemoryMb" type="number" min="0" step="128" />
-                  </label>
-                </div>
-                <label class="toggle">
-                  <input type="checkbox" data-field="dockerAllowGpu" />
-                  <span>Allow GPU containers</span>
+                <label class="card-setup-row card-field-row">
+                  <span class="field-label">Currency</span>
+                  <small class="field-help">Currency label used in seller quotes.</small>
+                  <input data-field="currency" />
+                </label>
+                <label class="card-setup-row card-field-row inline-check-row">
+                  <span class="field-label">Auto quote</span>
+                  <small class="field-help">Let the seller agent answer new negotiations without opening this screen.</small>
+                  <span class="inline-check-control"><input type="checkbox" data-field="autoQuote" /> Auto quote new tasks</span>
+                </label>
+                <label class="card-setup-row card-field-row inline-check-row">
+                  <span class="field-label">Low-risk auto accept</span>
+                  <small class="field-help">Allow automatic acceptance and completion only for low-risk, text-only work.</small>
+                  <span class="inline-check-control"><input type="checkbox" data-field="autoAcceptLowRisk" /> Auto accept low-risk work</span>
                 </label>
                 <button type="submit">Save Seller Agent</button>
               </form>
@@ -1001,56 +1049,33 @@ app.innerHTML = `
           <section class="settings-page hidden" data-settings-page="wallet">
             <div class="settings-section">
               <div class="section-title">
-                <strong>On-chain wallet</strong>
+                <strong>USDC receive wallet</strong>
                 <span data-wallet-state>checking</span>
               </div>
-              <p class="muted">Wallet settings stay local. Remote consoles never reveal mnemonic, private key, or raw keypair files.</p>
-              <dl class="compact-list">
-                <div><dt>Address</dt><dd data-wallet-address>not configured</dd></div>
-                <div><dt>Mode</dt><dd data-wallet-mode>unknown</dd></div>
-                <div><dt>Keypair path</dt><dd data-wallet-keypair>hidden unless local keypair exists</dd></div>
-              </dl>
-              <div class="settings-actions two-col">
-                <button type="button" data-action="wallet-refresh">Refresh Wallet</button>
-                <button class="secondary" type="button" data-action="wallet-create">Create Local Wallet</button>
-              </div>
-              <form class="wallet-bind-form" data-wallet-bind-form>
-                <label>
-                  <span>Bind existing Solana address</span>
-                  <input data-wallet-address-input placeholder="Base58 public address" />
-                </label>
-                <button class="secondary" type="submit">Bind Address Only</button>
-              </form>
-            </div>
-          </section>
-
-          <section class="settings-page hidden" data-settings-page="security">
-            <div class="settings-section">
-              <div class="section-title">
-                <strong>Account security</strong>
-                <span data-security-state>local</span>
-              </div>
-              <dl class="compact-list">
-                <div><dt>Payment PIN</dt><dd data-security-pin>checking</dd></div>
-                <div><dt>Owner token</dt><dd data-security-owner-token>local only</dd></div>
-                <div><dt>Agent token</dt><dd data-security-agent-token>local only</dd></div>
-                <div><dt>Auth file</dt><dd data-security-auth-path>hidden</dd></div>
-              </dl>
-              <button class="secondary full-width" data-action="settings-pin">Set / Reset Payment PIN</button>
-            </div>
-          </section>
-
-          <section class="settings-page hidden" data-settings-page="diagnostics">
-            <div class="settings-section">
-              <div class="section-title">
-                <strong>Diagnostics</strong>
-                <span>local files</span>
-              </div>
-              <div class="settings-actions two-col">
-                <button class="secondary" data-action="health">Open Health</button>
-                <button class="secondary" data-action="manifest">Open Manifest</button>
-                <button class="secondary" data-action="logs">Open Logs</button>
-                <button class="secondary" data-action="copy-rest">Copy REST URL</button>
+              <p class="muted">Your Exora account wallet receives USDC on Solana.</p>
+              <div class="wallet-receive wallet-dashboard settings-qr-layout" data-wallet-receive>
+                <div class="wallet-visual">
+                  <div class="wallet-qr settings-qr-frame" data-wallet-qr><span>QR</span></div>
+                  <div class="wallet-token-row">
+                    <span>USDC</span>
+                    <span>Solana</span>
+                  </div>
+                </div>
+                <div class="wallet-details settings-qr-details">
+                  <dl class="wallet-metadata settings-qr-meta">
+                    <div><dt>Asset</dt><dd>USDC</dd></div>
+                    <div><dt>Network</dt><dd>Solana</dd></div>
+                    <div><dt>Custody</dt><dd>Account wallet</dd></div>
+                  </dl>
+                  <div class="wallet-address-card">
+                    <span>Deposit address</span>
+                    <code data-wallet-address>not configured</code>
+                  </div>
+                  <div class="settings-actions two-col wallet-actions">
+                    <button type="button" data-action="wallet-copy-address">${toolbarIcons.copy}<span>Copy Address</span></button>
+                    <button class="secondary" type="button" data-action="wallet-refresh">${toolbarIcons.refresh}<span>Refresh</span></button>
+                  </div>
+                </div>
               </div>
             </div>
           </section>
@@ -1073,7 +1098,7 @@ app.innerHTML = `
       <section class="market-project-dialog" data-market-project-dialog role="dialog" aria-modal="true" aria-label="Choose project"></section>
     </div>
 
-    <div class="toast" data-message>Checking local runtime...</div>
+    <div class="toast" data-message>Starting local Dock...</div>
 
     <template data-legacy-settings-overlay>
       <button class="settings-scrim" data-action="close-settings" aria-label="Close settings"></button>
@@ -1087,12 +1112,8 @@ app.innerHTML = `
             </div>
           </header>
           <button class="settings-nav-item" data-settings-tab="api" type="button"><span>API</span><small>LLM providers</small></button>
-          <button class="settings-nav-item" data-settings-tab="runtime" type="button"><span>Runtime</span><small>local daemon</small></button>
-          <button class="settings-nav-item" data-settings-tab="agents" type="button"><span>MCP</span><small>external agents</small></button>
           <button class="settings-nav-item" data-settings-tab="seller" type="button"><span>Seller</span><small>market listing agent</small></button>
-          <button class="settings-nav-item" data-settings-tab="wallet" type="button"><span>Wallet</span><small>on-chain identity</small></button>
-          <button class="settings-nav-item" data-settings-tab="security" type="button"><span>Security</span><small>PIN and local auth</small></button>
-          <button class="settings-nav-item" data-settings-tab="diagnostics" type="button"><span>Diagnostics</span><small>logs and manifests</small></button>
+          <button class="settings-nav-item" data-settings-tab="wallet" type="button"><span>Wallet</span><small>identity and local access</small></button>
         </nav>
 
         <section class="settings-detail">
@@ -1111,6 +1132,10 @@ app.innerHTML = `
                 <span data-key-state>No API key saved.</span>
               </div>
               <form class="api-settings-form" data-llm-form>
+                <label>
+                  <span>API name</span>
+                  <input data-chat-api-field="profileName" placeholder="New API Setting" />
+                </label>
                 <label>
                   <span>Provider</span>
                   <select data-chat-api-field="providerPreset">
@@ -1175,120 +1200,48 @@ app.innerHTML = `
             </div>
           </section>
 
-          <section class="settings-page hidden" data-settings-page="runtime">
-            <div class="settings-section">
-              <div class="section-title">
-                <strong>Runtime</strong>
-                <span data-runtime>checking</span>
-              </div>
-              <p class="muted" data-status-message>Checking local runtime...</p>
-              <div class="settings-actions">
-                <button data-action="start">Start / Repair</button>
-                <button class="secondary" data-action="stop">Stop</button>
-                <button class="secondary" data-action="restart">Restart</button>
-              </div>
-              <dl class="compact-list">
-                <div><dt>REST</dt><dd data-base-url>http://127.0.0.1:8080</dd></div>
-                <div><dt>Discovery</dt><dd data-discovery></dd></div>
-                <div><dt>MCP</dt><dd data-mcp></dd></div>
-                <div><dt>Binary</dt><dd data-image-tag></dd></div>
-                <div><dt>Data</dt><dd data-data-dir></dd></div>
-              </dl>
-            </div>
-          </section>
-
-          <section class="settings-page hidden" data-settings-page="agents">
-            <div class="settings-section">
-              <div class="section-title">
-                <strong>External agents</strong>
-                <span>Codex / Claude Code / OpenCode</span>
-              </div>
-              <p class="muted">Use this generic MCP setup for external agents. Task-specific Work prompts add a Work UID; agents can search, prepare order plans, and check status, but cannot approve payments or reveal secrets.</p>
-              <div class="settings-actions two-col">
-                <button data-action="copy-prompt">Copy Agent Prompt</button>
-                <button data-action="copy-opencode">Copy OpenCode Config</button>
-                <button data-action="copy-mcp">Copy MCP Command</button>
-                <button data-action="copy-rest">Copy REST URL</button>
-              </div>
-            </div>
-          </section>
-
           <section class="settings-page hidden" data-settings-page="seller">
             <div class="settings-section">
               <div class="section-title">
                 <strong>Seller agent</strong>
                 <span data-seller-market-chip>checking</span>
               </div>
-              <form class="seller-form" data-seller-form>
-                <label class="toggle">
-                  <input type="checkbox" data-field="enabled" />
-                  <span>Enable seller agent</span>
+              <form class="agent-card-form card-setup-list seller-agent-form" data-seller-form>
+                <label class="card-setup-row card-field-row inline-check-row">
+                  <span class="field-label">Enabled</span>
+                  <small class="field-help">Lets this dock receive requests and quote work as a provider.</small>
+                  <span class="inline-check-control"><input type="checkbox" data-field="enabled" /> Enable seller agent</span>
                 </label>
-                <div class="two">
-                  <label>
-                    <span>Provider ID</span>
-                    <input data-field="providerId" placeholder="local-dev-miner" />
-                  </label>
-                  <label>
-                    <span>ETA Seconds</span>
-                    <input data-field="estimatedSeconds" type="number" min="1" step="1" />
-                  </label>
-                </div>
-                <div class="two">
-                  <label>
-                    <span>Quote Price</span>
-                    <input data-field="quotePrice" type="number" min="0" step="0.01" />
-                  </label>
-                  <label>
-                    <span>Currency</span>
-                    <input data-field="currency" />
-                  </label>
-                </div>
-                <label class="toggle">
-                  <input type="checkbox" data-field="autoQuote" />
-                  <span>Auto quote new tasks</span>
+                <label class="card-setup-row card-field-row">
+                  <span class="field-label">Provider ID</span>
+                  <small class="field-help">Public provider identity used in quotes, tasks, and market records.</small>
+                  <input data-field="providerId" placeholder="local-dev-miner" />
                 </label>
-                <label class="toggle">
-                  <input type="checkbox" data-field="autoCompleteTextTasks" />
-                  <span>Auto complete text tasks</span>
+                <div class="card-setup-row card-setup-section-row"><strong>Quote defaults</strong><span>Fallback terms used when the seller agent prepares a quote</span></div>
+                <label class="card-setup-row card-field-row">
+                  <span class="field-label">ETA seconds</span>
+                  <small class="field-help">Default estimated execution time for lightweight tasks.</small>
+                  <input data-field="estimatedSeconds" type="number" min="1" step="1" />
                 </label>
-                <label class="toggle">
-                  <input type="checkbox" data-field="dockerEnabled" />
-                  <span>Enable Docker jobs</span>
+                <label class="card-setup-row card-field-row">
+                  <span class="field-label">Quote price</span>
+                  <small class="field-help">Default amount offered before task-specific adjustments.</small>
+                  <input data-field="quotePrice" type="number" min="0" step="0.01" />
                 </label>
-                <div class="two">
-                  <label>
-                    <span>Default image</span>
-                    <input data-field="dockerDefaultImage" placeholder="python:3.12-alpine" />
-                  </label>
-                  <label>
-                    <span>Allowed images</span>
-                    <input data-field="dockerAllowedImages" placeholder="python:3.12-alpine, node:22-alpine" />
-                  </label>
-                </div>
-                <div class="two">
-                  <label>
-                    <span>Network mode</span>
-                    <input data-field="dockerNetworkMode" placeholder="none" />
-                  </label>
-                  <label>
-                    <span>Allowed networks</span>
-                    <input data-field="dockerAllowedNetworkModes" placeholder="none" />
-                  </label>
-                </div>
-                <div class="two">
-                  <label>
-                    <span>Max CPUs</span>
-                    <input data-field="dockerMaxCpus" type="number" min="0" step="0.1" />
-                  </label>
-                  <label>
-                    <span>Max memory MB</span>
-                    <input data-field="dockerMaxMemoryMb" type="number" min="0" step="128" />
-                  </label>
-                </div>
-                <label class="toggle">
-                  <input type="checkbox" data-field="dockerAllowGpu" />
-                  <span>Allow GPU containers</span>
+                <label class="card-setup-row card-field-row">
+                  <span class="field-label">Currency</span>
+                  <small class="field-help">Currency label used in seller quotes.</small>
+                  <input data-field="currency" />
+                </label>
+                <label class="card-setup-row card-field-row inline-check-row">
+                  <span class="field-label">Auto quote</span>
+                  <small class="field-help">Let the seller agent answer new negotiations without opening this screen.</small>
+                  <span class="inline-check-control"><input type="checkbox" data-field="autoQuote" /> Auto quote new tasks</span>
+                </label>
+                <label class="card-setup-row card-field-row inline-check-row">
+                  <span class="field-label">Low-risk auto accept</span>
+                  <small class="field-help">Allow automatic acceptance and completion only for low-risk, text-only work.</small>
+                  <span class="inline-check-control"><input type="checkbox" data-field="autoAcceptLowRisk" /> Auto accept low-risk work</span>
                 </label>
                 <button type="submit">Save Seller Agent</button>
               </form>
@@ -1299,59 +1252,37 @@ app.innerHTML = `
           <section class="settings-page hidden" data-settings-page="wallet">
             <div class="settings-section">
               <div class="section-title">
-                <strong>On-chain wallet</strong>
+                <strong>USDC receive wallet</strong>
                 <span data-wallet-state>checking</span>
               </div>
-              <p class="muted">Wallet settings stay local. Remote consoles never reveal mnemonic, private key, or raw keypair files.</p>
-              <dl class="compact-list">
-                <div><dt>Address</dt><dd data-wallet-address>not configured</dd></div>
-                <div><dt>Mode</dt><dd data-wallet-mode>unknown</dd></div>
-                <div><dt>Keypair path</dt><dd data-wallet-keypair>hidden unless local keypair exists</dd></div>
-              </dl>
-              <div class="settings-actions two-col">
-                <button type="button" data-action="wallet-refresh">Refresh Wallet</button>
-                <button class="secondary" type="button" data-action="wallet-create">Create Local Wallet</button>
+              <p class="muted">Your Exora account wallet receives USDC on Solana.</p>
+              <div class="wallet-receive wallet-dashboard settings-qr-layout" data-wallet-receive>
+                <div class="wallet-visual">
+                  <div class="wallet-qr settings-qr-frame" data-wallet-qr><span>QR</span></div>
+                  <div class="wallet-token-row">
+                    <span>USDC</span>
+                    <span>Solana</span>
+                  </div>
+                </div>
+                <div class="wallet-details settings-qr-details">
+                  <dl class="wallet-metadata settings-qr-meta">
+                    <div><dt>Asset</dt><dd>USDC</dd></div>
+                    <div><dt>Network</dt><dd>Solana</dd></div>
+                    <div><dt>Custody</dt><dd>Account wallet</dd></div>
+                  </dl>
+                  <div class="wallet-address-card">
+                    <span>Deposit address</span>
+                    <code data-wallet-address>not configured</code>
+                  </div>
+                  <div class="settings-actions two-col wallet-actions">
+                    <button type="button" data-action="wallet-copy-address">${toolbarIcons.copy}<span>Copy Address</span></button>
+                    <button class="secondary" type="button" data-action="wallet-refresh">${toolbarIcons.refresh}<span>Refresh</span></button>
+                  </div>
+                </div>
               </div>
-              <form class="wallet-bind-form" data-wallet-bind-form>
-                <label>
-                  <span>Bind existing Solana address</span>
-                  <input data-wallet-address-input placeholder="Base58 public address" />
-                </label>
-                <button class="secondary" type="submit">Bind Address Only</button>
-              </form>
             </div>
           </section>
 
-          <section class="settings-page hidden" data-settings-page="security">
-            <div class="settings-section">
-              <div class="section-title">
-                <strong>Account security</strong>
-                <span data-security-state>local</span>
-              </div>
-              <dl class="compact-list">
-                <div><dt>Payment PIN</dt><dd data-security-pin>checking</dd></div>
-                <div><dt>Owner token</dt><dd data-security-owner-token>local only</dd></div>
-                <div><dt>Agent token</dt><dd data-security-agent-token>local only</dd></div>
-                <div><dt>Auth file</dt><dd data-security-auth-path>hidden</dd></div>
-              </dl>
-              <button class="secondary full-width" data-action="settings-pin">Set / Reset Payment PIN</button>
-            </div>
-          </section>
-
-          <section class="settings-page hidden" data-settings-page="diagnostics">
-            <div class="settings-section">
-              <div class="section-title">
-                <strong>Diagnostics</strong>
-                <span>local files</span>
-              </div>
-              <div class="settings-actions two-col">
-                <button class="secondary" data-action="health">Open Health</button>
-                <button class="secondary" data-action="manifest">Open Manifest</button>
-                <button class="secondary" data-action="logs">Open Logs</button>
-                <button class="secondary" data-action="copy-rest">Copy REST URL</button>
-              </div>
-            </div>
-          </section>
         </section>
       </aside>
     </template>
@@ -1361,14 +1292,7 @@ app.innerHTML = `
 const fields = {
   appShell: app.querySelector<HTMLElement>('.app-shell')!,
   daemon: app.querySelector<HTMLElement>('[data-daemon]')!,
-  runtime: app.querySelector<HTMLElement>('[data-runtime]')!,
-  statusMessage: app.querySelector<HTMLElement>('[data-status-message]')!,
-  baseUrl: app.querySelector<HTMLElement>('[data-base-url]')!,
   message: app.querySelector<HTMLElement>('[data-message]')!,
-  discovery: app.querySelector<HTMLElement>('[data-discovery]')!,
-  mcp: app.querySelector<HTMLElement>('[data-mcp]')!,
-  imageTag: app.querySelector<HTMLElement>('[data-image-tag]')!,
-  dataDir: app.querySelector<HTMLElement>('[data-data-dir]')!,
   keyState: app.querySelector<HTMLElement>('[data-key-state]')!,
   buyerAgentChip: app.querySelector<HTMLElement>('[data-buyer-agent-chip]')!,
   sellerMarketChip: app.querySelector<HTMLElement>('[data-seller-market-chip]')!,
@@ -1385,6 +1309,7 @@ const fields = {
   orderSideToggle: app.querySelector<HTMLButtonElement>('[data-order-side-toggle]')!,
   orderSideState: app.querySelector<HTMLElement>('[data-order-side-state]')!,
   orderRoleRow: app.querySelector<HTMLElement>('.order-role-row')!,
+  folderPickerButton: app.querySelector<HTMLButtonElement>('[data-action="choose-folder"]')!,
   sidebarSectionHead: app.querySelector<HTMLElement>('.sidebar-section-head')!,
   sidebarTitle: app.querySelector<HTMLElement>('[data-sidebar-title]')!,
   ledgerList: app.querySelector<HTMLElement>('[data-ledger-list]')!,
@@ -1394,6 +1319,9 @@ const fields = {
   localAgentCard: app.querySelector<HTMLElement>('[data-local-agent-card]')!,
   localAgentTask: app.querySelector<HTMLTextAreaElement>('[data-local-agent-task]')!,
   localAgentCopyButton: app.querySelector<HTMLButtonElement>('[data-action="copy-local-agent-prompt"]')!,
+  externalWorkLock: app.querySelector<HTMLElement>('[data-external-work-lock]')!,
+  externalWorkLockText: app.querySelector<HTMLElement>('[data-external-work-lock-text]')!,
+  externalWorkTakeoverButton: app.querySelector<HTMLButtonElement>('[data-action="take-over-work"]')!,
   permissionButton: app.querySelector<HTMLButtonElement>('[data-action="toggle-permission-menu"]')!,
   permissionMenu: app.querySelector<HTMLElement>('[data-permission-menu]')!,
   chatFeed: app.querySelector<HTMLElement>('[data-chat-feed]')!,
@@ -1415,14 +1343,12 @@ const fields = {
   capabilityNote: app.querySelector<HTMLElement>('[data-capability-note]')!,
   llmTestNote: app.querySelector<HTMLElement>('[data-llm-test-note]')!,
   llmProfileList: app.querySelector<HTMLElement>('[data-llm-profile-list]')!,
-  llmProfileHeading: app.querySelector<HTMLElement>('[data-llm-profile-heading]')!,
-  llmProfileSubtitle: app.querySelector<HTMLElement>('[data-llm-profile-subtitle]')!,
-  llmActiveChip: app.querySelector<HTMLElement>('[data-llm-active-chip]')!,
   llmProfileStatus: app.querySelector<HTMLElement>('[data-llm-profile-status]')!,
   walletState: app.querySelector<HTMLElement>('[data-wallet-state]')!,
+  walletReceive: app.querySelector<HTMLElement>('[data-wallet-receive]')!,
+  walletQR: app.querySelector<HTMLElement>('[data-wallet-qr]')!,
   walletAddress: app.querySelector<HTMLElement>('[data-wallet-address]')!,
-  walletMode: app.querySelector<HTMLElement>('[data-wallet-mode]')!,
-  walletKeypair: app.querySelector<HTMLElement>('[data-wallet-keypair]')!,
+  walletCopyButton: app.querySelector<HTMLButtonElement>('[data-action="wallet-copy-address"]')!,
   pwaLinkState: app.querySelector<HTMLElement>('[data-pwa-link-state]')!,
   pwaQR: app.querySelector<HTMLElement>('[data-pwa-qr]')!,
   pwaUserCode: app.querySelector<HTMLElement>('[data-pwa-user-code]')!,
@@ -1430,20 +1356,15 @@ const fields = {
   pwaExpires: app.querySelector<HTMLElement>('[data-pwa-expires]')!,
   pwaTokenPath: app.querySelector<HTMLElement>('[data-pwa-token-path]')!,
   pwaLinkNote: app.querySelector<HTMLElement>('[data-pwa-link-note]')!,
-  securityState: app.querySelector<HTMLElement>('[data-security-state]')!,
-  securityPin: app.querySelector<HTMLElement>('[data-security-pin]')!,
-  securityOwnerToken: app.querySelector<HTMLElement>('[data-security-owner-token]')!,
-  securityAgentToken: app.querySelector<HTMLElement>('[data-security-agent-token]')!,
-  securityAuthPath: app.querySelector<HTMLElement>('[data-security-auth-path]')!,
   archiveRecords: app.querySelector<HTMLElement>('[data-archive-records]')!,
 }
 
 const buyerAgentForm = app.querySelector<HTMLFormElement>('[data-buyer-agent-form]')!
 const sellerForm = app.querySelector<HTMLFormElement>('[data-seller-form]')!
 const llmSettingsForm = app.querySelector<HTMLFormElement>('[data-llm-form]')!
-const walletBindForm = app.querySelector<HTMLFormElement>('[data-wallet-bind-form]')!
 const agentChatForm = app.querySelector<HTMLFormElement>('[data-agent-chat-form]')!
 const agentQuery = app.querySelector<HTMLTextAreaElement>('[data-agent-query]')!
+const agentSendButton = app.querySelector<HTMLButtonElement>('[data-agent-send]')!
 
 function hasDesktopBridge() {
   return Boolean(window.exora?.invoke)
@@ -1454,7 +1375,7 @@ function legacyStoredLanguage(): AppLanguage {
 }
 
 function storedLanguage(): AppLanguage {
-  return hasDesktopBridge() ? 'en' : legacyStoredLanguage()
+  return hasDesktopBridge() ? initialI18nLanguage() : legacyStoredLanguage()
 }
 
 function legacyStoredTheme(): AppTheme {
@@ -1499,10 +1420,6 @@ function normalizeBuyerAgentSettings(value: unknown): BuyerAgentSettings {
   return {
     enabled: typeof input.enabled === 'boolean' ? input.enabled : DEFAULT_BUYER_AGENT_SETTINGS.enabled,
     agentId: String(input.agentId || '').trim() || DEFAULT_BUYER_AGENT_SETTINGS.agentId,
-    negotiationFirst: typeof input.negotiationFirst === 'boolean' ? input.negotiationFirst : DEFAULT_BUYER_AGENT_SETTINGS.negotiationFirst,
-    maxResults: clampInteger(input.maxResults, DEFAULT_BUYER_AGENT_SETTINGS.maxResults, 1, 20),
-    maxCandidates: clampInteger(input.maxCandidates, DEFAULT_BUYER_AGENT_SETTINGS.maxCandidates, 1, 6),
-    maxOptions: clampInteger(input.maxOptions, DEFAULT_BUYER_AGENT_SETTINGS.maxOptions, 1, 6),
   }
 }
 
@@ -1623,21 +1540,29 @@ const state: {
   marketDetailProvider?: string
   marketProjectPickerProvider?: string
   llmTestMessage?: string
+  llmTestStatus?: LLMTestStatus
   llmModels: string[]
   llmProfiles: LLMProfile[]
   activeLLMProfileId?: string
+  buyerLLMProfileId?: string
+  sellerLLMProfileId?: string
   editingLLMProfileId?: string
+  llmDraftProfile?: LLMProfile
   llmKeyStorageAvailable: boolean
   activeSettingsView: SettingsView
   walletStatus?: WalletStatus
   pwaLink?: PwaLinkStatus
   pwaLinkMessage?: string
-  securityStatus?: SecurityStatus
   appStatus?: AppStatus
   projectFolder?: ProjectFolder
   projectFolders: ProjectFolder[]
   activeProjectFolderPath?: string
   mcpConnections: MCPConnection[]
+  workMcpLeases: WorkMCPLease[]
+  workRuns: WorkRun[]
+  workRunEvents: Record<string, WorkRunEvent[]>
+  workspaceOnline: boolean
+  workspaceErrors: string[]
   expandedProjectFolderPaths: Set<string>
   seenProjectFolderPaths: Set<string>
   projectFolderCollapsed: boolean
@@ -1683,14 +1608,23 @@ const state: {
   llmModels: [],
   llmProfiles: [],
   activeLLMProfileId: undefined,
+  buyerLLMProfileId: undefined,
+  sellerLLMProfileId: undefined,
   editingLLMProfileId: undefined,
+  llmDraftProfile: undefined,
   llmKeyStorageAvailable: false,
   agentCards: {},
   cardDrafts: {},
   cardDiagnosticsTasks: {},
+  llmTestStatus: undefined,
   activeSettingsView: 'api',
   projectFolders: [],
   mcpConnections: [],
+  workMcpLeases: [],
+  workRuns: [],
+  workRunEvents: {},
+  workspaceOnline: true,
+  workspaceErrors: [],
   expandedProjectFolderPaths: new Set(),
   seenProjectFolderPaths: new Set(),
   projectFolderCollapsed: false,
@@ -1717,6 +1651,8 @@ const state: {
 }
 
 let pwaLinkPollTimer: number | undefined
+let transactionProgressPollTimer: number | undefined
+let transactionProgressPollKey = ''
 let cardDiagnosticsTaskSequence = 0
 let settingsPersistenceReady = false
 let appSettingsSaveTimer: number | undefined
@@ -1725,6 +1661,15 @@ let sidebarResizePointerId: number | undefined
 const chatSaveTimers = new Map<string, number>()
 const chatSaveQueues = new Map<string, Promise<void>>()
 const threadStorageKeys = new Map<string, string>()
+
+function localize(root: ParentNode = app) {
+  setI18nLanguage(state.language)
+  translateDom(root, state.language)
+}
+
+function uiText(value: string) {
+  return translatePhrase(value, state.language)
+}
 
 function isAppLanguage(value: unknown): value is AppLanguage {
   return value === 'en' || value === 'zh'
@@ -1742,8 +1687,17 @@ function isOrderSide(value: unknown): value is OrderSide {
   return value === 'buyer' || value === 'seller'
 }
 
+function normalizeSettingsView(value: unknown): SettingsView | undefined {
+  if (value === 'security') return 'wallet'
+  if (value === 'diagnostics' || value === 'runtime') return 'api'
+  if (value === 'api' || value === 'buyer-agent' || value === 'buyer-card' || value === 'seller-card' || value === 'seller' || value === 'pwa' || value === 'wallet' || value === 'archives') {
+    return value
+  }
+  return undefined
+}
+
 function isSettingsView(value: unknown): value is SettingsView {
-  return value === 'api' || value === 'runtime' || value === 'agents' || value === 'buyer-agent' || value === 'buyer-card' || value === 'seller-card' || value === 'seller' || value === 'pwa' || value === 'wallet' || value === 'security' || value === 'diagnostics' || value === 'archives'
+  return normalizeSettingsView(value) === value
 }
 
 function legacyAppSettingsSnapshot(): PersistedAppSettings {
@@ -1764,7 +1718,7 @@ function normalizePersistedSettings(value: unknown): PersistedAppSettings {
     theme: isAppTheme(input.theme) ? input.theme : undefined,
     permissionMode: isPermissionMode(input.permissionMode) ? input.permissionMode : undefined,
     buyerAgentSettings: input.buyerAgentSettings && typeof input.buyerAgentSettings === 'object' ? normalizeBuyerAgentSettings(input.buyerAgentSettings) : undefined,
-    activeSettingsView: isSettingsView(input.activeSettingsView) ? input.activeSettingsView : undefined,
+    activeSettingsView: normalizeSettingsView(input.activeSettingsView),
     workOrderSide: isOrderSide(input.workOrderSide) ? input.workOrderSide : undefined,
     marketOrderSide: isOrderSide(input.marketOrderSide) ? input.marketOrderSide : undefined,
     sidebarCollapsed: typeof input.sidebarCollapsed === 'boolean' ? input.sidebarCollapsed : undefined,
@@ -2084,15 +2038,15 @@ function renderChromeControls() {
   fields.appShell.classList.toggle('sidebar-collapsed', state.sidebarCollapsed)
   fields.sidebarButton.innerHTML = state.sidebarCollapsed ? toolbarIcons.sidebarCollapsed : toolbarIcons.sidebarExpanded
   fields.sidebarButton.setAttribute('aria-pressed', String(state.sidebarCollapsed))
-  fields.sidebarButton.setAttribute('aria-label', state.sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar')
-  fields.sidebarButton.setAttribute('title', state.sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar')
+  fields.sidebarButton.setAttribute('aria-label', state.sidebarCollapsed ? t('chrome.showSidebar') : t('chrome.hideSidebar'))
+  fields.sidebarButton.setAttribute('title', state.sidebarCollapsed ? t('chrome.showSidebar') : t('chrome.hideSidebar'))
   fields.sidebarButton.disabled = false
   fields.backButton.disabled = state.busy || (state.viewHistoryIndex <= 0 && !(state.activeView === 'market' && state.marketDetailProvider))
   fields.forwardButton.disabled = state.busy || state.viewHistoryIndex >= state.viewHistory.length - 1
 }
 
 function renderProfileSummary() {
-  const name = state.signedOut ? (state.language === 'zh' ? '已退出登录' : 'Signed out') : profileDisplayName()
+  const name = state.signedOut ? t('app.signedOut') : profileDisplayName()
   fields.profileName.textContent = name
   fields.profileAvatar.textContent = profileInitial(name)
   fields.profileIdentity.classList.toggle('active', state.profileMenuOpen)
@@ -2104,7 +2058,7 @@ function profileDisplayName() {
   const buyerName = state.agentCards.buyer?.manualFields.buyer?.displayName?.trim()
   const sellerName = state.agentCards.seller?.manualFields.seller?.displayName?.trim()
   const providerId = state.sellerMarketStatus?.providerId?.trim() || state.sellerSettings?.providerId?.trim()
-  return buyerName || sellerName || providerId || 'Exora User'
+  return buyerName || sellerName || providerId || t('app.userFallback')
 }
 
 function profileInitial(name: string) {
@@ -2113,12 +2067,15 @@ function profileInitial(name: string) {
 }
 
 function applyUserPreferences() {
+  setI18nLanguage(state.language)
   document.documentElement.dataset.theme = state.theme
-  document.documentElement.lang = state.language === 'zh' ? 'zh-CN' : 'en'
+  document.documentElement.dataset.language = state.language
+  document.documentElement.lang = htmlLangForLanguage(state.language)
 }
 
 function activePermissionOption() {
-  return permissionOptions.find((option) => option.mode === state.permissionMode) || permissionOptions[0]
+  const options = permissionOptions()
+  return options.find((option) => option.mode === state.permissionMode) || options[0]
 }
 
 function renderPermissionControl() {
@@ -2134,7 +2091,7 @@ function renderPermissionControl() {
     fields.permissionMenu.innerHTML = ''
     return
   }
-  fields.permissionMenu.innerHTML = permissionOptions.map((option) => `
+  fields.permissionMenu.innerHTML = permissionOptions().map((option) => `
     <button class="permission-menu-item ${option.mode === state.permissionMode ? 'active' : ''}" type="button" data-permission-mode="${option.mode}" role="menuitem">
       <span class="permission-menu-icon permission-icon-${option.mode}">${permissionIcons[option.mode]}</span>
       <span class="permission-menu-text">
@@ -2144,6 +2101,7 @@ function renderPermissionControl() {
       <span class="permission-menu-check">${option.mode === state.permissionMode ? permissionCheckIcon : ''}</span>
     </button>
   `).join('')
+  localize(fields.permissionMenu)
 }
 
 function togglePermissionMenu() {
@@ -2167,14 +2125,14 @@ function setPermissionMode(mode: PermissionMode) {
   scheduleSaveAppSettings()
   closePermissionMenu(false)
   renderPermissionControl()
-  showToast(`${activePermissionOption().label} enabled.`)
+  showToast(t('toast.permissionEnabled', { label: activePermissionOption().label }))
 }
 
 function permissionPolicyText(mode = state.permissionMode) {
-  if (mode === 'ask') return 'Always ask the Dock owner before editing external files, using the internet, choosing sellers, approving work, paying, or exposing sensitive data.'
-  if (mode === 'approve') return 'Proceed with routine safe steps, but ask the Dock owner before potentially unsafe external writes, internet use, payments, secrets, or seller commitments.'
-  if (mode === 'full') return 'Full project and internet access is allowed for this task. Payment PINs, owner tokens, and wallet/payment consent still require the Dock owner.'
-  return 'Follow the permissions defined in config.toml. If that configuration is unavailable or unclear, ask the Dock owner before proceeding.'
+  if (mode === 'ask') return t('permission.policy.ask')
+  if (mode === 'approve') return t('permission.policy.approve')
+  if (mode === 'full') return t('permission.policy.full')
+  return t('permission.policy.custom')
 }
 
 function permissionTaskTemplate() {
@@ -2208,25 +2166,14 @@ function permissionTaskTemplate() {
 }
 
 function profileMenuCopy() {
-  if (state.language === 'zh') {
-    return {
-      signOut: state.signedOut ? '已退出登录' : '退出登录',
-      language: '语言',
-      theme: '主题',
-      english: 'English',
-      chinese: '中文',
-      light: '浅色',
-      dark: '深色',
-    }
-  }
   return {
-    signOut: state.signedOut ? 'Signed out' : 'Sign out',
-    language: 'Language',
-    theme: 'Theme',
-    english: 'English',
-    chinese: 'Chinese',
-    light: 'Light',
-    dark: 'Dark',
+    signOut: state.signedOut ? t('profile.signedOut') : t('profile.signOut'),
+    language: t('profile.language'),
+    theme: t('profile.theme'),
+    english: t('profile.english'),
+    chinese: t('profile.chinese'),
+    light: t('profile.light'),
+    dark: t('profile.dark'),
   }
 }
 
@@ -2251,6 +2198,7 @@ function renderProfileMenu() {
     </button>
     ${renderProfileSubmenu(copy)}
   `
+  localize(fields.profileMenu)
 }
 
 function renderProfileSubmenu(copy: ReturnType<typeof profileMenuCopy>) {
@@ -2300,7 +2248,7 @@ function signOutProfile() {
   state.profileMenuOpen = false
   state.profileSubmenu = undefined
   renderProfileSummary()
-  showToast(state.language === 'zh' ? '已退出本地会话。' : 'Signed out locally.')
+  showToast(t('toast.signedOut'))
 }
 
 function openProfileSubmenu(submenu: ProfileSubmenu) {
@@ -2316,14 +2264,19 @@ function clearProfileSubmenu() {
 }
 
 function setLanguage(language: AppLanguage) {
-  state.language = language
+  state.language = normalizeAppLanguage(language)
   if (!hasDesktopBridge()) localStorage.setItem('exora.language', state.language)
+  if (hasDesktopBridge()) {
+    invoke('set_locale', { input: { language: state.language } }).catch((error) => {
+      console.warn('Failed to save locale:', error)
+    })
+  }
   scheduleSaveAppSettings()
   state.profileMenuOpen = false
   state.profileSubmenu = undefined
   applyUserPreferences()
   renderAll()
-  showToast(state.language === 'zh' ? '语言已切换为中文。' : 'Language switched to English.')
+  showToast(t(`toast.language.${state.language}`))
 }
 
 function setTheme(theme: AppTheme) {
@@ -2334,7 +2287,7 @@ function setTheme(theme: AppTheme) {
   state.profileSubmenu = undefined
   applyUserPreferences()
   renderAll()
-  showToast(state.theme === 'dark' ? 'Dark theme enabled.' : 'Light theme enabled.')
+  showToast(t(state.theme === 'dark' ? 'toast.theme.dark' : 'toast.theme.light'))
 }
 
 function focusSearch() {
@@ -2353,8 +2306,8 @@ function renderProjectFolder() {
   fields.projectFolderHead.setAttribute('title', folder?.path || name)
   fields.projectFolderHead.classList.toggle('collapsed', !expanded)
   fields.projectFolderToggle.setAttribute('aria-expanded', String(expanded))
-  fields.projectFolderToggle.setAttribute('title', expanded ? 'Collapse folder tasks' : 'Expand folder tasks')
-  fields.projectFolderToggle.setAttribute('aria-label', `${expanded ? 'Collapse' : 'Expand'} ${name} tasks`)
+  fields.projectFolderToggle.setAttribute('title', expanded ? t('folder.collapseTasks') : t('folder.expandTasks'))
+  fields.projectFolderToggle.setAttribute('aria-label', expanded ? t('folder.collapseNamedTasks', { name }) : t('folder.expandNamedTasks', { name }))
   renderProjectFolderTaskVisibility()
   renderProjectFolderMenu()
   renderTaskContextMenu()
@@ -2390,7 +2343,7 @@ function renderProjectFolderMenu() {
     fields.projectFolderMenu.style.right = ''
     fields.projectFolderMenu.style.top = ''
   }
-  fields.projectFolderMenu.innerHTML = projectFolderMenuActions
+  fields.projectFolderMenu.innerHTML = projectFolderMenuActions()
     .map(({ action, label, icon }) => `
       <button class="project-folder-menu-item" type="button" data-project-folder-action="${action}" role="menuitem">
         <span class="project-folder-menu-icon">${icon}</span>
@@ -2398,6 +2351,7 @@ function renderProjectFolderMenu() {
       </button>
     `)
     .join('')
+  localize(fields.projectFolderMenu)
 }
 
 function renderTaskContextMenu() {
@@ -2416,12 +2370,12 @@ function renderTaskContextMenu() {
   const pinned = state.workTaskState.pinnedIds.has(thread.id)
   const unread = state.workTaskState.unreadIds.has(thread.id)
   const actions: Array<{ action: TaskMenuAction; label: string; icon: string; dividerBefore?: boolean }> = [
-    { action: 'pin', label: pinned ? '取消置顶任务' : '置顶任务', icon: taskMenuIcons.pin },
-    { action: 'rename', label: '重命名任务', icon: taskMenuIcons.rename },
-    { action: 'archive', label: '归档任务', icon: taskMenuIcons.archive },
-    { action: 'unread', label: unread ? '标记为已读' : '标记为未读', icon: taskMenuIcons.unread },
-    { action: 'open-project', label: '在资源管理器中打开', icon: taskMenuIcons['open-project'], dividerBefore: true },
-    { action: 'copy-id', label: '复制会话 ID', icon: taskMenuIcons['copy-id'] },
+    { action: 'pin', label: pinned ? t('taskMenu.unpin') : t('taskMenu.pin'), icon: taskMenuIcons.pin },
+    { action: 'rename', label: t('taskMenu.rename'), icon: taskMenuIcons.rename },
+    { action: 'archive', label: t('taskMenu.archive'), icon: taskMenuIcons.archive },
+    { action: 'unread', label: unread ? t('taskMenu.markRead') : t('taskMenu.markUnread'), icon: taskMenuIcons.unread },
+    { action: 'open-project', label: t('taskMenu.openProject'), icon: taskMenuIcons['open-project'], dividerBefore: true },
+    { action: 'copy-id', label: t('taskMenu.copyId'), icon: taskMenuIcons['copy-id'] },
   ]
   if (state.taskMenuPosition) {
     const rect = (fields.taskContextMenu.parentElement || fields.projectFolderHead).getBoundingClientRect()
@@ -2438,6 +2392,7 @@ function renderTaskContextMenu() {
       <span class="project-folder-menu-label">${escapeHTML(label)}</span>
     </button>
   `).join('')
+  localize(fields.taskContextMenu)
 }
 
 function closeProjectFolderMenu(render = true) {
@@ -2634,7 +2589,7 @@ async function chooseProjectFolder() {
       scheduleSaveAppSettings()
       renderProjectFolder()
       if (folder.path !== previousPath) {
-        showToast(folder.daemonRestarted ? `Project folder applied: ${folder.name}` : `Project folder: ${folder.name}`)
+        showToast(t(folder.daemonRestarted ? 'toast.projectFolderApplied' : 'toast.projectFolder', { name: folder.name }))
       }
       if (folder.daemonRestarted) await refreshStatus()
     }
@@ -2649,7 +2604,7 @@ async function chooseProjectFolder() {
 async function openProjectFolderInExplorer() {
   if (state.busy) return
   if (!window.exora?.invoke) {
-    showToast('Open in Explorer is only available in the desktop app.')
+    showToast(t('toast.openExplorerDesktopOnly'))
     return
   }
   setBusy(true)
@@ -2657,12 +2612,12 @@ async function openProjectFolderInExplorer() {
     const folder = await invoke<ProjectFolder>('open_project_folder')
     setProjectFolders([folder, ...state.projectFolders], folder.path)
     renderProjectFolder()
-    showToast(`Opened ${folder.name}.`)
+    showToast(t('toast.opened', { name: folder.name }))
   } catch (error) {
     const message = humanizeError(error)
     if (message.includes('unknown desktop command: open_project_folder')) {
       await navigator.clipboard?.writeText(activeProjectFolder().path).catch(() => undefined)
-      showToast('Please restart Exora Dock to enable Open in Explorer. Folder path copied.')
+      showToast(t('toast.restartForExplorer'))
     } else {
       showToast(message)
     }
@@ -2682,7 +2637,7 @@ function renameBrowserProjectFolder(name: string): ProjectFolder {
 async function renameProjectFolder() {
   if (state.busy) return
   const currentName = state.projectFolder?.name || 'AgenStaff_Project'
-  const nextName = window.prompt('Rename project', currentName)?.trim()
+  const nextName = window.prompt(t('prompt.renameProject'), currentName)?.trim()
   if (!nextName || nextName === currentName) return
   setBusy(true)
   try {
@@ -2692,7 +2647,7 @@ async function renameProjectFolder() {
     state.projectFolder = folder
     setProjectFolders([folder, ...state.projectFolders], folder.path)
     renderProjectFolder()
-    showToast(`Project renamed: ${folder.name}.`)
+    showToast(t('toast.projectRenamed', { name: folder.name }))
     if (folder.daemonRestarted) await refreshStatus()
   } catch (error) {
     showToast(humanizeError(error))
@@ -2737,7 +2692,7 @@ async function archiveProjectChats() {
   if (state.busy) return
   const count = state.chatThreads.length
   if (!count) {
-    showToast('No chats to archive.')
+    showToast(t('toast.noChatsToArchive'))
     return
   }
   const archivedAt = new Date().toISOString()
@@ -2758,7 +2713,7 @@ async function archiveProjectChats() {
       : browserArchiveProjectChats(threads, archivedAt)
     clearArchivedProjectChats()
     renderAll()
-    showToast(result.archivePath ? `Archived ${result.archivedCount} chats.` : `Archived ${result.archivedCount} chats.`)
+    showToast(t('toast.archivedChats', { count: result.archivedCount }))
   } catch (error) {
     showToast(humanizeError(error))
   } finally {
@@ -2784,7 +2739,7 @@ async function removeProjectFolder() {
     state.projectFolderCollapsed = false
     scheduleSaveAppSettings()
     renderProjectFolder()
-    showToast(`Project removed. Current project: ${folder.name}.`)
+    showToast(t('toast.projectRemoved', { name: folder.name }))
     if (folder.daemonRestarted) await refreshStatus()
   } catch (error) {
     showToast(humanizeError(error))
@@ -2825,6 +2780,18 @@ async function refreshStatus() {
   state.statusLoading = false
 }
 
+async function startDockOnLaunch() {
+  if (!hasDesktopBridge()) return
+  fields.daemon.textContent = 'starting'
+  fields.daemon.dataset.state = 'starting'
+  try {
+    renderStatus(await invoke<AppStatus>('start_dock'))
+  } catch (error) {
+    showToast(humanizeError(error))
+    await refreshStatus()
+  }
+}
+
 async function refreshSeller(options: { market?: boolean } = {}) {
   const settings = await invoke<SellerSettings>('seller_settings').catch(() => null)
   if (settings) {
@@ -2845,12 +2812,30 @@ async function refreshSeller(options: { market?: boolean } = {}) {
   }
 }
 
+function isDraftLLMProfileId(id?: string) {
+  return id === DRAFT_LLM_PROFILE_ID
+}
+
+function editingDraftLLMProfile() {
+  return isDraftLLMProfileId(state.editingLLMProfileId) ? state.llmDraftProfile : undefined
+}
+
+function savedEditingLLMProfileId() {
+  return isDraftLLMProfileId(state.editingLLMProfileId) ? '' : state.editingLLMProfileId || ''
+}
+
 async function refreshLLMProfiles(options: { render?: boolean } = {}) {
   const status = await invoke<LLMProfileStatus>('llm_profiles').catch(() => null)
   if (!status) return
   state.llmProfiles = status.profiles || []
   state.activeLLMProfileId = status.activeProfileId
+  state.buyerLLMProfileId = status.buyerProfileId
+  state.sellerLLMProfileId = status.sellerProfileId
   state.llmKeyStorageAvailable = Boolean(status.keyStorageAvailable)
+  if (editingDraftLLMProfile()) {
+    if (options.render !== false) renderLLMSettings(state.sellerSettings)
+    return
+  }
   if (!state.editingLLMProfileId || !state.llmProfiles.some((profile) => profile.id === state.editingLLMProfileId)) {
     state.editingLLMProfileId = state.activeLLMProfileId || state.llmProfiles[0]?.id
   }
@@ -2881,10 +2866,10 @@ async function generateAgentCardDraft(role: AgentCardRole, form?: HTMLFormElemen
       role,
       running: true,
       stopRequested: false,
-      message: '诊断中...',
+      message: 'Scanning environment...',
     }
     state.activeCardEditor = role
-    state.cardMessage = '诊断中...'
+    state.cardMessage = 'Scanning environment...'
     if (shouldRender) renderAgentCardSurfaces()
   }
   try {
@@ -2894,7 +2879,7 @@ async function generateAgentCardDraft(role: AgentCardRole, form?: HTMLFormElemen
     if (response.card) {
       state.cardDrafts[role] = response.card
       state.activeCardEditor = role
-      state.cardMessage = '诊断完成，已填入系统属性和建议内容。'
+      state.cardMessage = 'Environment scan complete. System and dependency details are ready.'
       if (task) {
         task.running = false
         task.message = state.cardMessage
@@ -2914,7 +2899,7 @@ async function generateAgentCardDraft(role: AgentCardRole, form?: HTMLFormElemen
     const task = shouldTrack ? state.cardDiagnosticsTasks[role] : undefined
     if (task && task.id === taskId) {
       task.running = false
-      if (task.stopRequested) task.message = '诊断已停止。'
+      if (task.stopRequested) task.message = 'Environment scan stopped.'
     }
     if (shouldRender) renderAgentCardSurfaces()
   }
@@ -2926,7 +2911,7 @@ function startAgentCardDiagnostics(role: AgentCardRole, root: ParentNode = field
     stopAgentCardDiagnostics(role)
     return
   }
-  const form = root.querySelector<HTMLFormElement>(`[data-agent-card-form="${role}"]`) || undefined
+  const form = findAgentCardForm(role, root)
   generateAgentCardDraft(role, form).catch((error) => {
     const task = state.cardDiagnosticsTasks[role]
     if (task?.stopRequested) {
@@ -2947,7 +2932,7 @@ function stopAgentCardDiagnostics(role: AgentCardRole) {
   if (!task?.running) return
   task.stopRequested = true
   task.running = false
-  task.message = '诊断已停止。'
+  task.message = 'Environment scan stopped.'
   state.activeCardEditor = role
   state.cardMessage = task.message
   renderAgentCardSurfaces()
@@ -2956,9 +2941,10 @@ function stopAgentCardDiagnostics(role: AgentCardRole) {
 function agentCardDraftPayload(role: AgentCardRole, form?: HTMLFormElement) {
   const card = cardForRole(role)
   if (!form) return { role }
-  const data = new FormData(form)
-  if (role === 'buyer') return { role, buyer: buyerFieldsFromForm(data, card?.manualFields.buyer || {}) }
-  return { role, seller: sellerFieldsFromForm(data, card?.manualFields.seller || {}) }
+  return {
+    role,
+    ...agentCardRoleManualFieldsFromForm(role, new FormData(form), card?.manualFields || {}),
+  }
 }
 
 async function saveAgentCardFromForm(form: HTMLFormElement, role: AgentCardRole) {
@@ -2967,14 +2953,9 @@ async function saveAgentCardFromForm(form: HTMLFormElement, role: AgentCardRole)
     card = await generateAgentCardDraft(role, form, { render: false, track: false })
   }
   if (!card) return
-  const data = new FormData(form)
   const next: AgentCard = {
     ...card,
-    manualFields: {
-      ...card.manualFields,
-      buyer: role === 'buyer' ? buyerFieldsFromForm(data, card.manualFields.buyer || {}) : card.manualFields.buyer,
-      seller: role === 'seller' ? sellerFieldsFromForm(data, card.manualFields.seller || {}) : card.manualFields.seller,
-    },
+    manualFields: agentCardManualFieldsFromForm(role, form, card.manualFields),
   }
   const response = await invoke<{ card?: AgentCard }>('save_agent_card', { input: { role, card: next } })
   if (response.card) {
@@ -2987,7 +2968,7 @@ async function saveAgentCardFromForm(form: HTMLFormElement, role: AgentCardRole)
 }
 
 async function publishAgentCard(role: AgentCardRole, root: ParentNode = fields.decisionContent) {
-  const form = root.querySelector<HTMLFormElement>(`[data-agent-card-form="${role}"]`)
+  const form = findAgentCardForm(role, root)
   if (form) {
     const saved = await saveAgentCardFromForm(form, role)
     if (!saved && !cardForRole(role)) return
@@ -3014,9 +2995,9 @@ async function startPwaLink() {
     const qrSvg = qrPayload
       ? await qrToString(qrPayload, {
         type: 'svg',
-        width: 236,
-        margin: 1,
-        color: { dark: '#17211e', light: '#ffffff' },
+        width: SETTINGS_QR_WIDTH,
+        margin: SETTINGS_QR_MARGIN,
+        color: SETTINGS_QR_COLOR,
       })
       : ''
     state.pwaLink = { ...response, qrSvg }
@@ -3083,29 +3064,67 @@ function pwaLinkErrorMessage(error: unknown) {
   return `Could not create PWA QR: ${message}`
 }
 
+function findAgentCardForm(role: AgentCardRole, root: ParentNode = fields.decisionContent, origin?: Element | null) {
+  const nested = origin?.closest<HTMLFormElement>(`[data-agent-card-form="${role}"]`)
+  return nested || root.querySelector<HTMLFormElement>(`[data-agent-card-form="${role}"]`) || undefined
+}
+
+function agentCardRoleManualFieldsFromForm(role: AgentCardRole, data: FormData, current: AgentCard['manualFields'] = {}): AgentCard['manualFields'] {
+  if (role === 'buyer') return { buyer: buyerFieldsFromForm(data, current.buyer || {}) }
+  return { seller: sellerFieldsFromForm(data, current.seller || {}) }
+}
+
+function agentCardManualFieldsFromForm(role: AgentCardRole, form: HTMLFormElement, current: AgentCard['manualFields'] = {}): AgentCard['manualFields'] {
+  return {
+    ...current,
+    ...agentCardRoleManualFieldsFromForm(role, new FormData(form), current),
+  }
+}
+
+function formText(data: FormData, name: string) {
+  return String(data.get(name) || '').trim()
+}
+
+function formCheckbox(data: FormData, name: string, fallback = false) {
+  const values = data.getAll(name).map((value) => String(value))
+  if (!values.length) return fallback
+  return values.some((value) => value === 'true' || value === 'on' || value === '1')
+}
+
 function buyerFieldsFromForm(data: FormData, current: BuyerManualFields): BuyerManualFields {
   return {
     ...current,
-    displayName: String(data.get('displayName') || '').trim(),
-    budget: String(data.get('budget') || '').trim(),
-    riskBoundary: String(data.get('riskBoundary') || '').trim(),
-    authorizationStrategy: String(data.get('authorizationStrategy') || '').trim(),
+    displayName: formText(data, 'displayName'),
+    supportedAgentTypes: parseListInput(data.get('supportedAgentTypes')),
+    notes: formText(data, 'notes'),
+    budget: formText(data, 'budget'),
     preferences: parseListInput(data.get('preferences')),
+    riskBoundary: formText(data, 'riskBoundary'),
+    authorizationStrategy: formText(data, 'authorizationStrategy'),
     acceptedTaskTypes: parseListInput(data.get('acceptedTaskTypes')),
+    identityDisclosure: formText(data, 'identityDisclosure'),
+    fileDisclosure: formText(data, 'fileDisclosure'),
+    dataRetention: formText(data, 'dataRetention'),
+    escrowPreference: formText(data, 'escrowPreference'),
   }
 }
 
 function sellerFieldsFromForm(data: FormData, current: SellerManualFields): SellerManualFields {
+  const settings = state.sellerSettings
   return {
     ...current,
-    displayName: String(data.get('displayName') || '').trim(),
-    capabilitySummary: String(data.get('capabilitySummary') || '').trim(),
-    pricing: String(data.get('pricing') || '').trim(),
-    availability: String(data.get('availability') || '').trim(),
-    humanConfirmation: String(data.get('humanConfirmation') || '').trim(),
-    dataBoundary: String(data.get('dataBoundary') || '').trim(),
+    displayName: formText(data, 'displayName'),
+    capabilitySummary: formText(data, 'capabilitySummary'),
     capabilityTypes: parseListInput(data.get('capabilityTypes')),
+    pricing: formText(data, 'pricing') || sellerPricingSummary(settings),
+    availability: formText(data, 'availability') || sellerAvailabilitySummary(settings),
+    humanConfirmation: formText(data, 'humanConfirmation'),
+    dataBoundary: formText(data, 'dataBoundary'),
     managedApis: parseListInput(data.get('managedApis')),
+    outputFormats: parseListInput(data.get('outputFormats')),
+    autoQuote: formCheckbox(data, 'autoQuote', Boolean(settings?.autoQuote)),
+    autoAcceptLowRisk: formCheckbox(data, 'autoAcceptLowRisk', Boolean(settings?.autoAcceptLowRisk || settings?.autoCompleteTextTasks)),
+    externalWritePolicy: formText(data, 'externalWritePolicy'),
   }
 }
 
@@ -3113,23 +3132,41 @@ async function refreshWorkspace(options: { quiet?: boolean } = {}) {
   if (state.workspaceLoading) return
   state.workspaceLoading = true
   const previousSelected = state.selectedId
+  const previousSnapshot = {
+    orderPlans: state.orderPlans,
+    approvals: state.approvals,
+    tasks: state.tasks,
+    payments: state.payments,
+    mcpConnections: state.mcpConnections,
+    workRuns: state.workRuns,
+    workRunEvents: state.workRunEvents,
+  }
   try {
     const snapshot = await invoke<WorkspaceSnapshot>('workspace_snapshot').catch((error) => ({
       online: false,
-      orderPlans: [],
-      approvals: [],
-      tasks: [],
-      payments: [],
-      mcpConnections: [],
+      orderPlans: previousSnapshot.orderPlans,
+      approvals: previousSnapshot.approvals,
+      tasks: previousSnapshot.tasks,
+      payments: previousSnapshot.payments,
+      mcpConnections: previousSnapshot.mcpConnections,
+      workMcpLeases: state.workMcpLeases,
+      workRuns: previousSnapshot.workRuns,
+      workRunEvents: previousSnapshot.workRunEvents,
       projectFolders: state.projectFolders,
       activeProjectFolderPath: state.activeProjectFolderPath,
       errors: [humanizeError(error)],
     }))
-    state.orderPlans = snapshot.orderPlans || []
-    state.approvals = snapshot.approvals || []
-    state.tasks = snapshot.tasks || []
-    state.payments = snapshot.payments || []
-    state.mcpConnections = snapshot.mcpConnections || []
+    const offline = snapshot.online === false && Boolean(snapshot.errors?.length)
+    state.workspaceOnline = snapshot.online !== false
+    state.workspaceErrors = snapshot.errors || []
+    state.orderPlans = offline ? previousSnapshot.orderPlans : snapshot.orderPlans || []
+    state.approvals = offline ? previousSnapshot.approvals : snapshot.approvals || []
+    state.tasks = offline ? previousSnapshot.tasks : snapshot.tasks || []
+    state.payments = offline ? previousSnapshot.payments : snapshot.payments || []
+    state.mcpConnections = offline ? previousSnapshot.mcpConnections : snapshot.mcpConnections || []
+    state.workMcpLeases = snapshot.workMcpLeases || []
+    state.workRuns = offline ? previousSnapshot.workRuns : snapshot.workRuns || []
+    state.workRunEvents = snapshot.workRunEvents || previousSnapshot.workRunEvents || {}
     const connectionFolders = projectFoldersFromConnections(state.mcpConnections)
     const activityFolders = projectFoldersFromActivity(state.orderPlans, state.tasks)
     const activePath = snapshot.activeProjectFolderPath || state.activeProjectFolderPath
@@ -3145,9 +3182,64 @@ async function refreshWorkspace(options: { quiet?: boolean } = {}) {
     renderLedger()
     renderContextStrip()
     renderDecisionPanel()
+    renderExternalWorkLockControls()
+    syncTransactionProgressPolling()
   } finally {
     state.workspaceLoading = false
   }
+}
+
+function selectedProgressThread() {
+  if (state.activeView === 'chat' || state.activeView === 'work') return selectedWorkThread()
+  const selected = selectedObjectForActiveView()
+  if (!selected) return undefined
+  const threadId = selected.kind === 'plan'
+    ? workThreadIdForPlan(selected.value)
+    : selected.kind === 'approval'
+      ? workThreadIdForApproval(selected.value)
+      : selected.kind === 'task'
+        ? workThreadIdForTask(selected.value)
+        : workThreadIdForPayment(selected.value)
+  return workThreadById(threadId, { includeArchived: true, side: 'all' })
+}
+
+function selectedProgressPollKeyFor(thread?: WorkThread) {
+  if (!thread) return ''
+  return `${state.workOrderSide}:${thread.id}:${thread.timestamp}:${state.workspaceOnline ? 'online' : 'offline'}`
+}
+
+function clearTransactionProgressPolling() {
+  if (transactionProgressPollTimer !== undefined) {
+    window.clearTimeout(transactionProgressPollTimer)
+    transactionProgressPollTimer = undefined
+  }
+  transactionProgressPollKey = ''
+}
+
+function syncTransactionProgressPolling() {
+  const thread = selectedProgressThread()
+  if (!thread || !workThreadHasTransactionProgress(thread)) {
+    clearTransactionProgressPolling()
+    return
+  }
+  const snapshot = buildTransactionProgressSnapshot(thread, state.workOrderSide)
+  const key = selectedProgressPollKeyFor(thread)
+  if (!snapshot.needsFastRefresh) {
+    clearTransactionProgressPolling()
+    return
+  }
+  if (transactionProgressPollTimer !== undefined && transactionProgressPollKey === key) return
+  clearTransactionProgressPolling()
+  transactionProgressPollKey = key
+  transactionProgressPollTimer = window.setTimeout(() => {
+    transactionProgressPollTimer = undefined
+    if (transactionProgressPollKey !== key) return
+    void refreshWorkspace({ quiet: true }).finally(() => {
+      if (transactionProgressPollKey === key && transactionProgressPollTimer === undefined) {
+        syncTransactionProgressPolling()
+      }
+    })
+  }, 2000)
 }
 
 function transactionSnapshotRecords(): TransactionSnapshotRecord[] {
@@ -3262,8 +3354,14 @@ async function saveTransactionsSnapshot() {
 async function submitAgentMessage() {
   const query = agentQuery.value.trim()
   if (!query || state.busy) return
+  const activeLease = activeExternalWorkLease()
+  if (activeLease) {
+    renderExternalWorkLockControls()
+    showToast(t('toast.externalWorkLocked'))
+    return
+  }
   if (!state.buyerAgentSettings.enabled) {
-    showToast('Buyer agent is disabled in Settings.')
+    showToast(t('toast.buyerAgentDisabled'))
     return
   }
 
@@ -3317,21 +3415,15 @@ function renderStatus(status: AppStatus) {
   state.appStatus = status
   fields.daemon.textContent = status.daemon
   fields.daemon.dataset.state = status.daemon
-  fields.runtime.textContent = `${status.docker} / ${status.container} / ${status.image}`
-  fields.statusMessage.textContent = status.message
-  fields.baseUrl.textContent = status.baseUrl
-  fields.message.textContent = status.message
-  fields.discovery.textContent = status.discoveryPath
-  fields.mcp.textContent = status.mcpCommand
-  fields.imageTag.textContent = status.imageTag
-  fields.dataDir.textContent = status.dataDir
+  fields.message.textContent = translatePhrase(status.message, state.language)
   renderLocalAgentPromptControls()
 }
 
 function renderChat() {
   renderChatSurface()
   if (state.newConversationDraft) {
-    fields.chatFeed.innerHTML = '<div class="chat-empty-state"><h2>What would you like to do?</h2></div>'
+    fields.chatFeed.innerHTML = `<div class="chat-empty-state"><h2>${t('chat.empty')}</h2></div>`
+    localize(fields.chatFeed)
     return
   }
   const workThread = selectedWorkThread()
@@ -3342,19 +3434,24 @@ function renderChat() {
     : selectedChatThread()
   const messages = chatThread?.messages || []
   const events = workThread ? workEventsForThread(workThread) : []
+  const progressPanel = workThread && workThreadHasTransactionProgress(workThread) ? renderTransactionProgressPanel(workThread, state.workOrderSide) : ''
   if (!workThread && messages.length === 0 && events.length === 0) {
-    fields.chatFeed.innerHTML = '<div class="chat-empty-state"><h2>What would you like to do?</h2></div>'
+    fields.chatFeed.innerHTML = `<div class="chat-empty-state"><h2>${t('chat.empty')}</h2></div>`
+    localize(fields.chatFeed)
     return
   }
-  if (messages.length === 0 && events.length === 0) {
-    fields.chatFeed.innerHTML = '<div class="chat-empty-state"><h2>What would you like to do?</h2></div>'
+  if (!progressPanel && messages.length === 0 && events.length === 0) {
+    fields.chatFeed.innerHTML = `<div class="chat-empty-state"><h2>${t('chat.empty')}</h2></div>`
+    localize(fields.chatFeed)
     return
   }
   fields.chatFeed.innerHTML = [
+    progressPanel,
     ...messages.map(renderChatMessage),
     ...events.map(renderWorkEventCard),
-  ].join('')
+  ].filter(Boolean).join('')
   attachDecisionHandlers(fields.chatFeed)
+  localize(fields.chatFeed)
   fields.chatFeed.scrollTop = fields.chatFeed.scrollHeight
 }
 
@@ -3362,32 +3459,32 @@ function renderChatMessage(message: ChatMessage) {
   if (message.kind === 'order_event') {
     return `
       <article class="chat-order-event">
-        <div class="message-meta">${escapeHTML(message.meta || actorLabel(message.actor) || 'Order event')}</div>
-        <p>${escapeHTML(message.text)}</p>
+        <div class="message-meta">${escapeHTML(message.meta || actorLabel(message.actor) || t('chat.orderEvent'))}</div>
+        <p data-no-i18n>${escapeHTML(message.text)}</p>
       </article>
     `
   }
   return `
     <article class="chat-message ${message.role}${message.pending ? ' pending' : ''}">
       <div class="message-meta">${escapeHTML(message.meta || actorLabel(message.actor) || messageRoleLabel(message.role))}</div>
-      <p>${escapeHTML(message.text)}</p>
+      <p data-no-i18n>${escapeHTML(message.text)}</p>
       ${message.result ? renderSearchResult(message.result) : ''}
     </article>
   `
 }
 
 function actorLabel(actor?: ChatMessage['actor']) {
-  if (actor === 'buyer_agent') return 'Our agent'
-  if (actor === 'seller_agent') return 'Seller agent'
-  if (actor === 'buyer_human') return 'You'
-  if (actor === 'seller_human') return 'Seller'
+  if (actor === 'buyer_agent') return t('chat.ourAgent')
+  if (actor === 'seller_agent') return t('chat.sellerAgent')
+  if (actor === 'buyer_human') return t('chat.you')
+  if (actor === 'seller_human') return t('chat.seller')
   return ''
 }
 
 function messageRoleLabel(role: ChatMessage['role']) {
-  if (role === 'user') return 'You'
+  if (role === 'user') return t('chat.you')
   if (role === 'assistant') return 'Exora'
-  return 'System'
+  return t('chat.system')
 }
 
 function renderSearchResult(result: MarketSearchResult) {
@@ -3396,7 +3493,7 @@ function renderSearchResult(result: MarketSearchResult) {
   return `
     <div class="result-strip">
       <span>${escapeHTML(targetSummary(result.normalizedQuery))}</span>
-      <span>${(result.orderDraftOptions || []).length || candidates.length} option(s)</span>
+      <span>${t('chat.optionCount', { count: (result.orderDraftOptions || []).length || candidates.length })}</span>
     </div>
     <div class="candidate-list">
       ${candidates.map(renderCandidateSummary).join('')}
@@ -3442,6 +3539,410 @@ function renderWorkEventCard(event: { kind: SelectedKind; id: string }) {
   return `<article class="chat-order-event" data-event-kind="payment">${renderPaymentDecision(payment)}</article>`
 }
 
+function renderTransactionProgressPanel(thread: WorkThread, side: OrderSide) {
+  const snapshot = buildTransactionProgressSnapshot(thread, side)
+  const sideLabel = side === 'seller' ? 'Seller' : 'Buyer'
+  const eventHTML = snapshot.events.length
+    ? snapshot.events.map((event) => `
+      <div class="transaction-event ${event.tone ? `tone-${event.tone}` : ''}">
+        <span>${escapeHTML(event.label)}</span>
+        <small>${escapeHTML([event.detail, event.timestamp ? compactTimestamp(event.timestamp) : ''].filter(Boolean).join(' / '))}</small>
+      </div>
+    `).join('')
+    : '<p class="empty-copy">No progress events recorded yet.</p>'
+  const facts = [
+    ...snapshot.ids.filter((item) => item.value).map((item) => `<div><dt>${escapeHTML(item.label)}</dt><dd>${escapeHTML(shortID(item.value))}</dd></div>`),
+    snapshot.provider ? `<div><dt>Provider</dt><dd>${escapeHTML(shortID(snapshot.provider))}</dd></div>` : '',
+    snapshot.quote ? `<div><dt>Quote</dt><dd>${escapeHTML(snapshot.quote)}</dd></div>` : '',
+    snapshot.payment ? `<div><dt>Payment</dt><dd>${escapeHTML(snapshot.payment)}</dd></div>` : '',
+    snapshot.artifacts ? `<div><dt>Artifacts</dt><dd>${escapeHTML(snapshot.artifacts)}</dd></div>` : '',
+  ].filter(Boolean).join('')
+  return `
+    <section class="transaction-progress-panel ${snapshot.terminal ? 'terminal' : ''}" data-progress-state="${escapeAttr(snapshot.state)}">
+      <div class="transaction-progress-head">
+        <div>
+          <span class="transaction-role-chip">${escapeHTML(sideLabel)} progress</span>
+          <h3>${escapeHTML(snapshot.title)}</h3>
+          <p>${escapeHTML(snapshot.syncStatus)}</p>
+        </div>
+        <span class="transaction-state-chip">${escapeHTML(progressStateLabel(snapshot.state))}</span>
+      </div>
+      <div class="transaction-progress-summary">
+        <div><span>Owner</span><strong>${escapeHTML(progressStateLabel(snapshot.owner || 'unknown'))}</strong></div>
+        <div><span>Waiting for</span><strong>${escapeHTML(progressStateLabel(snapshot.waitingFor || 'none'))}</strong></div>
+        <div><span>Next</span><strong>${escapeHTML(snapshot.nextAction || 'No action required')}</strong></div>
+      </div>
+      <div class="transaction-progress-steps" aria-label="Transaction progress">
+        ${snapshot.stages.map((stage, index) => `
+          <div class="transaction-stage ${stage.status}" data-stage="${escapeAttr(stage.id)}">
+            <span class="transaction-stage-dot">${index + 1}</span>
+            <div>
+              <strong>${escapeHTML(stage.title)}</strong>
+              <small>${escapeHTML(stage.detail)}</small>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+      ${facts ? `<dl class="transaction-progress-facts">${facts}</dl>` : ''}
+      <div class="transaction-event-log">
+        <div class="transaction-event-title">
+          <strong>Recent activity</strong>
+          <span>${escapeHTML(snapshot.updatedAt ? compactTimestamp(snapshot.updatedAt) : 'local snapshot')}</span>
+        </div>
+        ${eventHTML}
+      </div>
+    </section>
+  `
+}
+
+function buildTransactionProgressSnapshot(thread: WorkThread, side: OrderSide): TransactionProgressSnapshot {
+  const data = transactionProgressData(thread)
+  const primaryPlan = latestBy(data.plans, (plan) => plan.updatedAt || plan.createdAt || plan.expiresAt || '')
+  const primaryTask = latestBy(data.tasks, (task) => task.updatedAt || task.completedAt || task.createdAt || '')
+  const primaryApproval = latestBy(data.approvals, (approval) => approval.createdAt || approval.expiresAt || '')
+  const primaryPayment = latestBy(data.payments, (payment) => payment.updatedAt || payment.confirmedAt || payment.createdAt || '')
+  const activeRun = latestBy(data.workRuns, (run) => run.updatedAt || run.createdAt || '')
+  const orderState = deriveTransactionOrderState(data, primaryPlan, primaryTask, activeRun)
+  const currentStageId = currentProgressStageId(side, orderState.state, activeRun)
+  const failed = Boolean(orderState.terminalReason || primaryTask?.status === 'failed' || activeRun?.status === 'failed')
+  const blocked = orderState.state === 'execution_blocked' || activeRun?.status === 'waiting_owner_approval' || activeRun?.status === 'waiting_owner_choice'
+  const terminal = ['closed', 'settlement_or_dispute'].includes(orderState.state) || failed
+  const stages = transactionStageDefinitions(side).map((stage, index, all) => {
+    const currentIndex = all.findIndex((item) => item.id === currentStageId)
+    let status: TransactionProgressStage['status'] = 'pending'
+    if (currentIndex >= 0 && index < currentIndex) status = 'complete'
+    if (stage.id === currentStageId) status = failed ? 'failed' : blocked ? 'blocked' : orderState.waitingFor === 'user_input' || orderState.waitingFor === 'buyer_user' ? 'waiting' : 'active'
+    if (terminal && !failed && index <= currentIndex) status = 'complete'
+    return { ...stage, status }
+  })
+  const provider = primaryTask?.providerPubkey || primaryTask?.quote?.providerPubkey || (primaryPlan ? selectedProviderForPlan(primaryPlan) : '')
+  const quote = primaryTask ? taskAmount(primaryTask) : primaryPlan ? selectedQuoteForPlan(primaryPlan) : ''
+  const payment = primaryPayment ? `${primaryPayment.status || 'payment'} / ${paymentAmount(primaryPayment)}` : primaryApproval?.paymentRequired ? 'required' : ''
+  const artifacts = primaryTask?.artifacts?.length ? `${primaryTask.artifacts.length} file(s)` : primaryTask?.artifactHashes ? `${Object.keys(primaryTask.artifactHashes).length} hash(es)` : ''
+  return {
+    title: thread.title || primaryTask?.goal || primaryPlan?.query || 'Transaction',
+    side,
+    state: orderState.state,
+    owner: orderState.owner,
+    waitingFor: orderState.waitingFor,
+    nextAction: orderState.nextAction,
+    updatedAt: orderState.updatedAt,
+    syncStatus: transactionSyncStatus(data),
+    currentStageId,
+    terminal,
+    needsFastRefresh: transactionNeedsFastRefresh(orderState.state, data),
+    stages,
+    events: transactionProgressEvents(data, primaryTask, primaryApproval, primaryPayment),
+    ids: [
+      { label: 'Order', value: orderState.orderId || thread.orderId || orderIdFromWorkThreadId(thread.id) },
+      { label: 'Plan', value: primaryPlan?.planId },
+      { label: 'Task', value: primaryTask?.id },
+      { label: 'Job', value: primaryPlan?.providerJobId || activeRun?.entities?.providerJobId },
+      { label: 'Run', value: activeRun?.runId },
+    ],
+    quote,
+    payment,
+    provider,
+    artifacts,
+  }
+}
+
+function workThreadHasTransactionProgress(thread: WorkThread) {
+  if (thread.orderId || thread.planIds.length || thread.taskIds.length || thread.approvalIds.length || thread.paymentIds.length) return true
+  const data = transactionProgressData(thread)
+  return Boolean(data.plans.length || data.tasks.length || data.approvals.length || data.payments.length || data.workRuns.length)
+}
+
+function transactionProgressData(thread: WorkThread): TransactionProgressData {
+  const orderID = thread.orderId || orderIdFromWorkThreadId(thread.id)
+  const plans = state.orderPlans.filter((plan) => (
+    thread.planIds.includes(plan.planId) ||
+    plan.planId === orderID ||
+    Boolean(plan.taskId && thread.taskIds.includes(plan.taskId)) ||
+    workThreadIdForPlan(plan) === thread.id
+  ))
+  const planIds = new Set([...thread.planIds, ...plans.map((plan) => plan.planId)].filter(Boolean))
+  const tasks = state.tasks.filter((task) => (
+    thread.taskIds.includes(task.id) ||
+    task.orderId === orderID ||
+    Boolean(task.orderId && planIds.has(task.orderId)) ||
+    plans.some((plan) => plan.taskId === task.id) ||
+    workThreadIdForTask(task) === thread.id
+  ))
+  const taskIds = new Set([...thread.taskIds, ...tasks.map((task) => task.id)].filter(Boolean))
+  const approvals = state.approvals.filter((approval) => (
+    thread.approvalIds.includes(approval.approvalId) ||
+    taskIds.has(approval.taskId) ||
+    plans.some((plan) => plan.approvalId === approval.approvalId)
+  ))
+  const approvalIds = new Set([...thread.approvalIds, ...approvals.map((approval) => approval.approvalId)].filter(Boolean))
+  const payments = state.payments.filter((payment) => (
+    thread.paymentIds.includes(payment.paymentId) ||
+    Boolean(payment.taskId && taskIds.has(payment.taskId)) ||
+    Boolean(payment.approvalId && approvalIds.has(payment.approvalId)) ||
+    plans.some((plan) => plan.paymentId === payment.paymentId)
+  ))
+  const paymentIds = new Set([...thread.paymentIds, ...payments.map((payment) => payment.paymentId)].filter(Boolean))
+  const workUids = new Set([
+    ...plans.map((plan) => plan.workUid),
+    ...tasks.map((task) => task.workUid),
+  ].filter((value): value is string => Boolean(value)))
+  const workRuns = state.workRuns.filter((run) => {
+    const entities = run.entities
+    return (
+      Boolean(run.workUid && workUids.has(run.workUid)) ||
+      Boolean(entities?.orderPlanId && planIds.has(entities.orderPlanId)) ||
+      Boolean(entities?.orderPlanIds?.some((id) => planIds.has(id))) ||
+      Boolean(entities?.taskId && taskIds.has(entities.taskId)) ||
+      Boolean(entities?.approvalId && approvalIds.has(entities.approvalId)) ||
+      Boolean(entities?.paymentId && paymentIds.has(entities.paymentId)) ||
+      Boolean(orderID && entities?.providerJobId && plans.some((plan) => plan.providerJobId === entities.providerJobId)) ||
+      Boolean(!plans.length && !tasks.length && run.projectPath && thread.projectPath && sameProjectPath(run.projectPath, thread.projectPath) && run.intent === thread.title)
+    )
+  })
+  const runIds = new Set(workRuns.map((run) => run.runId))
+  const workRunEvents = [...runIds].flatMap((runId) => state.workRunEvents[runId] || [])
+  return { thread, plans, tasks, approvals, payments, workRuns, workRunEvents }
+}
+
+function deriveTransactionOrderState(data: TransactionProgressData, plan?: OrderPlan, task?: Task, run?: WorkRun) {
+  const fromPlan = plan?.orderState
+  let derivedState = fromPlan?.state || 'plan_first'
+  let owner = fromPlan?.owner || 'buyer_agent'
+  let waitingFor = fromPlan?.waitingFor || 'local_agent'
+  let terminalReason = fromPlan?.terminalReason || ''
+  if (plan && !fromPlan?.state) {
+    if (plan.status === 'pending_selection') {
+      derivedState = plan.candidates?.some((item) => ['pending', 'requested', 'quoting'].includes(item.status || '')) ? 'seller_valuation' : 'quote_review'
+      owner = 'buyer_user'
+      waitingFor = 'user_input'
+    } else if (plan.status === 'selected') {
+      derivedState = 'order_authorized'
+      owner = 'buyer_user'
+      waitingFor = 'user_input'
+    } else if (plan.status === 'expired' || plan.status === 'invalidated') {
+      derivedState = 'closed'
+      owner = 'cloud'
+      waitingFor = 'none'
+      terminalReason = plan.invalidationCause || plan.status
+    }
+  }
+  if (task) {
+    if (task.status === 'pending_consent') {
+      derivedState = 'order_authorized'
+      owner = 'buyer_user'
+      waitingFor = 'user_input'
+    } else if (task.status === 'consented' || task.status === 'claimed') {
+      derivedState = 'input_transfer'
+      owner = 'provider_docker'
+      waitingFor = 'provider_response'
+    } else if (task.status === 'running') {
+      derivedState = 'provider_execution'
+      owner = 'provider_docker'
+      waitingFor = 'local_supervisor'
+    } else if (task.status === 'completed') {
+      derivedState = 'buyer_verification'
+      owner = 'buyer_user'
+      waitingFor = 'user_input'
+    } else if (task.status === 'failed') {
+      derivedState = 'settlement_or_dispute'
+      owner = 'buyer_user'
+      waitingFor = 'user_input'
+      terminalReason = task.error || 'provider_task_failed'
+    }
+  }
+  if (!plan && !task && run?.currentStep) {
+    derivedState = run.currentStep === 'discover_agent_cards' || run.currentStep === 'start_task_flow' ? 'cloud_matching' : 'seller_valuation'
+  }
+  const approval = latestBy(data.approvals, (item) => item.createdAt || item.expiresAt || '')
+  const payment = latestBy(data.payments, (item) => item.updatedAt || item.confirmedAt || item.createdAt || '')
+  const nextAction = firstDisplayText(
+    run?.nextAction,
+    approval && approval.status !== 'approved' ? `Review approval ${shortID(approval.approvalId)}` : '',
+    payment && payment.status && !['confirmed', 'confirmed_simulated', 'found_finalized'].includes(payment.status) ? `Confirm payment ${shortID(payment.paymentId)}` : '',
+    task?.status === 'completed' ? 'Verify delivered artifacts' : '',
+    task?.status === 'failed' ? 'Review failure and dispute evidence' : '',
+    plan?.nextAction,
+    derivedState === 'provider_execution' ? 'Wait for Provider Docker terminal report' : '',
+  )
+  return {
+    state: derivedState,
+    owner,
+    waitingFor,
+    terminalReason,
+    nextAction,
+    orderId: fromPlan?.orderId || plan?.planId || task?.orderId,
+    updatedAt: latestTimestamp([
+      fromPlan?.updatedAt,
+      plan?.updatedAt,
+      task?.updatedAt,
+      task?.completedAt,
+      run?.updatedAt,
+      payment?.updatedAt,
+      approval?.createdAt,
+    ]),
+  }
+}
+
+function transactionStageDefinitions(side: OrderSide): Array<Omit<TransactionProgressStage, 'status'>> {
+  if (side === 'seller') {
+    return [
+      { id: 'task_valuation', title: 'Valuation', detail: 'Read manifest, pricing policy, and device snapshot.' },
+      { id: 'quote_response', title: 'Quote response', detail: 'Return quote, negotiation request, or rejection.' },
+      { id: 'wait_buyer', title: 'Buyer authorization', detail: 'Wait for buyer approval, payment evidence, and inputs.' },
+      { id: 'execution_plan', title: 'Execution plan', detail: 'Create resumable step list before running.' },
+      { id: 'provider_execution', title: 'Docker execution', detail: 'Run the authorized container job.' },
+      { id: 'local_supervisor', title: 'Local supervisor', detail: 'Keep local execution alive without cloud heartbeat.' },
+      { id: 'terminal_report', title: 'Terminal report', detail: 'Return success or unrecoverable failure.' },
+      { id: 'settlement', title: 'Settlement', detail: 'Wait for buyer verification, release, or dispute.' },
+    ]
+  }
+  return [
+    { id: 'plan_first', title: 'Plan first', detail: 'Gather complete local requirements and manifests.' },
+    { id: 'cloud_matching', title: 'Matching', detail: 'Send approved task to Cloud and collect seller valuations.' },
+    { id: 'quote_review', title: 'Quote review', detail: 'Compare quotes, negotiation notes, and rejections.' },
+    { id: 'authorization', title: 'Authorization', detail: 'Approve seller, sensitive inputs, and escrow evidence.' },
+    { id: 'input_transfer', title: 'Input transfer', detail: 'Make authorized files and hashes available to provider.' },
+    { id: 'provider_execution', title: 'Provider execution', detail: 'Provider Docker runs the job under seller policy.' },
+    { id: 'buyer_verification', title: 'Verification', detail: 'Inspect artifacts, hashes, and terminal report.' },
+    { id: 'settlement', title: 'Settlement', detail: 'Release payment, refund, dispute, or close.' },
+  ]
+}
+
+function currentProgressStageId(side: OrderSide, orderState: string, run?: WorkRun) {
+  const step = run?.currentStep || ''
+  if (side === 'seller') {
+    if (['cloud_matching', 'seller_valuation'].includes(orderState)) return 'task_valuation'
+    if (orderState === 'quote_review') return 'quote_response'
+    if (orderState === 'order_authorized') return 'wait_buyer'
+    if (orderState === 'input_transfer') return 'execution_plan'
+    if (orderState === 'provider_execution') return step === 'poll_worker_job' ? 'local_supervisor' : 'provider_execution'
+    if (orderState === 'buyer_verification') return 'terminal_report'
+    if (orderState === 'settlement_or_dispute' || orderState === 'closed') return 'settlement'
+    return 'task_valuation'
+  }
+  if (step === 'discover_agent_cards' || step === 'start_task_flow') return 'plan_first'
+  if (step === 'negotiate_task' || step === 'compare_quotes' || step === 'create_order_plan' || step === 'wait_owner_seller_choice') return 'quote_review'
+  if (step === 'request_approval' || step === 'wait_owner_approval_payment' || step === 'create_payment_intent' || step === 'fund_chain_escrow' || step === 'sync_payment_evidence' || step === 'verify_payment_evidence') return 'authorization'
+  if (step === 'submit_worker_job' || step === 'poll_worker_job') return 'provider_execution'
+  if (step === 'fetch_artifacts' || step === 'verify_artifacts') return 'buyer_verification'
+  if (orderState === 'cloud_matching' || orderState === 'seller_valuation') return 'cloud_matching'
+  if (orderState === 'quote_review') return 'quote_review'
+  if (orderState === 'order_authorized') return 'authorization'
+  if (orderState === 'input_transfer') return 'input_transfer'
+  if (orderState === 'provider_execution' || orderState === 'execution_blocked') return 'provider_execution'
+  if (orderState === 'buyer_verification') return 'buyer_verification'
+  if (orderState === 'settlement_or_dispute' || orderState === 'closed') return 'settlement'
+  return 'plan_first'
+}
+
+function transactionNeedsFastRefresh(orderState: string, data: TransactionProgressData) {
+  if (!state.workspaceOnline) return false
+  if (data.workRuns.some((run) => ['queued', 'running', 'waiting_owner_choice', 'waiting_owner_approval', 'waiting_worker', 'stop_requested'].includes(run.status || ''))) return true
+  return ['cloud_matching', 'seller_valuation', 'quote_review', 'input_transfer', 'provider_execution', 'execution_blocked'].includes(orderState)
+}
+
+function transactionSyncStatus(data: TransactionProgressData) {
+  const offline = !state.workspaceOnline
+  const errors = state.workspaceErrors.length ? ` / ${state.workspaceErrors[0]}` : ''
+  const source = data.workRuns.length ? `${data.workRuns.length} checkpoint${data.workRuns.length === 1 ? '' : 's'}` : 'local transaction records'
+  return offline ? `Local snapshot, waiting to sync${errors}` : `Live local sync from ${source}`
+}
+
+function transactionProgressEvents(data: TransactionProgressData, task?: Task, approval?: Approval, payment?: PaymentRecord): TransactionProgressEvent[] {
+  const events: TransactionProgressEvent[] = []
+  for (const plan of data.plans) {
+    for (const event of plan.events || []) {
+      events.push({
+        id: `plan:${plan.planId}:${event.type}:${event.time || event.optionId || events.length}`,
+        type: event.type,
+        label: progressStateLabel(event.type),
+        detail: event.message || event.optionId,
+        timestamp: event.time,
+        tone: progressEventTone(event.type),
+      })
+    }
+  }
+  for (const event of data.workRunEvents) {
+    events.push({
+      id: event.eventId || `run:${event.runId}:${event.type}:${event.createdAt}`,
+      type: event.type,
+      label: progressStateLabel(event.type),
+      detail: event.summary || event.step || event.status,
+      timestamp: event.createdAt,
+      tone: progressEventTone(event.type || event.status || ''),
+    })
+  }
+  if (task) {
+    events.push({
+      id: `task:${task.id}:${task.status}`,
+      type: task.status,
+      label: `Task ${progressStateLabel(task.status)}`,
+      detail: task.error || task.goal,
+      timestamp: task.updatedAt || task.completedAt || task.createdAt,
+      tone: progressEventTone(task.status),
+    })
+  }
+  if (approval) {
+    events.push({
+      id: `approval:${approval.approvalId}:${approval.status}`,
+      type: approval.status,
+      label: `Approval ${progressStateLabel(approval.status)}`,
+      detail: approval.riskSummary || approval.action,
+      timestamp: approval.createdAt || approval.expiresAt,
+      tone: progressEventTone(approval.status),
+    })
+  }
+  if (payment) {
+    events.push({
+      id: `payment:${payment.paymentId}:${payment.status}`,
+      type: payment.status || 'payment',
+      label: `Payment ${progressStateLabel(payment.status || 'recorded')}`,
+      detail: payment.proofRef || paymentAmount(payment),
+      timestamp: payment.updatedAt || payment.confirmedAt || payment.createdAt,
+      tone: progressEventTone(payment.status || ''),
+    })
+  }
+  return events
+    .filter((event, index, all) => event.timestamp || all.findIndex((item) => item.id === event.id) === index)
+    .sort((a, b) => sortTime(b.timestamp) - sortTime(a.timestamp))
+    .slice(0, 7)
+}
+
+function progressEventTone(value: string): TransactionProgressEvent['tone'] {
+  const lower = value.toLowerCase()
+  if (lower.includes('fail') || lower.includes('reject') || lower.includes('invalid') || lower.includes('expired')) return 'bad'
+  if (lower.includes('block') || lower.includes('required') || lower.includes('waiting') || lower.includes('pending')) return 'warn'
+  if (lower.includes('complete') || lower.includes('success') || lower.includes('approved') || lower.includes('quoted') || lower.includes('confirmed')) return 'good'
+  return 'normal'
+}
+
+function progressStateLabel(value?: string) {
+  const text = String(value || '').trim()
+  if (!text) return 'Unknown'
+  return text.replace(/[._-]+/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
+function selectedQuoteForPlan(plan: OrderPlan) {
+  const option = selectedOptionForPlan(plan)
+  if (option) return optionPrice(option)
+  const candidate = (plan.candidates || []).find((item) => item.status === 'quoted' && item.priceAmount)
+  if (candidate?.priceAmount) return `${candidate.priceAmount} ${candidate.currency || 'USDC'}`
+  return ''
+}
+
+function latestBy<T>(items: T[], timestamp: (item: T) => string | undefined): T | undefined {
+  return [...items].sort((a, b) => sortTime(timestamp(b)) - sortTime(timestamp(a)))[0]
+}
+
+function latestTimestamp(values: Array<string | undefined>) {
+  return values.filter(Boolean).sort((a, b) => sortTime(b) - sortTime(a))[0] || ''
+}
+
+function firstDisplayText(...values: Array<string | undefined | false>) {
+  return values.map((value) => String(value || '').trim()).find(Boolean) || ''
+}
+
 function renderChatSurface() {
   const started = chatSurfaceStarted()
   fields.chatView.classList.remove('compact')
@@ -3451,6 +3952,7 @@ function renderChatSurface() {
   fields.localAgentCard.classList.toggle('hidden', started)
   app.querySelector<HTMLElement>('.work-or-divider')?.classList.toggle('hidden', started)
   agentChatForm.classList.remove('hidden')
+  renderExternalWorkLockControls()
   resizeAgentComposer()
 }
 
@@ -3464,7 +3966,15 @@ function chatSurfaceStarted() {
     : selectedChatThread()
   const messages = chatThread?.messages || []
   const events = workThread ? workEventsForThread(workThread) : []
-  return messages.length > 0 || events.length > 0
+  const progressData = workThread ? transactionProgressData(workThread) : undefined
+  const hasProgress = Boolean(progressData && (progressData.plans.length || progressData.tasks.length || progressData.approvals.length || progressData.payments.length || progressData.workRuns.length))
+  return messages.length > 0 || events.length > 0 || hasProgress
+}
+
+function rightWorkspaceIsWhite() {
+  if (state.activeView === 'settings' || state.activeView === 'market') return true
+  if (state.activeView === 'chat' || state.activeView === 'work') return chatSurfaceStarted()
+  return false
 }
 
 function resizeAgentComposer() {
@@ -3496,7 +4006,7 @@ async function searchCardMarket(query: string) {
   const trimmed = query.trim()
   if (!trimmed || state.busy) return
   if (!state.buyerAgentSettings.enabled) {
-    showToast('Buyer agent is disabled in Settings.')
+    showToast(t('toast.buyerAgentDisabled'))
     return
   }
   setActiveView('market')
@@ -3538,19 +4048,15 @@ async function searchCardMarket(query: string) {
   }
 }
 
-const settingsNavItems: Array<{ view: SettingsView; title: string }> = [
-  { view: 'api', title: 'Provider API' },
-  { view: 'buyer-agent', title: 'Buyer Agent' },
-  { view: 'buyer-card', title: 'Buyer Card' },
-  { view: 'seller-card', title: 'Seller Card' },
-  { view: 'seller', title: 'Seller Agent' },
-  { view: 'agents', title: 'External MCP' },
-  { view: 'pwa', title: 'PWA Link' },
-  { view: 'wallet', title: 'Wallet' },
-  { view: 'security', title: 'Security' },
-  { view: 'archives', title: 'Archive Records' },
-  { view: 'runtime', title: 'Runtime' },
-  { view: 'diagnostics', title: 'Diagnostics' },
+const settingsNavItems: Array<{ view: SettingsView; titleKey: string }> = [
+  { view: 'api', titleKey: 'settings.api.nav' },
+  { view: 'buyer-card', titleKey: 'settings.buyerCard.nav' },
+  { view: 'seller-card', titleKey: 'settings.sellerCard.nav' },
+  { view: 'buyer-agent', titleKey: 'settings.buyerAgent.nav' },
+  { view: 'seller', titleKey: 'settings.seller.nav' },
+  { view: 'pwa', titleKey: 'settings.pwa.nav' },
+  { view: 'wallet', titleKey: 'settings.wallet.nav' },
+  { view: 'archives', titleKey: 'settings.archives.nav' },
 ]
 
 function renderLedger() {
@@ -3558,13 +4064,16 @@ function renderLedger() {
   fields.ledgerList.classList.toggle('settings-list', state.activeView === 'settings')
   if (state.activeView === 'settings') {
     renderSettingsSidebar()
+    localize()
     return
   }
   if (state.activeView === 'market') {
     renderMarketTransactionSidebar()
+    localize()
     return
   }
   renderOrderActivitySidebar()
+  localize()
 }
 
 function renderMarketTransactionSidebar() {
@@ -3596,18 +4105,21 @@ function renderSettingsSidebar() {
   fields.sidebarTitle.textContent = 'Settings'
   fields.ledgerCount.textContent = String(settingsNavItems.length)
   setLedgerEmpty(false)
-  fields.ledgerList.innerHTML = settingsNavItems.map((item) => `
-    <button class="ledger-item history-record settings-record ${item.view === state.activeSettingsView ? 'active' : ''}" data-settings-tab="${escapeHTML(item.view)}" title="${escapeHTML(item.title)}">
+  fields.ledgerList.innerHTML = settingsNavItems.map((item) => {
+    const title = t(item.titleKey)
+    return `
+    <button class="ledger-item history-record settings-record ${item.view === state.activeSettingsView ? 'active' : ''}" data-settings-tab="${escapeHTML(item.view)}" title="${escapeAttr(title)}">
       <span class="settings-record-icon">${settingsNavIcons[item.view]}</span>
-      <strong>${escapeHTML(item.title)}</strong>
+      <strong>${escapeHTML(title)}</strong>
     </button>
-  `).join('')
+  `
+  }).join('')
   fields.ledgerList.querySelectorAll<HTMLButtonElement>('[data-settings-tab]').forEach((button) => {
     button.addEventListener('click', () => {
       state.activeSettingsView = button.dataset.settingsTab as SettingsView
       scheduleSaveAppSettings()
       renderAll()
-      if (state.activeSettingsView === 'wallet' || state.activeSettingsView === 'security') {
+      if (state.activeSettingsView === 'wallet') {
         refreshSettingsStatus()
       }
       if (state.activeSettingsView === 'pwa') {
@@ -3643,21 +4155,35 @@ function renderContextStrip() {
   }
   const selected = selectedObjectForActiveView()
   if (!selected) {
-    fields.contextStrip.textContent = 'Select order activity on the left, or ask for a capability below.'
+    fields.contextStrip.textContent = t('context.selectOrder')
     return
   }
   if (selected.kind === 'plan') {
-    fields.contextStrip.textContent = `Seller choice: ${selected.value.query || 'market request'}`
+    fields.contextStrip.textContent = t('context.sellerChoice', { query: selected.value.query || translatePhrase('market request') })
   } else if (selected.kind === 'approval') {
-    fields.contextStrip.textContent = `Approval: ${selected.value.action || 'request'} for task ${shortID(selected.value.taskId)}`
+    fields.contextStrip.textContent = t('context.approval', { action: selected.value.action || t('common.request'), task: shortID(selected.value.taskId) })
   } else if (selected.kind === 'task') {
-    fields.contextStrip.textContent = `Task: ${taskTitle(selected.value)}`
+    fields.contextStrip.textContent = t('context.task', { title: taskTitle(selected.value) })
   } else {
-    fields.contextStrip.textContent = `Payment: ${selected.value.status || 'record'} ${paymentAmount(selected.value)}`
+    fields.contextStrip.textContent = t('context.payment', { status: selected.value.status || t('common.record'), amount: paymentAmount(selected.value) })
   }
 }
 
+function renderTransactionProgressForSelection(selected: ReturnType<typeof selectedObject>) {
+  if (!selected) return ''
+  const threadId = selected.kind === 'plan'
+    ? workThreadIdForPlan(selected.value)
+    : selected.kind === 'approval'
+      ? workThreadIdForApproval(selected.value)
+      : selected.kind === 'task'
+        ? workThreadIdForTask(selected.value)
+        : workThreadIdForPayment(selected.value)
+  const thread = workThreadById(threadId, { includeArchived: true, side: 'all' })
+  return thread ? renderTransactionProgressPanel(thread, state.workOrderSide) : ''
+}
+
 function renderDecisionPanel() {
+  window.queueMicrotask(() => localize())
   renderViewTabs()
   const selected = selectedObjectForActiveView()
 
@@ -3727,22 +4253,22 @@ function renderDecisionPanel() {
     fields.mainKicker.textContent = 'Work'
     fields.decisionTitle.textContent = 'Review Sellers'
     fields.decisionStep.textContent = 'Review sellers'
-    fields.decisionContent.innerHTML = renderOrderPlanDecision(selected.value)
+    fields.decisionContent.innerHTML = renderTransactionProgressForSelection(selected) + renderOrderPlanDecision(selected.value)
   } else if (selected.kind === 'approval') {
     fields.mainKicker.textContent = 'Work'
     fields.decisionTitle.textContent = 'Approval Request'
     fields.decisionStep.textContent = selected.value.paymentRequired ? 'Payment required' : 'Review'
-    fields.decisionContent.innerHTML = renderApprovalDecision(selected.value)
+    fields.decisionContent.innerHTML = renderTransactionProgressForSelection(selected) + renderApprovalDecision(selected.value)
   } else if (selected.kind === 'task') {
     fields.mainKicker.textContent = 'Work'
     fields.decisionTitle.textContent = 'Task Status'
     fields.decisionStep.textContent = selected.value.status || 'task'
-    fields.decisionContent.innerHTML = renderTaskDecision(selected.value)
+    fields.decisionContent.innerHTML = renderTransactionProgressForSelection(selected) + renderTaskDecision(selected.value)
   } else {
     fields.mainKicker.textContent = 'Work'
     fields.decisionTitle.textContent = 'Payment Proof'
     fields.decisionStep.textContent = selected.value.status || 'payment'
-    fields.decisionContent.innerHTML = renderPaymentDecision(selected.value)
+    fields.decisionContent.innerHTML = renderTransactionProgressForSelection(selected) + renderPaymentDecision(selected.value)
   }
   attachDecisionHandlers()
 }
@@ -3904,12 +4430,15 @@ function renderBuyerCard() {
           <h3>${escapeHTML(buyer.displayName || 'Exora Buyer')}</h3>
         </div>
       </div>
-      <p>${escapeHTML(buyer.riskBoundary || 'Request resources, compare provider cards, approve work, and keep transaction records under local owner control.')}</p>
+      <p>${escapeHTML(buyer.notes || 'Request resources, compare provider cards, approve work, and keep transaction records under local owner control.')}</p>
       <dl class="detail-grid">
         <div><dt>Status</dt><dd>${escapeHTML(card.status)}</dd></div>
         <div><dt>Budget</dt><dd>${escapeHTML(buyer.budget || 'not set')}</dd></div>
-        <div><dt>Agent</dt><dd>${escapeHTML(card.agentId || 'not set')}</dd></div>
         <div><dt>Tasks</dt><dd>${escapeHTML(listSummary(buyer.acceptedTaskTypes))}</dd></div>
+        <div><dt>Risk</dt><dd>${escapeHTML(buyer.riskBoundary || 'not set')}</dd></div>
+        <div><dt>Authorization</dt><dd>${escapeHTML(buyer.authorizationStrategy || 'not set')}</dd></div>
+        <div><dt>Disclosure</dt><dd>${escapeHTML(disclosureSummary(card))}</dd></div>
+        <div><dt>Agent</dt><dd>${escapeHTML(card.agentId || 'not set')}</dd></div>
         <div><dt>Diagnostics</dt><dd>${escapeHTML(diagnosticsSummary(card.diagnostics))}</dd></div>
         <div><dt>Updated</dt><dd>${escapeHTML(shortDate(card.updatedAt))}</dd></div>
       </dl>
@@ -3932,6 +4461,7 @@ function renderSellerCard() {
   }
   const seller = card.manualFields.seller || {}
   const providerId = market?.providerId || settings?.providerId || 'not configured'
+  const sellerNote = seller.capabilitySummary || 'Offer local provider capability, let buyer agents discover this card, and keep risky actions under local owner control.'
   return `
     <article class="agent-card seller-agent-card">
       <div class="agent-card-head">
@@ -3941,12 +4471,16 @@ function renderSellerCard() {
           <h3>${escapeHTML(seller.displayName || providerId || 'Exora Seller')}</h3>
         </div>
       </div>
-      <p>${escapeHTML(seller.capabilitySummary || 'Publish capabilities, quote work, and let other agents discover this local provider card through the market.')}</p>
+      <p>${escapeHTML(sellerNote)}</p>
       <dl class="detail-grid">
         <div><dt>Status</dt><dd>${escapeHTML(card.status)}</dd></div>
+        <div><dt>Capabilities</dt><dd>${escapeHTML(listSummary(seller.capabilityTypes))}</dd></div>
         <div><dt>Pricing</dt><dd>${escapeHTML(seller.pricing || 'not set')}</dd></div>
         <div><dt>Availability</dt><dd>${escapeHTML(seller.availability || 'not set')}</dd></div>
-        <div><dt>Capabilities</dt><dd>${escapeHTML(listSummary(seller.capabilityTypes))}</dd></div>
+        <div><dt>Policy</dt><dd>${escapeHTML(seller.humanConfirmation || 'not set')}</dd></div>
+        <div><dt>Outputs</dt><dd>${escapeHTML(listSummary(seller.outputFormats))}</dd></div>
+        <div><dt>Disclosure</dt><dd>${escapeHTML(disclosureSummary(card))}</dd></div>
+        <div><dt>Agent</dt><dd>${escapeHTML(card.agentId || 'not set')}</dd></div>
         <div><dt>Diagnostics</dt><dd>${escapeHTML(diagnosticsSummary(card.diagnostics))}</dd></div>
         <div><dt>Updated</dt><dd>${escapeHTML(shortDate(card.updatedAt))}</dd></div>
       </dl>
@@ -3954,7 +4488,7 @@ function renderSellerCard() {
       <div class="decision-actions">
         <button type="button" data-card-action="edit" data-card-role="seller">Edit card</button>
         <button type="button" data-card-action="publish" data-card-role="seller">Publish</button>
-        <button type="button" class="secondary" data-card-action="refresh">Refresh</button>
+        <button type="button" class="secondary" data-card-action="open-work">Records</button>
       </div>
     </article>
   `
@@ -3971,9 +4505,9 @@ function renderUnsetAgentCardWindow(role: AgentCardRole) {
         </div>
         <div class="setup-window-body">
           <span class="profile-avatar">${isBuyer ? 'BY' : 'SL'}</span>
-          <h3>${isBuyer ? '买家名片未设置' : '卖家名片未设置'}</h3>
-          <p>${isBuyer ? '前往设置页补充预算、风险边界和授权策略。' : '前往设置页补充能力、报价、可用性和数据边界。'}</p>
-          <button type="button" data-card-action="setup-card" data-card-role="${role}">${isBuyer ? '开始设置买家名片' : '开始设置卖家名片'}</button>
+          <h3>${isBuyer ? 'Buyer card not set' : 'Seller card not set'}</h3>
+          <p>${isBuyer ? 'Add a short note and scan the local environment.' : 'Add a short provider note and scan the local environment.'}</p>
+          <button type="button" data-card-action="setup-card" data-card-role="${role}">${isBuyer ? 'Set up buyer card' : 'Set up seller card'}</button>
         </div>
       </div>
     </article>
@@ -3993,103 +4527,140 @@ function renderAgentCardSetupList(role: AgentCardRole) {
   const card = cardForRole(role)
   const manual = isBuyer ? card?.manualFields.buyer || {} : card?.manualFields.seller || {}
   const fields = isBuyer ? renderBuyerCardFields(manual as BuyerManualFields) : renderSellerCardFields(manual as SellerManualFields)
-  const setupTitle = isBuyer ? '买家名片设置' : '卖家名片设置'
-  const setupCopy = isBuyer
-    ? '设置预算、风险边界和授权偏好。可以先填写，再用诊断补全系统属性和建议内容。'
-    : '设置能力、报价、可用性和数据边界。可以先填写，再用诊断补全系统属性和建议内容。'
-  const status = card?.status || 'not set'
   const diagnosticsTask = state.cardDiagnosticsTasks[role]
-  const messageText = diagnosticsTask?.message || (state.activeCardEditor === role ? state.cardMessage : '')
+  const actionMessage = state.activeCardEditor === role ? state.cardMessage : ''
+  const messageText = actionMessage && actionMessage !== diagnosticsTask?.message ? actionMessage : ''
   const message = messageText
     ? `
       <div class="card-setup-row card-message-row">
-        <span class="field-label">状态</span>
-        <small class="field-help">最近操作</small>
+        <span class="field-label">${t('card.status')}</span>
+        <small class="field-help">${t('card.recentAction')}</small>
         <strong class="diagnostic-value">${escapeHTML(messageText)}</strong>
       </div>
     `
     : ''
   return `
-    ${renderAgentCardActionBar(role)}
     <form class="agent-card-form card-setup-list agent-card-settings-form" data-agent-card-form="${role}">
       ${message}
-      <div class="card-setup-row card-setup-section-row">
-        <strong>可填写项</strong>
-        <span>${isBuyer ? '请求方偏好' : '提供方能力'}</span>
-      </div>
       ${fields}
-      <div class="card-setup-row card-setup-section-row">
-        <strong>系统属性</strong>
-        <span>${card ? (card.status === 'published' ? '公开名片信息' : '本地可见，发布后公开') : '尚未诊断'}</span>
-      </div>
       ${renderAgentCardDiagnosticRows(card)}
     </form>
+    ${renderAgentCardActionBar(role)}
   `
 }
 
 function renderAgentCardActionBar(role: AgentCardRole) {
   const diagnosing = state.cardDiagnosticsTasks[role]?.running === true
   const hasUnsavedChanges = agentCardHasUnsavedChanges(role)
+  const scanStatus = agentCardScanStatusText(role)
   return `
-    <div class="card-setup-actionbar" aria-label="Agent card actions">
+    <div class="card-setup-actionbar card-scan-actionbar" aria-label="Agent card environment scan">
       <button type="button" class="card-action-button diagnose-card-action ${diagnosing ? 'is-running' : ''}" data-card-action="${diagnosing ? 'stop-diagnose' : 'diagnose'}" data-card-role="${role}" ${diagnosing ? 'aria-busy="true"' : ''}>
         <span class="card-action-icon">${diagnosing ? windowIcons.close : cardActionIcons.diagnose}</span>
-        <span class="card-action-text">${diagnosing ? '停止诊断...' : '开始诊断'}</span>
-        <span class="diagnose-progress" aria-hidden="true"><span></span></span>
+        <span class="card-action-text">${diagnosing ? 'Stop scan' : 'Scan environment'}</span>
       </button>
-      <button type="button" class="card-action-button save-card-action ${hasUnsavedChanges ? 'is-dirty' : 'is-saved'}" data-card-action="save" data-card-role="${role}" title="${hasUnsavedChanges ? '保存本地更改' : '当前内容已保存'}">
+      <span class="card-scan-status" title="${escapeAttr(scanStatus)}">${escapeHTML(scanStatus)}</span>
+    </div>
+    <div class="card-setup-actionbar card-save-actionbar" aria-label="Agent card actions">
+      <button type="button" class="card-action-button save-card-action ${hasUnsavedChanges ? 'is-dirty' : 'is-saved'}" data-card-action="save" data-card-role="${role}" title="${hasUnsavedChanges ? 'Save local changes' : 'Current card is saved'}">
         <span class="card-action-icon">${hasUnsavedChanges ? cardActionIcons.save : cardActionIcons.saved}</span>
-        <span class="card-action-text">${hasUnsavedChanges ? '保存本地' : '已保存'}</span>
+        <span class="card-action-text">${hasUnsavedChanges ? 'Save local' : 'Saved'}</span>
       </button>
-      <button type="button" class="card-action-button publish-card-action" data-card-action="publish" data-card-role="${role}">
+      <button type="button" class="card-action-button publish-card-action" data-card-action="publish" data-card-role="${role}" title="Save and publish this card to Exora Cloud">
         <span class="card-action-icon">${cardActionIcons.publish}</span>
-        <span class="card-action-text">发布</span>
+        <span class="card-action-text">Publish</span>
       </button>
     </div>
   `
 }
 
+function agentCardScanStatusText(role: AgentCardRole) {
+  const task = state.cardDiagnosticsTasks[role]
+  if (task?.message) return uiText(task.message)
+  const card = cardForRole(role)
+  if (card?.diagnostics) return uiText('Environment scan complete. System and dependency details are ready.')
+  return uiText('Not checked')
+}
+
 function renderAgentCardDiagnosticRows(card?: AgentCard) {
   if (!card) {
     return `
-      <div class="card-setup-row card-diagnostic-row muted-diagnostics"><span class="field-label">OS</span><small class="field-help">操作系统与版本</small><strong class="diagnostic-value">尚未诊断</strong></div>
-      <div class="card-setup-row card-diagnostic-row muted-diagnostics"><span class="field-label">CPU</span><small class="field-help">核心数与型号</small><strong class="diagnostic-value">尚未诊断</strong></div>
-      <div class="card-setup-row card-diagnostic-row muted-diagnostics"><span class="field-label">Memory</span><small class="field-help">物理内存容量</small><strong class="diagnostic-value">尚未诊断</strong></div>
-      <div class="card-setup-row card-diagnostic-row muted-diagnostics"><span class="field-label">Disk</span><small class="field-help">系统卷剩余空间</small><strong class="diagnostic-value">点击“开始诊断”后填入</strong></div>
+      <div class="agent-env-empty">
+        <strong>Environment diagnostics are not collected yet.</strong>
+        <span>Run diagnostics to fill system, GPU, code runtime, and dependency versions.</span>
+      </div>
     `
   }
   const diagnostics = card.diagnostics
   return `
-      <div class="card-setup-row card-diagnostic-row"><span class="field-label">OS</span><small class="field-help">系统与内核</small><strong class="diagnostic-value">${escapeHTML(systemOSSummary(diagnostics))}</strong></div>
-      <div class="card-setup-row card-diagnostic-row"><span class="field-label">CPU</span><small class="field-help">核心数与型号</small><strong class="diagnostic-value">${escapeHTML(systemCPUSummary(diagnostics))}</strong></div>
-      <div class="card-setup-row card-diagnostic-row"><span class="field-label">Memory</span><small class="field-help">物理内存容量</small><strong class="diagnostic-value">${escapeHTML(diagnostics.ramGb ? `${diagnostics.ramGb}GB RAM` : 'not detected')}</strong></div>
-      <div class="card-setup-row card-diagnostic-row"><span class="field-label">GPU</span><small class="field-help">显卡与显存</small><strong class="diagnostic-value">${escapeHTML(systemGPUSummary(diagnostics))}</strong></div>
-      <div class="card-setup-row card-diagnostic-row"><span class="field-label">Disk</span><small class="field-help">系统卷容量</small><strong class="diagnostic-value">${escapeHTML(systemStorageSummary(diagnostics))}</strong></div>
-      <div class="card-setup-row card-diagnostic-row"><span class="field-label">Runtime</span><small class="field-help">本地运行环境</small><strong class="diagnostic-value">${escapeHTML(systemRuntimeSummary(diagnostics))}</strong></div>
+    <div class="agent-env-dashboard">
+      ${renderDiagnosticGroup('System', diagnosticSystemItems(diagnostics))}
+      ${renderDiagnosticGroup('GPU / CUDA', diagnosticGpuCudaItems(diagnostics))}
+      ${renderDiagnosticGroup('Python Environment', diagnosticPythonEnvironmentItems(diagnostics))}
+      ${renderDiagnosticGroup('Python Packages', diagnosticPythonPackageItems(diagnostics))}
+      ${renderOptionalDiagnosticGroup('Other Runtime', diagnosticOtherRuntimeItems(diagnostics))}
+      ${renderOptionalDiagnosticGroup('Other Dependencies', diagnosticOtherDependencyItems(diagnostics))}
+    </div>
   `
+}
+
+function renderDiagnosticGroup(title: string, items: Array<[string, string]>) {
+  const visible = items.filter(([, value]) => value && value !== 'not detected')
+  const rows = (visible.length ? visible : [['Status', 'not detected']]).map(([label, value]) => `
+    <div class="agent-env-item">
+      <span>${escapeHTML(label)}</span>
+      <strong>${escapeHTML(value)}</strong>
+    </div>
+  `).join('')
+  const wideClass = title.includes('Packages') || title.includes('Dependencies') ? ' wide' : ''
+  return `
+    <section class="agent-env-group${wideClass}">
+      <h3>${escapeHTML(title)}</h3>
+      <div class="agent-env-grid">${rows}</div>
+    </section>
+  `
+}
+
+function renderOptionalDiagnosticGroup(title: string, items: Array<[string, string]>) {
+  const visible = items.filter(([, value]) => value && value !== 'not detected')
+  if (!visible.length) return ''
+  return renderDiagnosticGroup(title, items)
 }
 
 function renderBuyerCardFields(buyer: BuyerManualFields) {
   return `
-    <label class="card-setup-row card-field-row"><span class="field-label">显示名称</span><small class="field-help">公开展示的买家名片名称。</small><input name="displayName" value="${escapeAttr(buyer.displayName || '')}" placeholder="Local buyer agent" /></label>
-    <label class="card-setup-row card-field-row"><span class="field-label">预算范围</span><small class="field-help">写清单次任务预算、报价规则或先询价。</small><input name="budget" value="${escapeAttr(buyer.budget || '')}" placeholder="80 USDC / task, quote first" /></label>
-    <label class="card-setup-row card-field-row"><span class="field-label">风险边界</span><small class="field-help">说明允许和禁止代理执行的任务范围。</small><textarea name="riskBoundary" placeholder="Low-risk compute, research, and code work only">${escapeHTML(buyer.riskBoundary || '')}</textarea></label>
-    <label class="card-setup-row card-field-row"><span class="field-label">授权策略</span><small class="field-help">定义付款、数据访问和任务确认如何批准。</small><textarea name="authorizationStrategy">${escapeHTML(buyer.authorizationStrategy || '')}</textarea></label>
-    <label class="card-setup-row card-field-row"><span class="field-label">偏好</span><small class="field-help">用逗号分隔，例如隐私、信誉、速度。</small><input name="preferences" value="${escapeAttr(listInput(buyer.preferences))}" placeholder="privacy first, high reputation, speed" /></label>
-    <label class="card-setup-row card-field-row"><span class="field-label">接受任务类型</span><small class="field-help">列出此买家愿意委托的任务类型。</small><input name="acceptedTaskTypes" value="${escapeAttr(listInput(buyer.acceptedTaskTypes))}" placeholder="research, coding, data cleanup" /></label>
+    <label class="card-setup-row card-field-row"><span class="field-label">Display name</span><small class="field-help">Public name for this local buyer card.</small><input name="displayName" value="${escapeAttr(buyer.displayName || '')}" placeholder="Local buyer agent" /></label>
+    <label class="card-setup-row card-field-row"><span class="field-label">Supported agents</span><small class="field-help">Comma-separated local agents that can drive this buyer card.</small><input name="supportedAgentTypes" value="${escapeAttr(listInput(buyer.supportedAgentTypes))}" placeholder="Codex, Claude Code, OpenCode, Exora agent" /></label>
+    <label class="card-setup-row card-field-row"><span class="field-label">Budget</span><small class="field-help">Default budget boundary shown to sellers.</small><input name="budget" value="${escapeAttr(buyer.budget || '')}" placeholder="80 USDC / task" /></label>
+    <label class="card-setup-row card-field-row"><span class="field-label">Accepted tasks</span><small class="field-help">Comma-separated task categories this buyer may route externally.</small><input name="acceptedTaskTypes" value="${escapeAttr(listInput(buyer.acceptedTaskTypes))}" placeholder="compute, research, data, code, automation" /></label>
+    <label class="card-setup-row card-field-row"><span class="field-label">Preferences</span><small class="field-help">Comma-separated seller or execution preferences.</small><input name="preferences" value="${escapeAttr(listInput(buyer.preferences))}" placeholder="escrow, reproducible output, short retention" /></label>
+    <label class="card-setup-row card-field-row"><span class="field-label">Risk boundary</span><small class="field-help">What this buyer will not route without owner review.</small><textarea name="riskBoundary" placeholder="Low-risk compute, research, data, code, and automation only.">${escapeHTML(buyer.riskBoundary || '')}</textarea></label>
+    <label class="card-setup-row card-field-row"><span class="field-label">Authorization</span><small class="field-help">Owner approval rules for payments, disclosure, writes, and publishing.</small><textarea name="authorizationStrategy" placeholder="Human confirmation is required for payments, file disclosure, external writes, and public publishing.">${escapeHTML(buyer.authorizationStrategy || '')}</textarea></label>
+    <label class="card-setup-row card-field-row"><span class="field-label">Identity disclosure</span><small class="field-help">Identity information allowed before consent.</small><textarea name="identityDisclosure" placeholder="Minimal identity disclosure before consent.">${escapeHTML(buyer.identityDisclosure || '')}</textarea></label>
+    <label class="card-setup-row card-field-row"><span class="field-label">File disclosure</span><small class="field-help">File metadata and content rules for seller matching.</small><textarea name="fileDisclosure" placeholder="Task-scoped file metadata only unless the owner confirms more.">${escapeHTML(buyer.fileDisclosure || '')}</textarea></label>
+    <label class="card-setup-row card-field-row"><span class="field-label">Data retention</span><small class="field-help">How long sellers may retain task inputs.</small><textarea name="dataRetention" placeholder="Inputs may only be retained for the active task unless separately approved.">${escapeHTML(buyer.dataRetention || '')}</textarea></label>
+    <label class="card-setup-row card-field-row"><span class="field-label">Escrow preference</span><small class="field-help">Payment proof or escrow preference for paid work.</small><textarea name="escrowPreference" placeholder="Use escrow or verifiable payment proof for paid work.">${escapeHTML(buyer.escrowPreference || '')}</textarea></label>
+    <label class="card-setup-row card-field-row"><span class="field-label">Note</span><small class="field-help">Short owner-facing summary for this buyer card.</small><textarea name="notes" placeholder="Local buyer card for testing seller discovery and order approval.">${escapeHTML(buyer.notes || '')}</textarea></label>
   `
 }
 
 function renderSellerCardFields(seller: SellerManualFields) {
+  const settings = state.sellerSettings
+  const autoQuote = seller.autoQuote ?? settings?.autoQuote ?? false
+  const autoAcceptLowRisk = seller.autoAcceptLowRisk ?? Boolean(settings?.autoAcceptLowRisk || settings?.autoCompleteTextTasks)
   return `
-    <label class="card-setup-row card-field-row"><span class="field-label">显示名称</span><small class="field-help">公开展示的卖家名片名称。</small><input name="displayName" value="${escapeAttr(seller.displayName || '')}" placeholder="Local provider card" /></label>
-    <label class="card-setup-row card-field-row"><span class="field-label">能力摘要</span><small class="field-help">概括这台机器和代理可以安全提供什么。</small><textarea name="capabilitySummary" placeholder="Describe what this machine and agent can safely do">${escapeHTML(seller.capabilitySummary || '')}</textarea></label>
-    <label class="card-setup-row card-field-row"><span class="field-label">报价方式</span><small class="field-help">写清固定价格、按任务报价或先询价。</small><input name="pricing" value="${escapeAttr(seller.pricing || '')}" placeholder="Quote first, or 12 USDC / task" /></label>
-    <label class="card-setup-row card-field-row"><span class="field-label">可用性</span><small class="field-help">说明可接单时间、人工确认和响应速度。</small><input name="availability" value="${escapeAttr(seller.availability || '')}" placeholder="Manual approval, evenings, best effort" /></label>
-    <label class="card-setup-row card-field-row"><span class="field-label">确认策略</span><small class="field-help">说明哪些操作必须由真人确认。</small><textarea name="humanConfirmation">${escapeHTML(seller.humanConfirmation || '')}</textarea></label>
-    <label class="card-setup-row card-field-row"><span class="field-label">数据边界</span><small class="field-help">说明不会接触或外发的数据范围。</small><textarea name="dataBoundary">${escapeHTML(seller.dataBoundary || '')}</textarea></label>
-    <label class="card-setup-row card-field-row"><span class="field-label">能力类型</span><small class="field-help">用逗号分隔，便于 Market 匹配。</small><input name="capabilityTypes" value="${escapeAttr(listInput(seller.capabilityTypes))}" placeholder="coding, browsing, data processing" /></label>
-    <label class="card-setup-row card-field-row"><span class="field-label">托管 API</span><small class="field-help">列出可由代理调度的本地或远程能力。</small><input name="managedApis" value="${escapeAttr(listInput(seller.managedApis))}" placeholder="OpenAI-compatible LLM, browser, private DB" /></label>
+    <label class="card-setup-row card-field-row"><span class="field-label">Display name</span><small class="field-help">Public name for this local seller card.</small><input name="displayName" value="${escapeAttr(seller.displayName || '')}" placeholder="Local provider agent" /></label>
+    <label class="card-setup-row card-field-row"><span class="field-label">Capability summary</span><small class="field-help">Short provider capability description shown in market search.</small><textarea name="capabilitySummary" placeholder="Local seller card for safely offering compute, code, or agent work.">${escapeHTML(seller.capabilitySummary || '')}</textarea></label>
+    <label class="card-setup-row card-field-row"><span class="field-label">Capability types</span><small class="field-help">Comma-separated capability classes.</small><input name="capabilityTypes" value="${escapeAttr(listInput(seller.capabilityTypes))}" placeholder="Skill Capability, Managed API Capability" /></label>
+    <label class="card-setup-row card-field-row"><span class="field-label">Pricing</span><small class="field-help">Public pricing policy or quote default summary.</small><textarea name="pricing" placeholder="10 USDC per lightweight job; task-specific quotes may adjust.">${escapeHTML(seller.pricing || sellerPricingSummary(settings))}</textarea></label>
+    <label class="card-setup-row card-field-row"><span class="field-label">Availability</span><small class="field-help">When this seller agent can accept work.</small><textarea name="availability" placeholder="Enabled locally; availability is checked during seller-agent negotiation.">${escapeHTML(seller.availability || sellerAvailabilitySummary(settings))}</textarea></label>
+    <label class="card-setup-row card-field-row"><span class="field-label">Human confirmation</span><small class="field-help">Actions requiring provider owner confirmation.</small><textarea name="humanConfirmation" placeholder="Human confirmation is required for external writes, payments, credential use, and public disclosure.">${escapeHTML(seller.humanConfirmation || '')}</textarea></label>
+    <label class="card-setup-row card-field-row"><span class="field-label">Data boundary</span><small class="field-help">How buyer inputs are scoped and retained.</small><textarea name="dataBoundary" placeholder="Buyer inputs are task-scoped and are not reused for training or resale without consent.">${escapeHTML(seller.dataBoundary || '')}</textarea></label>
+    <label class="card-setup-row card-field-row"><span class="field-label">Managed APIs</span><small class="field-help">Names only; do not include keys, tokens, or private endpoints.</small><input name="managedApis" value="${escapeAttr(listInput(seller.managedApis))}" placeholder="OpenAI-compatible LLM, browser automation" /></label>
+    <label class="card-setup-row card-field-row"><span class="field-label">Output formats</span><small class="field-help">Comma-separated outputs this seller returns.</small><input name="outputFormats" value="${escapeAttr(listInput(seller.outputFormats))}" placeholder="artifact, log summary, receipt" /></label>
+    <label class="card-setup-row card-field-row inline-check-row"><span class="field-label">Auto quote</span><small class="field-help">Mirrors the seller-agent quote policy.</small><input name="autoQuote" type="hidden" value="false" /><span class="inline-check-control"><input name="autoQuote" type="checkbox" value="true"${autoQuote ? ' checked' : ''} /> Auto quote new tasks</span></label>
+    <label class="card-setup-row card-field-row inline-check-row"><span class="field-label">Low-risk auto accept</span><small class="field-help">Mirrors the seller-agent low-risk acceptance policy.</small><input name="autoAcceptLowRisk" type="hidden" value="false" /><span class="inline-check-control"><input name="autoAcceptLowRisk" type="checkbox" value="true"${autoAcceptLowRisk ? ' checked' : ''} /> Auto accept low-risk work</span></label>
+    <label class="card-setup-row card-field-row"><span class="field-label">External write policy</span><small class="field-help">Rules for writing outside local task outputs.</small><textarea name="externalWritePolicy" placeholder="External writes require explicit owner approval.">${escapeHTML(seller.externalWritePolicy || '')}</textarea></label>
   `
 }
 
@@ -4110,12 +4681,7 @@ function agentCardHasUnsavedChanges(role: AgentCardRole, form?: HTMLFormElement)
 }
 
 function agentCardComparable(card: AgentCard, role: AgentCardRole, form?: HTMLFormElement) {
-  const manualFields = { ...card.manualFields }
-  if (form) {
-    const data = new FormData(form)
-    if (role === 'buyer') manualFields.buyer = buyerFieldsFromForm(data, card.manualFields.buyer || {})
-    if (role === 'seller') manualFields.seller = sellerFieldsFromForm(data, card.manualFields.seller || {})
-  }
+  const manualFields = form ? agentCardManualFieldsFromForm(role, form, card.manualFields) : { ...card.manualFields }
   return {
     role: card.role,
     status: card.status,
@@ -4156,11 +4722,11 @@ function normalizeComparable(value: unknown): unknown {
 
 function renderSystemAttributes(card: AgentCard) {
   const diagnostics = card.diagnostics
-  const visibility = card.status === 'published' ? '公开名片信息' : '本地可见，发布后公开'
+  const visibility = card.status === 'published' ? 'published card payload' : 'local until published'
   return `
     <section class="system-attributes">
       <div class="system-attributes-head">
-        <strong>系统属性</strong>
+        <strong>Environment</strong>
         <span>${visibility}</span>
       </div>
       <dl class="detail-grid system-attribute-grid">
@@ -4169,6 +4735,8 @@ function renderSystemAttributes(card: AgentCard) {
         <div><dt>Memory</dt><dd>${escapeHTML(diagnostics.ramGb ? `${diagnostics.ramGb}GB RAM` : 'not detected')}</dd></div>
         <div><dt>GPU</dt><dd>${escapeHTML(systemGPUSummary(diagnostics))}</dd></div>
         <div><dt>Disk</dt><dd>${escapeHTML(systemStorageSummary(diagnostics))}</dd></div>
+        <div><dt>Python</dt><dd>${escapeHTML(systemPythonSummary(diagnostics))}</dd></div>
+        <div><dt>Packages</dt><dd>${escapeHTML(pythonPackageSummary(diagnostics))}</dd></div>
       </dl>
     </section>
   `
@@ -4187,8 +4755,42 @@ function systemCPUSummary(diagnostics: AgentCardDiagnostics) {
 function systemGPUSummary(diagnostics: AgentCardDiagnostics) {
   const gpus = diagnostics.gpus || []
   if (!gpus.length) return 'not detected'
-  const totalVRAM = gpus.reduce((sum, gpu) => sum + (gpu.vramGb || 0), 0)
-  return `${gpus.length} GPU${totalVRAM ? ` / ${totalVRAM}GB VRAM` : ''}`
+  return gpus.map(gpuSummary).join(' / ')
+}
+
+function diagnosticSystemItems(diagnostics: AgentCardDiagnostics): Array<[string, string]> {
+  return [
+    ['OS', systemOSSummary(diagnostics)],
+    ['CPU', systemCPUSummary(diagnostics)],
+    ['Memory', diagnostics.ramGb ? `${diagnostics.ramGb}GB RAM` : 'not detected'],
+    ['Storage', systemStorageSummary(diagnostics)],
+  ]
+}
+
+function diagnosticGpuCudaItems(diagnostics: AgentCardDiagnostics): Array<[string, string]> {
+  const rows: Array<[string, string]> = []
+  const gpus = diagnostics.gpus || []
+  if (gpus.length) {
+    rows.push(...gpus.map((gpu, index) => [`GPU ${index + 1}`, gpuSummary(gpu)] as [string, string]))
+  } else {
+    rows.push(['GPU', 'not detected'])
+  }
+  rows.push(...diagnosticCodeEnvironmentItems(diagnostics).filter(isCudaEnvironmentItem).map((item) => [item.name, formatDependencyValue(item)] as [string, string]))
+  return rows
+}
+
+function gpuSummary(gpu: NonNullable<AgentCardDiagnostics['gpus']>[number]) {
+  const details = [
+    gpu.chip && !sameText(gpu.chip, gpu.name) ? gpu.chip : '',
+    gpu.deviceId ? `ID ${gpu.deviceId}` : '',
+    gpu.vramGb ? `${gpu.vramGb}GB VRAM` : '',
+    gpu.driverVersion ? `driver ${gpu.driverVersion}` : '',
+  ].filter(Boolean)
+  return [gpu.name, details.length ? `(${details.join(' / ')})` : ''].filter(Boolean).join(' ')
+}
+
+function sameText(left?: string, right?: string) {
+  return String(left || '').trim().toLowerCase() === String(right || '').trim().toLowerCase()
 }
 
 function systemStorageSummary(diagnostics: AgentCardDiagnostics) {
@@ -4202,15 +4804,108 @@ function systemStorageSummary(diagnostics: AgentCardDiagnostics) {
   return parts.join(' / ') || 'not detected'
 }
 
-function systemRuntimeSummary(diagnostics: AgentCardDiagnostics) {
-  const parts = [
-    diagnostics.dockerAvailable ? diagnostics.dockerVersion || 'Docker' : '',
-    diagnostics.pythonVersion || '',
-    diagnostics.nodeVersion ? `Node ${diagnostics.nodeVersion}` : '',
-    diagnostics.npmVersion ? `npm ${diagnostics.npmVersion}` : '',
-    diagnostics.mcpAvailable ? 'MCP' : '',
-  ].filter(Boolean)
+function systemPythonSummary(diagnostics: AgentCardDiagnostics) {
+  const parts = diagnosticPythonEnvironmentItems(diagnostics, { location: false }).map(([, value]) => value)
   return parts.join(' / ') || 'not detected'
+}
+
+function pythonPackageSummary(diagnostics: AgentCardDiagnostics) {
+  const packages = diagnosticPythonPackageDependencies(diagnostics)
+  return packages.length ? `${packages.length} Python packages recorded` : 'not detected'
+}
+
+function diagnosticPythonEnvironmentItems(diagnostics: AgentCardDiagnostics, options: { location?: boolean; source?: boolean } = {}): Array<[string, string]> {
+  const fromDiagnostics = diagnosticCodeEnvironmentItems(diagnostics)
+    .filter(isPythonEnvironmentItem)
+    .map((item) => [item.name, formatDependencyValue(item, options)] as [string, string])
+  if (fromDiagnostics.length) return fromDiagnostics
+  return [
+    diagnostics.pythonVersion ? ['Python', diagnostics.pythonVersion] : undefined,
+  ].filter(Boolean) as Array<[string, string]>
+}
+
+function diagnosticPythonPackageItems(diagnostics: AgentCardDiagnostics): Array<[string, string]> {
+  const packages = diagnosticPythonPackageDependencies(diagnostics)
+  if (!packages.length) return [['Python packages', 'not detected']]
+  const selected = packages.slice(0, 18)
+  const rows = selected.map((item) => [item.name, formatDependencyValue(item)] as [string, string])
+  if (packages.length > selected.length) {
+    rows.push(['More', `${packages.length - selected.length} more Python packages recorded in the card payload`])
+  }
+  return rows
+}
+
+function diagnosticOtherRuntimeItems(diagnostics: AgentCardDiagnostics): Array<[string, string]> {
+  const fromDiagnostics = diagnosticCodeEnvironmentItems(diagnostics)
+    .filter((item) => !isPythonEnvironmentItem(item) && !isCudaEnvironmentItem(item))
+    .slice(0, 10)
+    .map((item) => [item.name, formatDependencyValue(item)] as [string, string])
+  if (fromDiagnostics.length) return fromDiagnostics
+  return [
+    diagnostics.dockerAvailable ? ['Docker', diagnostics.dockerVersion || 'Docker'] : undefined,
+    diagnostics.nodeVersion ? ['Node.js', `Node ${diagnostics.nodeVersion}`] : undefined,
+    diagnostics.npmVersion ? ['npm', `npm ${diagnostics.npmVersion}`] : undefined,
+    diagnostics.mcpAvailable ? ['MCP', diagnostics.mcpEntrypoint || 'available'] : undefined,
+  ].filter(Boolean) as Array<[string, string]>
+}
+
+function diagnosticOtherDependencyItems(diagnostics: AgentCardDiagnostics): Array<[string, string]> {
+  const dependencies = diagnostics.dependencies || []
+  if (!dependencies.length) return []
+  const otherDeps = dependencies.filter((item) => !isPythonPackageItem(item) && !isCudaEnvironmentItem(item))
+  const desktopDeps = otherDeps.filter((item) => item.source?.includes('desktop'))
+  const goDeps = otherDeps.filter((item) => item.source === 'go module')
+  const selected = uniqueDiagnosticDependencies([...desktopDeps, ...goDeps, ...otherDeps]).slice(0, 10)
+  const rows = selected.map((item) => [item.name, formatDependencyValue(item, { source: true })] as [string, string])
+  if (otherDeps.length > selected.length) {
+    rows.push(['More', `${otherDeps.length - selected.length} more secondary dependencies recorded`])
+  }
+  return rows
+}
+
+function diagnosticCodeEnvironmentItems(diagnostics: AgentCardDiagnostics) {
+  return diagnostics.codeEnvironment || []
+}
+
+function diagnosticPythonPackageDependencies(diagnostics: AgentCardDiagnostics) {
+  return uniqueDiagnosticDependencies((diagnostics.dependencies || []).filter(isPythonPackageItem))
+}
+
+function uniqueDiagnosticDependencies(items: NonNullable<AgentCardDiagnostics['dependencies']>) {
+  const seen = new Set<string>()
+  const out: NonNullable<AgentCardDiagnostics['dependencies']> = []
+  for (const item of items) {
+    const key = `${item.source || ''}:${item.name}`.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(item)
+  }
+  return out
+}
+
+function isPythonEnvironmentItem(item: { name?: string; source?: string }) {
+  const name = String(item.name || '').toLowerCase()
+  const source = String(item.source || '').toLowerCase()
+  return source.includes('python') || name === 'python' || name === 'pip'
+}
+
+function isPythonPackageItem(item: { name?: string; source?: string }) {
+  return String(item.source || '').toLowerCase().includes('python package')
+}
+
+function isCudaEnvironmentItem(item: { name?: string; source?: string }) {
+  const name = String(item.name || '').toLowerCase()
+  const source = String(item.source || '').toLowerCase()
+  return source.includes('cuda') || name.includes('cuda') || name.includes('cudnn') || name.includes('nvidia')
+}
+
+function formatDependencyValue(item: { version?: string; source?: string; location?: string }, options: { location?: boolean; source?: boolean } = {}) {
+  const showLocation = options.location !== false
+  return [
+    item.version || 'detected',
+    options.source ? item.source : '',
+    showLocation ? item.location : '',
+  ].filter(Boolean).join(' / ') || 'detected'
 }
 
 function diagnosticsSummary(diagnostics?: AgentCardDiagnostics) {
@@ -4231,6 +4926,16 @@ function listSummary(values?: string[]) {
   return values.slice(0, 3).join(', ')
 }
 
+function disclosureSummary(card: AgentCard) {
+  const entries = Object.entries(card.disclosure || {})
+  if (!entries.length) return 'default disclosure'
+  return entries
+    .filter(([key]) => key !== 'credentials')
+    .slice(0, 4)
+    .map(([key, level]) => `${key}: ${level}`)
+    .join(', ')
+}
+
 function listInput(values?: string[]) {
   return values?.join(', ') || ''
 }
@@ -4240,6 +4945,23 @@ function parseListInput(value: FormDataEntryValue | null) {
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean)
+}
+
+function sellerPricingSummary(settings?: SellerSettings) {
+  if (!settings) return ''
+  const price = Number(settings.quotePrice || 0)
+  const currency = settings.currency || 'USDC'
+  const eta = Number(settings.estimatedSeconds || 0)
+  const parts = [
+    price > 0 ? `${price} ${currency}` : '',
+    eta > 0 ? `${eta}s ETA` : '',
+  ].filter(Boolean)
+  return parts.length ? `${parts.join(' / ')} default; task-specific quotes may adjust.` : ''
+}
+
+function sellerAvailabilitySummary(settings?: SellerSettings) {
+  if (!settings?.enabled) return ''
+  return 'Enabled locally; availability is checked during seller-agent negotiation.'
 }
 
 function shortDate(value?: string) {
@@ -4276,8 +4998,8 @@ function renderCardMarket() {
 function renderMarketSearchBar() {
   return `
     <form class="card-market-form" data-card-market-form>
-      <input name="query" placeholder="Search cards" autocomplete="off" />
-      <button class="card-market-search-button" type="submit" aria-label="Search cards" title="Search">${toolbarIcons.search}</button>
+      <input name="query" placeholder="${t('market.searchPlaceholder')}" autocomplete="off" />
+      <button class="card-market-search-button" type="submit" aria-label="${t('market.searchCards')}" title="${translatePhrase('Search')}">${toolbarIcons.search}</button>
     </form>
   `
 }
@@ -4327,8 +5049,8 @@ function renderMarketCard(candidate: SellerCandidate) {
         <span>${escapeHTML(price)}</span>
       </div>
       <div class="decision-actions two-buttons">
-        <button type="button" class="secondary" data-market-card-detail="${escapeAttr(candidate.providerPubkey)}">展示详情</button>
-        <button type="button" data-market-card-chat="${escapeAttr(candidate.providerPubkey)}">开始沟通</button>
+        <button type="button" class="secondary" data-market-card-detail="${escapeAttr(candidate.providerPubkey)}">${t('market.detail')}</button>
+        <button type="button" data-market-card-chat="${escapeAttr(candidate.providerPubkey)}">${t('market.startChat')}</button>
       </div>
     </article>
   `
@@ -4344,7 +5066,7 @@ function renderMarketDetailPage(candidate: SellerCandidate) {
   return `
     <article class="agent-card market-detail-card opponent-agent-card">
       <div class="market-detail-top">
-        <button type="button" class="secondary" data-market-detail-back>返回卡牌页</button>
+        <button type="button" class="secondary" data-market-detail-back>${t('market.backToCards')}</button>
       </div>
       <div class="agent-card-head">
         <span class="profile-avatar">${escapeHTML(title.slice(0, 2).toUpperCase())}</span>
@@ -4367,7 +5089,7 @@ function renderMarketDetailPage(candidate: SellerCandidate) {
         <div><dt>Reason</dt><dd>${escapeHTML(candidate.reasons?.[0] || 'Matched from the card market.')}</dd></div>
       </dl>
       <div class="decision-actions">
-        <button type="button" data-market-card-chat="${escapeAttr(candidate.providerPubkey)}">开始沟通</button>
+        <button type="button" data-market-card-chat="${escapeAttr(candidate.providerPubkey)}">${t('market.startChat')}</button>
       </div>
     </article>
   `
@@ -4440,8 +5162,8 @@ function renderMarketProjectPicker() {
     <header class="market-project-head">
       <span class="market-project-icon">${toolbarIcons.folder}</span>
       <div>
-        <strong>Choose project</strong>
-        <small>Start communication with ${escapeHTML(sellerTitle)}</small>
+        <strong>${t('market.chooseProject')}</strong>
+        <small>${escapeHTML(t('market.startWithSeller', { seller: sellerTitle }))}</small>
       </div>
     </header>
     <div class="market-project-list">
@@ -4456,6 +5178,7 @@ function renderMarketProjectPicker() {
       <button class="secondary" type="button" data-action="close-market-project-picker">Cancel</button>
     </footer>
   `
+  localize(fields.marketProjectDialog)
 }
 
 function selectMarketProject(path: string) {
@@ -4476,7 +5199,7 @@ function startMarketConversation(candidate: SellerCandidate, folder: ProjectFold
   ))
   if (!existing) {
     const thread = createChatThread({
-      title: `Market task: ${sellerTitle}`,
+      title: t('market.taskTitle', { seller: sellerTitle }),
       providerPubkey: candidate.providerPubkey,
       projectPath: folder.path,
       origin: 'market-card',
@@ -4485,14 +5208,14 @@ function startMarketConversation(candidate: SellerCandidate, folder: ProjectFold
     thread.messages.push({
       id: nextID(),
       role: 'user',
-      text: `Start a market task with ${sellerTitle}.`,
+      text: t('market.taskUserText', { seller: sellerTitle }),
       meta: 'Market Card',
       providerPubkey: candidate.providerPubkey,
     })
     thread.messages.push({
       id: nextID(),
       role: 'assistant',
-      text: `I created a market task record for ${sellerTitle}. Tell me the task goal, budget, input files, and expected output so I can turn it into an Exora task draft.`,
+      text: t('market.taskAssistantText', { seller: sellerTitle }),
       meta: `Seller Card / ${shortID(candidate.providerPubkey)}`,
       providerPubkey: candidate.providerPubkey,
     })
@@ -4508,7 +5231,7 @@ function startMarketConversation(candidate: SellerCandidate, folder: ProjectFold
   setActiveView('chat')
   state.pinStep = undefined
   renderAll()
-  showToast(existing ? 'Market task already exists. Select it in Work to continue.' : 'Market task added. Select it in Work to continue.')
+  showToast(t(existing ? 'toast.marketTaskExists' : 'toast.marketTaskAdded'))
 }
 
 function featuredMarketCards(): SellerCandidate[] {
@@ -4582,7 +5305,7 @@ function attachCardHandlers(root: ParentNode = fields.decisionContent) {
       } else if (action === 'stop-diagnose' && role) {
         stopAgentCardDiagnostics(role)
       } else if (action === 'save' && role) {
-        const form = button.closest<HTMLFormElement>('[data-agent-card-form]') || root.querySelector<HTMLFormElement>(`[data-agent-card-form="${role}"]`)
+        const form = findAgentCardForm(role, root, button)
         if (form) {
           run(async () => {
             await saveAgentCardFromForm(form, role)
@@ -4635,17 +5358,17 @@ function attachCardHandlers(root: ParentNode = fields.decisionContent) {
 
 function updateCardSaveActionState(role: AgentCardRole, root: ParentNode = fields.decisionContent) {
   const button = root.querySelector<HTMLButtonElement>(`[data-card-action="save"][data-card-role="${role}"]`)
-  const form = root.querySelector<HTMLFormElement>(`[data-agent-card-form="${role}"]`)
+  const form = findAgentCardForm(role, root)
   if (!button || !form) return
   const hasUnsavedChanges = agentCardHasUnsavedChanges(role, form)
   button.classList.toggle('is-dirty', hasUnsavedChanges)
   button.classList.toggle('is-saved', !hasUnsavedChanges)
-  button.title = hasUnsavedChanges ? '保存本地更改' : '当前内容已保存'
-  button.setAttribute('aria-label', hasUnsavedChanges ? '保存本地更改' : '当前内容已保存')
+  button.title = hasUnsavedChanges ? t('card.saveDirtyTitle') : t('card.saveSavedTitle')
+  button.setAttribute('aria-label', hasUnsavedChanges ? t('card.saveDirtyTitle') : t('card.saveSavedTitle'))
   const iconSlot = button.querySelector<HTMLElement>('.card-action-icon')
   const textSlot = button.querySelector<HTMLElement>('.card-action-text')
   if (iconSlot) iconSlot.innerHTML = hasUnsavedChanges ? cardActionIcons.save : cardActionIcons.saved
-  if (textSlot) textSlot.textContent = hasUnsavedChanges ? '保存本地' : '已保存'
+  if (textSlot) textSlot.textContent = hasUnsavedChanges ? t('card.saveDirtyText') : t('card.saveSavedText')
 }
 
 function attachCardMarketHandlers() {
@@ -4867,10 +5590,6 @@ async function submitPinStep() {
       await executePlanSelection(step.action.planId, step.action.optionId, step.pin, false)
     } else if (step.action.kind === 'approve') {
       await executeApproval(step.action.approvalId, true, step.pin, false)
-    } else {
-      pushMessage({ role: 'system', text: 'Local payment PIN was updated.', meta: 'Settings' })
-      state.pinStep = undefined
-      await refreshWorkspace({ quiet: true })
     }
   } catch (error) {
     step.error = humanizeError(error)
@@ -4957,14 +5676,14 @@ async function paymentPinConfigured() {
 }
 
 function localRequesterIds() {
-  return new Set([state.walletStatus?.address].map((item) => String(item || '').trim()).filter(Boolean))
+  return new Set([state.walletStatus?.accountBound ? state.walletStatus.address : ''].map((item) => String(item || '').trim()).filter(Boolean))
 }
 
 function localProviderIds() {
   return new Set([
     state.sellerMarketStatus?.providerId,
     state.sellerSettings?.providerId,
-    state.walletStatus?.address,
+    state.walletStatus?.accountBound ? state.walletStatus.address : '',
   ].map((item) => String(item || '').trim()).filter(Boolean))
 }
 
@@ -4973,7 +5692,24 @@ function idMatches(id: string | undefined, ids: Set<string>) {
   return Boolean(trimmed && ids.has(trimmed))
 }
 
+function selectedOptionForPlan(plan: OrderPlan) {
+  return (plan.options || []).find((option) => option.optionId === plan.selectedOptionId) ||
+    (plan.options || []).find((option) => option.realtimeStatus === 'quoted') ||
+    (plan.options || [])[0]
+}
+
+function selectedProviderForPlan(plan: OrderPlan) {
+  const option = selectedOptionForPlan(plan)
+  return option?.providerPubkey ||
+    (plan.candidates || []).find((candidate) => candidate.status === 'quoted')?.providerPubkey ||
+    (plan.candidates || [])[0]?.providerPubkey ||
+    ''
+}
+
 function orderSideForPlan(plan: OrderPlan): OrderSide {
+  const task = taskForPlan(plan)
+  if (task) return orderSideForTask(task)
+  if (idMatches(selectedProviderForPlan(plan), localProviderIds())) return 'seller'
   if (idMatches(plan.requesterPubkey, localRequesterIds())) return 'buyer'
   return 'buyer'
 }
@@ -5079,6 +5815,54 @@ function projectPathForSelection(selectionIdValue?: string) {
 
 function projectPathIsActive(projectPath?: string) {
   return sameProjectPath(projectPath || defaultWorkProjectPath(), activeProjectFolder().path)
+}
+
+function workMCPLeaseIsActive(lease?: WorkMCPLease) {
+  if (!lease || lease.status !== 'active') return false
+  const expiresAt = sortTime(lease.expiresAt)
+  return expiresAt > Date.now()
+}
+
+function activeExternalWorkLease() {
+  const folder = activeProjectFolder()
+  return state.workMcpLeases
+    .filter((lease) => workMCPLeaseIsActive(lease) && sameProjectPath(lease.projectPath, folder.path))
+    .sort((a, b) => sortTime(b.lastSeenAt || b.updatedAt || b.startedAt) - sortTime(a.lastSeenAt || a.updatedAt || a.startedAt))[0]
+}
+
+function workRunIsActive(run?: WorkRun) {
+  if (!run || run.controller !== 'external-mcp') return false
+  return ['queued', 'running', 'waiting_owner_choice', 'waiting_owner_approval', 'waiting_worker', 'stop_requested'].includes(run.status || '')
+}
+
+function activeExternalWorkRun() {
+  const folder = activeProjectFolder()
+  return state.workRuns
+    .filter((run) => workRunIsActive(run) && sameProjectPath(run.projectPath || defaultWorkProjectPath(), folder.path))
+    .sort((a, b) => sortTime(b.updatedAt || b.createdAt) - sortTime(a.updatedAt || a.createdAt))[0]
+}
+
+function builtInBuyerInputLocked() {
+  return Boolean(activeExternalWorkLease() || activeExternalWorkRun())
+}
+
+function renderExternalWorkLockControls() {
+  const lease = activeExternalWorkLease()
+  const run = activeExternalWorkRun()
+  const locked = Boolean(lease || run)
+  fields.externalWorkLock.classList.toggle('hidden', !locked)
+  if (lease || run) {
+    const projectPath = lease?.projectPath || run?.projectPath || activeProjectFolder().path
+    const name = lease?.projectName || projectFolderNameForPath(projectPath) || activeProjectFolder().name
+    const client = lease?.clientName || 'external MCP agent'
+    const step = run?.currentStep ? t('externalWork.step', { step: run.currentStep }) : ''
+    fields.externalWorkLockText.textContent = t('externalWork.lockText', { client, name, step })
+    fields.externalWorkTakeoverButton.disabled = state.busy
+    fields.externalWorkTakeoverButton.setAttribute('title', t('externalWork.takeoverTitle'))
+  }
+  agentQuery.disabled = state.busy || locked
+  agentSendButton.disabled = state.busy || locked
+  agentQuery.placeholder = locked ? agentComposerLockedPlaceholder() : agentComposerPlaceholder()
 }
 
 function mergeOrderSide(thread: WorkThread, side: OrderSide) {
@@ -5211,7 +5995,9 @@ function renderViewTabs() {
   renderChromeControls()
   renderProjectFolder()
   fields.appShell.classList.toggle('settings-mode', state.activeView === 'settings')
+  fields.appShell.classList.toggle('right-workspace-white', rightWorkspaceIsWhite())
   fields.orderRoleRow.classList.toggle('hidden', state.activeView === 'settings')
+  fields.folderPickerButton.classList.toggle('hidden', state.activeView !== 'chat' && state.activeView !== 'work')
   if (state.activeView !== 'settings') renderOrderRoleControls()
   fields.sidebarTitle.textContent = state.activeView === 'settings' ? 'Settings' : state.activeView === 'market' ? 'Market' : 'Order Threads'
   fields.projectFolderHead.classList.add('hidden')
@@ -5226,12 +6012,12 @@ function renderViewTabs() {
 
 function renderOrderRoleControls() {
   const side = state.activeView === 'market' ? state.marketOrderSide : state.workOrderSide
-  const label = side === 'buyer' ? 'Buyer' : 'Seller'
-  const next = side === 'buyer' ? 'Seller' : 'Buyer'
+  const label = side === 'buyer' ? t('orderSide.buyer') : t('orderSide.seller')
+  const next = side === 'buyer' ? t('orderSide.seller') : t('orderSide.buyer')
   fields.orderSideToggle.dataset.side = side
   fields.orderSideToggle.setAttribute('aria-pressed', String(side === 'seller'))
-  fields.orderSideToggle.setAttribute('aria-label', `Order side: ${label}. Switch to ${next}`)
-  fields.orderSideToggle.setAttribute('title', `Switch to ${next} orders`)
+  fields.orderSideToggle.setAttribute('aria-label', t('orderSide.label', { label, next }))
+  fields.orderSideToggle.setAttribute('title', t('orderSide.title', { next }))
   fields.orderSideState.textContent = label
 }
 
@@ -5452,7 +6238,7 @@ async function handleTaskMenuAction(action: TaskMenuAction) {
   const thread = threadId ? workThreadById(threadId, { includeArchived: true, side: 'all' }) : undefined
   closeTaskContextMenu()
   if (!thread) {
-    showToast('Task is no longer available.')
+    showToast(t('toast.taskUnavailable'))
     return
   }
   if (action === 'pin') return togglePinnedWorkThread(thread)
@@ -5466,10 +6252,10 @@ async function handleTaskMenuAction(action: TaskMenuAction) {
 function togglePinnedWorkThread(thread: WorkThread) {
   if (state.workTaskState.pinnedIds.has(thread.id)) {
     state.workTaskState.pinnedIds.delete(thread.id)
-    showToast('Task unpinned.')
+    showToast(t('toast.taskUnpinned'))
   } else {
     state.workTaskState.pinnedIds.add(thread.id)
-    showToast('Task pinned.')
+    showToast(t('toast.taskPinned'))
   }
   saveWorkTaskState()
   renderLedger()
@@ -5478,17 +6264,17 @@ function togglePinnedWorkThread(thread: WorkThread) {
 function toggleUnreadWorkThread(thread: WorkThread) {
   if (state.workTaskState.unreadIds.has(thread.id)) {
     state.workTaskState.unreadIds.delete(thread.id)
-    showToast('Task marked as read.')
+    showToast(t('toast.taskRead'))
   } else {
     state.workTaskState.unreadIds.add(thread.id)
-    showToast('Task marked as unread.')
+    showToast(t('toast.taskUnread'))
   }
   saveWorkTaskState()
   renderLedger()
 }
 
 function renameWorkThread(thread: WorkThread) {
-  const next = window.prompt('Rename task', thread.title)?.trim()
+  const next = window.prompt(t('prompt.renameTask'), thread.title)?.trim()
   if (!next || next === thread.title) return
   if (thread.chatId) {
     const chat = state.chatThreads.find((item) => item.id === thread.chatId)
@@ -5502,12 +6288,12 @@ function renameWorkThread(thread: WorkThread) {
   }
   saveWorkTaskState()
   renderAll()
-  showToast('Task renamed.')
+  showToast(t('toast.taskRenamed'))
 }
 
 function archiveWorkThread(thread: WorkThread) {
   if (workThreadIsArchived(thread.id)) {
-    showToast('Task is already archived.')
+    showToast(t('toast.taskAlreadyArchived'))
     return
   }
   const chatSnapshot = thread.chatId ? state.chatThreads.find((item) => item.id === thread.chatId) : undefined
@@ -5535,12 +6321,12 @@ function archiveWorkThread(thread: WorkThread) {
   }
   saveWorkTaskState()
   renderAll()
-  showToast('Task archived.')
+  showToast(t('toast.taskArchived'))
 }
 
 async function copyWorkThreadID(thread: WorkThread) {
   await navigator.clipboard.writeText(workThreadSessionID(thread))
-  showToast('Session ID copied.')
+  showToast(t('toast.sessionCopied'))
 }
 
 async function openProjectForWorkThread(thread: WorkThread) {
@@ -5548,13 +6334,13 @@ async function openProjectForWorkThread(thread: WorkThread) {
   setProjectFolderContext(projectPath)
   if (!window.exora?.invoke) {
     await navigator.clipboard.writeText(projectPath)
-    showToast('Project path copied.')
+    showToast(t('toast.projectPathCopied'))
     return
   }
   const folder = await invoke<ProjectFolder>('open_project_folder', { input: { path: projectPath } })
   setProjectFolders([folder, ...state.projectFolders], folder.path)
   renderProjectFolder()
-  showToast(`Opened ${folder.name}.`)
+  showToast(t('toast.opened', { name: folder.name }))
 }
 
 function archivedRecordCanRestore(record: ArchivedWorkRecord) {
@@ -5567,7 +6353,7 @@ function restoreArchivedRecord(recordID: string) {
   if (!record) return
   const current = workThreadById(record.threadId, { includeArchived: true, side: 'all' })
   if (!record.chatSnapshot && !current) {
-    showToast('Original task data is not currently available.')
+    showToast(t('toast.originalTaskMissing'))
     renderArchiveRecords()
     return
   }
@@ -5584,14 +6370,14 @@ function restoreArchivedRecord(recordID: string) {
   saveWorkTaskState()
   if (record.chatSnapshot) flushSaveChatThread(record.chatSnapshot)
   renderAll()
-  showToast('Task restored.')
+  showToast(t('toast.taskRestored'))
 }
 
 async function copyArchivedRecordID(recordID: string) {
   const record = state.workTaskState.archivedRecords.find((item) => item.id === recordID)
   if (!record) return
   await navigator.clipboard.writeText(record.chatSnapshot?.id || record.threadId)
-  showToast('Archive ID copied.')
+  showToast(t('toast.archiveIdCopied'))
 }
 
 function viewForKind(kind: SelectedKind): ActiveView {
@@ -5891,7 +6677,7 @@ function notifyExternalRequests(quiet: boolean) {
         pushMessage({ role: 'system', text: `External agent requested seller selection: ${plan.query || shortID(plan.planId)}.`, meta: agentSourceLabel(plan.agentId) })
         focusExternalOrderPlan(plan)
       } else {
-        showToast(`New MCP order added to ${projectFolderNameForPath(projectPathForPlan(plan))}.`)
+        showToast(t('toast.newMcpOrder', { project: projectFolderNameForPath(projectPathForPlan(plan)) }))
       }
     }
   }
@@ -5902,7 +6688,7 @@ function notifyExternalRequests(quiet: boolean) {
       if (projectPathIsActive(projectPathForApproval(approval))) {
         pushMessage({ role: 'system', text: `External agent requested approval for task ${shortID(approval.taskId)}.`, meta: agentSourceLabel(approval.agentId) })
       } else {
-        showToast(`New MCP approval added to ${projectFolderNameForPath(projectPathForApproval(approval))}.`)
+        showToast(t('toast.newMcpApproval', { project: projectFolderNameForPath(projectPathForApproval(approval)) }))
       }
     }
   }
@@ -5919,10 +6705,11 @@ function focusExternalOrderPlan(plan: OrderPlan) {
   state.selectedChatId = undefined
   state.pinStep = undefined
   setActiveView('chat')
-  showToast(`Seller selection ready: ${plan.query || shortID(plan.planId)}`)
+  showToast(t('toast.sellerSelectionReady', { query: plan.query || shortID(plan.planId) }))
 }
 
 function renderAll() {
+  applyUserPreferences()
   renderProfileSummary()
   renderPermissionControl()
   renderBuyerAgentSettings()
@@ -5930,7 +6717,10 @@ function renderAll() {
   renderContextStrip()
   renderDecisionPanel()
   renderLocalAgentPromptControls()
+  renderExternalWorkLockControls()
   renderMarketProjectPicker()
+  syncTransactionProgressPolling()
+  localize()
 }
 
 function renderSeller(settings: SellerSettings) {
@@ -5941,15 +6731,7 @@ function renderSeller(settings: SellerSettings) {
   setValue('currency', settings.currency)
   setValue('estimatedSeconds', String(settings.estimatedSeconds))
   setChecked('autoQuote', settings.autoQuote)
-  setChecked('autoCompleteTextTasks', settings.autoCompleteTextTasks)
-  setChecked('dockerEnabled', Boolean(settings.dockerEnabled))
-  setValue('dockerDefaultImage', settings.dockerDefaultImage || '')
-  setValue('dockerAllowedImages', listInput(settings.dockerAllowedImages))
-  setValue('dockerNetworkMode', settings.dockerNetworkMode || 'none')
-  setValue('dockerAllowedNetworkModes', listInput(settings.dockerAllowedNetworkModes || ['none']))
-  setValue('dockerMaxCpus', String(settings.dockerMaxCpus || 0))
-  setValue('dockerMaxMemoryMb', String(settings.dockerMaxMemoryMb || 0))
-  setChecked('dockerAllowGpu', Boolean(settings.dockerAllowGpu))
+  setChecked('autoAcceptLowRisk', Boolean(settings.autoAcceptLowRisk || settings.autoCompleteTextTasks))
 }
 
 function buyerAgentInput(name: string) {
@@ -5976,12 +6758,7 @@ function renderBuyerAgentSettings() {
   const settings = state.buyerAgentSettings
   setBuyerAgentChecked('enabled', settings.enabled)
   setBuyerAgentValue('agentId', settings.agentId)
-  setBuyerAgentChecked('negotiationFirst', settings.negotiationFirst)
-  setBuyerAgentValue('maxResults', String(settings.maxResults))
-  setBuyerAgentValue('maxCandidates', String(settings.maxCandidates))
-  setBuyerAgentValue('maxOptions', String(settings.maxOptions))
-  setBuyerAgentValue('permissionMode', state.permissionMode)
-  fields.buyerAgentChip.textContent = settings.enabled ? (settings.negotiationFirst ? 'negotiation-first' : 'search-first') : 'disabled'
+  fields.buyerAgentChip.textContent = uiText(settings.enabled ? 'enabled' : 'disabled')
   fields.buyerAgentChip.dataset.state = settings.enabled ? 'ok' : 'warn'
 }
 
@@ -5989,22 +6766,15 @@ function buyerAgentPayload(): BuyerAgentSettings {
   return normalizeBuyerAgentSettings({
     enabled: buyerAgentChecked('enabled'),
     agentId: buyerAgentValue('agentId'),
-    negotiationFirst: buyerAgentChecked('negotiationFirst'),
-    maxResults: buyerAgentValue('maxResults'),
-    maxCandidates: buyerAgentValue('maxCandidates'),
-    maxOptions: buyerAgentValue('maxOptions'),
   })
 }
 
 function saveBuyerAgentSettings() {
   state.buyerAgentSettings = buyerAgentPayload()
-  const permissionMode = buyerAgentValue('permissionMode')
-  if (isPermissionMode(permissionMode)) state.permissionMode = permissionMode
-  if (!hasDesktopBridge()) localStorage.setItem('exora.permissionMode', state.permissionMode)
   scheduleSaveAppSettings()
   renderBuyerAgentSettings()
   renderPermissionControl()
-  showToast('Buyer agent saved.')
+  showToast(t('toast.buyerAgentSaved'))
 }
 
 function buyerAgentSearchInput(query: string, extra: Record<string, unknown> = {}) {
@@ -6013,14 +6783,14 @@ function buyerAgentSearchInput(query: string, extra: Record<string, unknown> = {
     ...extra,
     query,
     agentId: settings.agentId,
-    negotiationFirst: settings.negotiationFirst,
-    maxResults: settings.maxResults,
-    maxCandidates: settings.maxCandidates,
-    maxOptions: settings.maxOptions,
+    buyerAgentCardId: state.agentCards.buyer?.id || undefined,
+    ...BUYER_AGENT_SEARCH_DEFAULTS,
   }
 }
 
 function currentLLMProfile(settings?: SellerSettings): LLMProfile {
+  const draft = editingDraftLLMProfile()
+  if (draft) return draft
   const found = state.llmProfiles.find((profile) => profile.id === state.editingLLMProfileId)
     || state.llmProfiles.find((profile) => profile.id === state.activeLLMProfileId)
   if (found) return found
@@ -6044,11 +6814,17 @@ function currentLLMProfile(settings?: SellerSettings): LLMProfile {
 
 function renderLLMSettings(settings?: SellerSettings) {
   const profile = currentLLMProfile(settings)
-  const preset = presetById(profile.providerPreset)
-  setLLMValue('profileName', profile.name)
+  const preset = presetById(profile.providerPreset || inferProviderPreset(profile.llmBaseUrl))
+  const draftApiKey = isDraftLLMProfileId(profile.id)
+    ? (() => {
+      const input = llmInput('apiKey') as HTMLInputElement | null
+      return input && !isMaskedApiKeyInput(input) ? input.value : ''
+    })()
+    : ''
+  setLLMValue('profileName', profile.name || '')
   setLLMValue('providerPreset', profile.providerPreset || preset.id)
   setLLMValue('llmBaseUrl', profile.llmBaseUrl || preset.baseUrl)
-  setLLMValue('apiKey', '')
+  setLLMValue('apiKey', draftApiKey)
   setLLMChecked('clearApiKey', false)
   setLLMValue('wireApi', profile.wireApi || preset.wireApi)
   setLLMValue('researchModel', profile.researchModel || preset.model)
@@ -6056,6 +6832,8 @@ function renderLLMSettings(settings?: SellerSettings) {
   setLLMValue('utilityModel', profile.utilityModel || profile.researchModel || preset.model)
   setLLMValue('utilityReasoningEffort', profile.utilityReasoningEffort || 'low')
   setLLMChecked('disableResponseStorage', profile.disableResponseStorage ?? true)
+  setLLMChecked('useForBuyer', Boolean(profile.useForBuyer || profile.id === state.buyerLLMProfileId))
+  setLLMChecked('useForSeller', Boolean(profile.useForSeller || profile.id === state.sellerLLMProfileId))
   const datalist = llmSettingsForm.querySelector<HTMLDataListElement>('#llm-model-options')
   if (datalist) {
     datalist.innerHTML = state.llmModels.map((model) => `<option value="${escapeHTML(model)}"></option>`).join('')
@@ -6067,49 +6845,196 @@ function renderLLMSettings(settings?: SellerSettings) {
   renderLLMTestNote()
 }
 
+function llmProfileRoleLabels(profile: LLMProfile) {
+  const active = profile.id === state.activeLLMProfileId
+  return [
+    profile.useForBuyer || profile.id === state.buyerLLMProfileId ? uiText('Buyer') : '',
+    profile.useForSeller || profile.id === state.sellerLLMProfileId ? uiText('Seller') : '',
+    active && profile.id !== state.buyerLLMProfileId && profile.id !== state.sellerLLMProfileId ? uiText('Active') : '',
+  ].filter(Boolean)
+}
+
 function renderLLMProfileList() {
-  fields.llmProfileList.innerHTML = state.llmProfiles.map((profile) => {
-    const active = profile.id === state.activeLLMProfileId
-    const editing = profile.id === state.editingLLMProfileId
-    return `
-      <button class="api-profile-option ${editing ? 'active' : ''}" type="button" data-llm-profile-id="${escapeAttr(profile.id)}" title="${escapeAttr(profile.llmBaseUrl)}">
-        <strong>${escapeHTML(compactText(profile.name, 28))}</strong>
-        <span>${escapeHTML(presetById(profile.providerPreset).label)} / ${escapeHTML(compactText(profile.researchModel || 'model', 26))}</span>
-        ${active ? '<em>Active</em>' : ''}
-      </button>
+  const draft = editingDraftLLMProfile()
+  if (!state.llmProfiles.length && !draft) {
+    fields.llmProfileList.innerHTML = `
+      <div class="api-profile-menu is-disabled">
+        <button class="api-profile-trigger" type="button" disabled>
+          <span class="api-profile-trigger-label">${escapeHTML(uiText('No profiles yet.'))}</span>
+        </button>
+      </div>
     `
-  }).join('') || '<p class="muted api-profile-empty">No profiles yet.</p>'
+    return
+  }
+  const selectedProfile = draft || state.llmProfiles.find((profile) => profile.id === state.editingLLMProfileId) || state.llmProfiles[0]
+  fields.llmProfileList.innerHTML = `
+    <div class="api-profile-menu" data-llm-profile-menu>
+      <button class="api-profile-trigger" type="button" data-llm-profile-toggle aria-haspopup="listbox" aria-expanded="false" title="${escapeAttr(selectedProfile.name || uiText('API Profile'))}">
+        <span class="api-profile-trigger-label">${escapeHTML(compactText(selectedProfile.name || uiText('API Profile'), 48))}</span>
+      </button>
+      <div class="api-profile-menu-list hidden" data-llm-profile-menu-list role="listbox" aria-label="${escapeAttr(uiText('Saved settings'))}">
+        ${draft ? `
+          <button class="api-profile-menu-option active" type="button" disabled role="option" aria-selected="true" title="${escapeAttr(uiText('Unsaved draft'))}">
+            <span class="api-profile-option-copy">
+              <strong>${escapeHTML(compactText(draft.name || uiText('API Profile'), 34))}</strong>
+              <small>${escapeHTML(uiText('Unsaved draft'))}</small>
+            </span>
+            <span class="api-profile-badges"><em>${escapeHTML(uiText('Draft'))}</em></span>
+          </button>
+        ` : ''}
+        ${state.llmProfiles.map((profile) => {
+    const editing = !draft && profile.id === selectedProfile.id
+    const roles = llmProfileRoleLabels(profile)
+    return `
+          <button class="api-profile-menu-option ${editing ? 'active' : ''}" type="button" data-llm-profile-option="${escapeAttr(profile.id)}" role="option" aria-selected="${editing}" title="${escapeAttr(profile.llmBaseUrl)}">
+            <span class="api-profile-option-copy">
+              <strong>${escapeHTML(compactText(profile.name || uiText('API Profile'), 34))}</strong>
+              <small>${escapeHTML(compactText([profile.researchModel || 'model', hostLabelForURL(profile.llmBaseUrl)].filter(Boolean).join(' / '), 52))}</small>
+            </span>
+            <span class="api-profile-badges">
+              ${roles.map((role) => `<em>${escapeHTML(role)}</em>`).join('')}
+            </span>
+          </button>
+        `
+  }).join('')}
+      </div>
+    </div>
+  `
 }
 
 function renderLLMProfileMeta(profile: LLMProfile) {
-  const active = profile.id === state.activeLLMProfileId
-  fields.llmProfileHeading.textContent = profile.name || 'API Profile'
-  fields.llmProfileSubtitle.textContent = `${presetById(profile.providerPreset).label} / ${profile.researchModel || 'model'}`
-  fields.llmActiveChip.textContent = active ? 'active' : 'inactive'
-  fields.llmActiveChip.dataset.state = active ? 'ok' : 'idle'
+  const savedKeyFormat = profile.keyFormat || 'stored'
+  const roles = [
+    profile.useForBuyer || profile.id === state.buyerLLMProfileId ? uiText('Buyer') : '',
+    profile.useForSeller || profile.id === state.sellerLLMProfileId ? uiText('Seller') : '',
+  ].filter(Boolean).join(' / ') || uiText('not assigned')
+  const keyStatus = profile.hasApiKey
+    ? profile.keyFormat === 'not_required'
+      ? t('api.keyNotRequiredShort')
+      : t('api.keySavedShort')
+    : state.llmKeyStorageAvailable
+      ? t('api.noKeySavedShort')
+      : t('api.secureStorageUnavailableShort')
   const keyText = profile.hasApiKey
     ? profile.keyFormat === 'not_required'
-      ? 'API key not required.'
-      : `Saved key: ${profile.keyFormat || 'stored'}.`
+      ? t('api.keyNotRequired')
+      : t('api.savedKey', { format: uiText(savedKeyFormat) })
     : state.llmKeyStorageAvailable
-      ? 'No key saved for this profile.'
-      : 'Secure key storage unavailable.'
+      ? t('api.noKeySaved')
+      : t('api.secureStorageUnavailable')
   fields.keyState.textContent = keyText
-  fields.llmProfileStatus.textContent = `${keyText} ${state.llmKeyStorageAvailable ? 'safeStorage available.' : 'Profile keys cannot be saved securely here.'}`
-  const apiKeyInput = llmInput('apiKey') as HTMLInputElement
-  const clearInput = llmInput('clearApiKey') as HTMLInputElement
-  apiKeyInput.disabled = !state.llmKeyStorageAvailable
-  clearInput.disabled = !state.llmKeyStorageAvailable
-  apiKeyInput.placeholder = state.llmKeyStorageAvailable ? 'Leave blank to keep saved key' : 'Secure key storage unavailable'
+  fields.llmProfileStatus.textContent = `${roles} - ${keyStatus}`
+  fields.llmProfileStatus.title = `${roles}. ${keyText}`
+  const apiKeyInput = llmInput('apiKey') as HTMLInputElement | null
+  const clearInput = llmInput('clearApiKey') as HTMLInputElement | null
+  if (apiKeyInput) {
+    apiKeyInput.disabled = !state.llmKeyStorageAvailable
+    apiKeyInput.placeholder = state.llmKeyStorageAvailable ? t('api.keepSavedKey') : t('api.secureStorageUnavailable')
+    if (profile.hasApiKey) {
+      setMaskedApiKeyInput(apiKeyInput)
+    } else {
+      if (!isDraftLLMProfileId(profile.id)) apiKeyInput.value = ''
+      clearMaskedApiKeyInput(apiKeyInput)
+    }
+  }
+  if (clearInput) {
+    clearInput.disabled = !state.llmKeyStorageAvailable || !profile.hasApiKey
+    if (!profile.hasApiKey) clearInput.checked = false
+  }
 }
 
 function renderLLMTestNote() {
-  fields.llmTestNote.textContent = state.llmTestMessage || ''
-  fields.llmTestNote.classList.toggle('hidden', !state.llmTestMessage)
+  fields.llmTestNote.classList.remove('passed', 'failed')
+  fields.llmTestNote.removeAttribute('title')
+  fields.llmTestNote.classList.remove('hidden')
+  if (!state.llmTestStatus) {
+    fields.llmTestNote.textContent = uiText('Not checked')
+    return
+  }
+  const passed = state.llmTestStatus === 'passed'
+  fields.llmTestNote.classList.add(passed ? 'passed' : 'failed')
+  if (state.llmTestMessage) fields.llmTestNote.title = uiText(state.llmTestMessage)
+  fields.llmTestNote.innerHTML = `${passed ? icon(Check) : icon(X)}<span>${escapeHTML(t(passed ? 'api.testPassed' : 'api.testFailed'))}</span>`
+}
+
+const llmTestInvalidatingFields = new Set([
+  'apiKey',
+  'clearApiKey',
+  'llmBaseUrl',
+  'providerPreset',
+  'wireApi',
+  'researchModel',
+  'utilityModel',
+  'useForBuyer',
+  'useForSeller',
+])
+
+function clearLLMTestStatus() {
+  if (!state.llmTestStatus && !state.llmTestMessage) return
+  state.llmTestStatus = undefined
+  state.llmTestMessage = undefined
+  renderLLMTestNote()
+}
+
+function handleLLMSettingsTestInvalidation(event: Event) {
+  const target = event.target
+  if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return
+  const field = target.getAttribute('data-chat-api-field') || ''
+  if (!llmTestInvalidatingFields.has(field)) return
+  clearLLMTestStatus()
+}
+
+function handleLLMSettingsDraftSync(event: Event) {
+  const target = event.target
+  if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return
+  if (!target.hasAttribute('data-chat-api-field')) return
+  syncLLMDraftProfileFromForm()
+  if (editingDraftLLMProfile() && target.getAttribute('data-chat-api-field') === 'profileName') renderLLMProfileList()
+}
+
+function handleLLMApiKeyFocus(event: FocusEvent) {
+  const target = event.target
+  if (!(target instanceof HTMLInputElement) || !target.matches('[data-chat-api-field="apiKey"]')) return
+  if (isMaskedApiKeyInput(target)) target.select()
+}
+
+function handleLLMApiKeyBeforeInput(event: Event) {
+  const target = event.target
+  if (!(target instanceof HTMLInputElement) || !target.matches('[data-chat-api-field="apiKey"]')) return
+  if (!isMaskedApiKeyInput(target)) return
+  target.value = ''
+  clearMaskedApiKeyInput(target)
+}
+
+function handleLLMApiKeyInput(event: Event) {
+  const target = event.target
+  if (!(target instanceof HTMLInputElement) || !target.matches('[data-chat-api-field="apiKey"]')) return
+  if (target.value !== MASKED_API_KEY_VALUE) clearMaskedApiKeyInput(target)
+}
+
+function handleLLMApiKeyBlur(event: FocusEvent) {
+  const target = event.target
+  if (!(target instanceof HTMLInputElement) || !target.matches('[data-chat-api-field="apiKey"]')) return
+  const clearInput = llmInput('clearApiKey') as HTMLInputElement | null
+  const profile = currentLLMProfile(state.sellerSettings)
+  if (profile.hasApiKey && !clearInput?.checked && !target.value.trim()) setMaskedApiKeyInput(target)
+}
+
+function handleLLMApiKeyClearChange(event: Event) {
+  const target = event.target
+  if (!(target instanceof HTMLInputElement) || !target.matches('[data-chat-api-field="clearApiKey"]')) return
+  const apiKeyInput = llmInput('apiKey') as HTMLInputElement | null
+  if (!apiKeyInput) return
+  if (target.checked) {
+    apiKeyInput.value = ''
+    clearMaskedApiKeyInput(apiKeyInput)
+    return
+  }
+  if (currentLLMProfile(state.sellerSettings).hasApiKey) setMaskedApiKeyInput(apiKeyInput)
 }
 
 function renderSellerMarketStatus(status: SellerMarketStatus) {
-  fields.sellerMarketChip.textContent = status.discoverable ? 'market searchable' : 'not discoverable'
+  fields.sellerMarketChip.textContent = uiText(status.discoverable ? 'market searchable' : 'not discoverable')
   fields.sellerMarketChip.dataset.state = status.discoverable ? 'ok' : 'warn'
 }
 
@@ -6128,16 +7053,10 @@ async function run(action: () => Promise<unknown>, success?: string) {
   }
 }
 
-async function copyFrom(command: string, success: string) {
-  const value = await invoke<string>(command)
-  await navigator.clipboard.writeText(value)
-  showToast(success)
-}
-
 function renderLocalAgentPromptControls() {
   const ready = Boolean(state.appStatus?.mcpCommand && state.appStatus.discoveryPath)
   fields.localAgentCopyButton.disabled = state.busy || !ready
-  fields.localAgentCopyButton.setAttribute('title', ready ? 'Copy local agent MCP prompt' : 'Refresh runtime before copying')
+  fields.localAgentCopyButton.setAttribute('title', uiText(ready ? 'Copy local agent MCP prompt' : 'Starting local Dock'))
 }
 
 function composeLocalAgentPrompt(task: string, work: WorkMCPContext) {
@@ -6207,14 +7126,54 @@ async function copyLocalAgentPrompt() {
     || agentQuery.value.trim()
     || '[Describe the user task here before sending this prompt to the external agent.]'
   if (!state.appStatus?.mcpCommand || !state.appStatus.discoveryPath) {
-    showToast('Refresh runtime before copying the MCP prompt.')
+    showToast(t('toast.refreshRuntimeBeforePrompt'))
     return
   }
   const work = await createWorkMCPContext(task)
   const prompt = composeLocalAgentPrompt(task, work)
   await navigator.clipboard.writeText(prompt)
   setProjectFolders([{ name: work.projectName || projectFolderNameForPath(work.projectPath), path: work.projectPath }, ...state.projectFolders], work.projectPath)
-  showToast(`Local agent MCP prompt copied with Work UID ${shortID(work.workUid)}.`)
+  showToast(t('toast.localAgentPromptCopied', { id: shortID(work.workUid) }))
+}
+
+async function takeOverExternalWork() {
+  const lease = activeExternalWorkLease()
+  const run = activeExternalWorkRun()
+  if (!lease && !run) {
+    renderExternalWorkLockControls()
+    return
+  }
+  fields.externalWorkTakeoverButton.disabled = true
+  try {
+    if (run) {
+      await invoke('stop_work_run', {
+        input: {
+          runId: run.runId,
+          workUid: run.workUid || lease?.workUid,
+          projectPath: run.projectPath || lease?.projectPath || activeProjectFolder().path,
+          reason: 'Owner took over this Work in Exora Dock.',
+        },
+      })
+      state.workRuns = state.workRuns.filter((item) => item.runId !== run.runId)
+    }
+    if (lease) {
+      await invoke('release_work_mcp_lease', {
+        input: {
+          workUid: lease.workUid,
+          projectPath: lease.projectPath || activeProjectFolder().path,
+        },
+      })
+      state.workMcpLeases = state.workMcpLeases.filter((item) => item.workUid !== lease.workUid)
+    }
+    renderExternalWorkLockControls()
+    await refreshWorkspace({ quiet: true })
+    showToast(t('toast.buyerControlRestored'))
+    agentQuery.focus()
+  } catch (error) {
+    showToast(humanizeError(error))
+  } finally {
+    renderExternalWorkLockControls()
+  }
 }
 
 function marketResponseText(result: MarketSearchResult) {
@@ -6228,35 +7187,14 @@ function marketResponseText(result: MarketSearchResult) {
 }
 
 function sellerPayload() {
-  const settings = state.sellerSettings
-  const preset = presetById(settings?.providerPreset)
   return {
     enabled: checked('enabled'),
     autoQuote: checked('autoQuote'),
-    autoCompleteTextTasks: checked('autoCompleteTextTasks'),
-    llmBaseUrl: settings?.llmBaseUrl || preset.baseUrl,
-    apiKey: '',
-    clearApiKey: false,
-    providerPreset: settings?.providerPreset || preset.id,
-    wireApi: settings?.wireApi || preset.wireApi,
-    capabilities: settings?.capabilities || preset.capabilities,
-    researchModel: settings?.researchModel || preset.model,
-    researchReasoningEffort: settings?.researchReasoningEffort || 'high',
-    utilityModel: settings?.utilityModel || settings?.researchModel || preset.model,
-    utilityReasoningEffort: settings?.utilityReasoningEffort || 'low',
-    disableResponseStorage: settings?.disableResponseStorage ?? true,
+    autoAcceptLowRisk: checked('autoAcceptLowRisk'),
     providerId: value('providerId'),
     quotePrice: Number(value('quotePrice') || '0'),
-    currency: value('currency') || 'USD',
+    currency: value('currency') || 'USDC',
     estimatedSeconds: Number(value('estimatedSeconds') || '60'),
-    dockerEnabled: checked('dockerEnabled'),
-    dockerDefaultImage: value('dockerDefaultImage'),
-    dockerAllowedImages: value('dockerAllowedImages'),
-    dockerNetworkMode: value('dockerNetworkMode') || 'none',
-    dockerAllowedNetworkModes: value('dockerAllowedNetworkModes') || 'none',
-    dockerAllowGpu: checked('dockerAllowGpu'),
-    dockerMaxCpus: Number(value('dockerMaxCpus') || '0'),
-    dockerMaxMemoryMb: Number(value('dockerMaxMemoryMb') || '0'),
   }
 }
 
@@ -6264,27 +7202,29 @@ function apiSettingsPayload(form: HTMLFormElement) {
   const settings = state.sellerSettings
   const apiValue = (name: string) => form.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-chat-api-field="${name}"]`)?.value.trim() || ''
   const apiChecked = (name: string) => form.querySelector<HTMLInputElement>(`[data-chat-api-field="${name}"]`)?.checked === true
-  const preset = presetById(apiValue('providerPreset') || settings?.providerPreset)
+  const baseUrl = apiValue('llmBaseUrl') || settings?.llmBaseUrl || 'https://api.openai.com/v1'
+  const preset = presetById(inferProviderPreset(baseUrl))
   const model = apiValue('researchModel') || settings?.researchModel || preset.model
   return {
-    profileId: state.editingLLMProfileId,
+    profileId: savedEditingLLMProfileId(),
     enabled: settings?.enabled ?? false,
     autoQuote: settings?.autoQuote ?? false,
+    autoAcceptLowRisk: settings?.autoAcceptLowRisk ?? settings?.autoCompleteTextTasks ?? false,
     autoCompleteTextTasks: settings?.autoCompleteTextTasks ?? false,
-    llmBaseUrl: apiValue('llmBaseUrl') || settings?.llmBaseUrl || preset.baseUrl,
-    apiKey: apiValue('apiKey'),
+    llmBaseUrl: baseUrl,
+    apiKey: apiKeyValueForPayload(form),
     clearApiKey: apiChecked('clearApiKey'),
     providerPreset: preset.id,
-    wireApi: apiValue('wireApi') || settings?.wireApi || preset.wireApi,
-    capabilities: preset.capabilities,
+    wireApi: apiValue('wireApi') || settings?.wireApi || defaultWireForPreset(preset.id),
+    capabilities: capabilitiesForWire(preset.capabilities, apiValue('wireApi') || settings?.wireApi || defaultWireForPreset(preset.id)),
     researchModel: model,
     researchReasoningEffort: apiValue('researchReasoningEffort') || settings?.researchReasoningEffort || 'high',
     utilityModel: apiValue('utilityModel') || settings?.utilityModel || model,
     utilityReasoningEffort: apiValue('utilityReasoningEffort') || settings?.utilityReasoningEffort || 'low',
-    disableResponseStorage: apiChecked('disableResponseStorage'),
+    disableResponseStorage: form.querySelector(`[data-chat-api-field="disableResponseStorage"]`) ? apiChecked('disableResponseStorage') : true,
     providerId: settings?.providerId || '',
     quotePrice: settings?.quotePrice ?? 0,
-    currency: settings?.currency || 'USD',
+    currency: settings?.currency || 'USDC',
     estimatedSeconds: settings?.estimatedSeconds ?? 60,
   }
 }
@@ -6292,33 +7232,73 @@ function apiSettingsPayload(form: HTMLFormElement) {
 function llmProfilePayload(form: HTMLFormElement, options: { id?: string; duplicate?: boolean } = {}) {
   const apiValue = (name: string) => form.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-chat-api-field="${name}"]`)?.value.trim() || ''
   const apiChecked = (name: string) => form.querySelector<HTMLInputElement>(`[data-chat-api-field="${name}"]`)?.checked === true
-  const preset = presetById(apiValue('providerPreset'))
+  const baseUrl = apiValue('llmBaseUrl') || 'https://api.openai.com/v1'
+  const preset = presetById(inferProviderPreset(baseUrl))
   const model = apiValue('researchModel') || preset.model
   const source = currentLLMProfile(state.sellerSettings)
+  const editingId = options.id || savedEditingLLMProfileId()
+  const sourceId = source.id && !isDraftLLMProfileId(source.id) && source.id !== 'current' ? source.id : undefined
+  const useForBuyer = apiChecked('useForBuyer')
+  const useForSeller = apiChecked('useForSeller')
   return {
-    id: options.duplicate ? undefined : options.id || state.editingLLMProfileId || source.id,
-    cloneKeyFromId: options.duplicate ? source.id : undefined,
-    name: apiValue('profileName') || source.name || preset.label,
+    id: options.duplicate ? undefined : editingId || sourceId,
+    cloneKeyFromId: options.duplicate ? sourceId : undefined,
+    name: apiValue('profileName') || source.name || `${hostLabelForURL(baseUrl)} / ${model}`,
     providerPreset: preset.id,
-    llmBaseUrl: apiValue('llmBaseUrl') || preset.baseUrl,
-    apiKey: apiValue('apiKey'),
+    llmBaseUrl: baseUrl,
+    apiKey: apiKeyValueForPayload(form),
     clearApiKey: apiChecked('clearApiKey'),
-    wireApi: apiValue('wireApi') || preset.wireApi,
-    capabilities: preset.capabilities,
+    wireApi: apiValue('wireApi') || defaultWireForPreset(preset.id),
+    capabilities: capabilitiesForWire(preset.capabilities, apiValue('wireApi') || defaultWireForPreset(preset.id)),
     researchModel: model,
     researchReasoningEffort: apiValue('researchReasoningEffort') || 'high',
     utilityModel: apiValue('utilityModel') || model,
     utilityReasoningEffort: apiValue('utilityReasoningEffort') || 'low',
-    disableResponseStorage: apiChecked('disableResponseStorage'),
+    disableResponseStorage: form.querySelector(`[data-chat-api-field="disableResponseStorage"]`) ? apiChecked('disableResponseStorage') : true,
+    useForBuyer,
+    useForSeller,
+  }
+}
+
+function syncLLMDraftProfileFromForm() {
+  const draft = editingDraftLLMProfile()
+  if (!draft) return
+  const apiValue = (name: string) => llmSettingsForm.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-chat-api-field="${name}"]`)?.value.trim() || ''
+  const apiChecked = (name: string) => llmSettingsForm.querySelector<HTMLInputElement>(`[data-chat-api-field="${name}"]`)?.checked === true
+  const baseUrl = apiValue('llmBaseUrl') || draft.llmBaseUrl || 'https://api.openai.com/v1'
+  const preset = presetById(inferProviderPreset(baseUrl))
+  const wire = (apiValue('wireApi') || draft.wireApi || defaultWireForPreset(preset.id)) as LLMProfile['wireApi']
+  const model = apiValue('researchModel') || draft.researchModel || preset.model
+  state.llmDraftProfile = {
+    ...draft,
+    name: apiValue('profileName') || draft.name,
+    providerPreset: preset.id,
+    llmBaseUrl: baseUrl,
+    wireApi: wire,
+    capabilities: capabilitiesForWire(preset.capabilities, wire),
+    researchModel: model,
+    researchReasoningEffort: apiValue('researchReasoningEffort') || draft.researchReasoningEffort || 'high',
+    utilityModel: apiValue('utilityModel') || draft.utilityModel || model,
+    utilityReasoningEffort: apiValue('utilityReasoningEffort') || draft.utilityReasoningEffort || 'low',
+    disableResponseStorage: llmSettingsForm.querySelector('[data-chat-api-field="disableResponseStorage"]')
+      ? apiChecked('disableResponseStorage')
+      : draft.disableResponseStorage,
+    useForBuyer: apiChecked('useForBuyer'),
+    useForSeller: apiChecked('useForSeller'),
   }
 }
 
 async function syncLLMProfilesFromStatus(status: LLMProfileStatus, preferredId?: string) {
+  if (preferredId && !isDraftLLMProfileId(preferredId)) state.llmDraftProfile = undefined
   state.llmProfiles = status.profiles || []
   state.activeLLMProfileId = status.activeProfileId
+  state.buyerLLMProfileId = status.buyerProfileId
+  state.sellerLLMProfileId = status.sellerProfileId
   state.llmKeyStorageAvailable = Boolean(status.keyStorageAvailable)
   state.editingLLMProfileId = preferredId && state.llmProfiles.some((profile) => profile.id === preferredId)
     ? preferredId
+    : editingDraftLLMProfile()
+      ? DRAFT_LLM_PROFILE_ID
     : state.editingLLMProfileId && state.llmProfiles.some((profile) => profile.id === state.editingLLMProfileId)
       ? state.editingLLMProfileId
       : state.activeLLMProfileId || state.llmProfiles[0]?.id
@@ -6328,52 +7308,139 @@ async function syncLLMProfilesFromStatus(status: LLMProfileStatus, preferredId?:
 async function saveLLMProfile(options: { apply?: boolean; duplicate?: boolean } = {}) {
   const payload = llmProfilePayload(llmSettingsForm, { duplicate: options.duplicate })
   if (options.duplicate) payload.name = `${payload.name} Copy`
+  const previousProfileId = payload.id || state.editingLLMProfileId || ''
+  const wasForBuyer = Boolean(previousProfileId && state.buyerLLMProfileId === previousProfileId)
+  const wasForSeller = Boolean(previousProfileId && state.sellerLLMProfileId === previousProfileId)
   const status = await invoke<LLMProfileStatus>('save_llm_profile', { input: payload })
-  const saved = options.duplicate
-    ? status.profiles.find((profile) => profile.name === payload.name)
+  const saved = options.duplicate || !payload.id
+    ? status.profiles[0]
     : status.profiles.find((profile) => profile.id === payload.id)
   await syncLLMProfilesFromStatus(status, saved?.id)
   if (options.apply && saved?.id) {
-    const applied = await invoke<LLMProfileStatus>('apply_llm_profile', { input: { id: saved.id } })
+    const applied = await invoke<LLMProfileStatus>('apply_llm_profile', {
+      input: {
+        id: saved.id,
+        useForBuyer: Boolean(payload.useForBuyer),
+        useForSeller: Boolean(payload.useForSeller),
+        wasForBuyer,
+        wasForSeller,
+      },
+    })
     await syncLLMProfilesFromStatus(applied, saved.id)
     await refreshSeller({ market: true })
-    showToast('API profile saved and applied.')
+    showToast(t('toast.apiProfileSavedApplied'))
   } else {
-    showToast(options.duplicate ? 'API profile duplicated.' : 'API profile saved.')
+    showToast(t(options.duplicate ? 'toast.apiProfileDuplicated' : 'toast.apiProfileSaved'))
   }
 }
 
 async function deleteLLMProfile() {
+  if (editingDraftLLMProfile()) {
+    state.llmDraftProfile = undefined
+    state.editingLLMProfileId = state.activeLLMProfileId || state.llmProfiles[0]?.id
+    clearLLMTestStatus()
+    renderLLMSettings(state.sellerSettings)
+    return
+  }
   const profile = currentLLMProfile(state.sellerSettings)
   if (!profile.id || !window.confirm(`Delete API profile "${profile.name}"?`)) return
   const status = await invoke<LLMProfileStatus>('delete_llm_profile', { input: { id: profile.id } })
   await syncLLMProfilesFromStatus(status)
-  showToast('API profile deleted.')
+  showToast(t('toast.apiProfileDeleted'))
 }
 
 async function newLLMProfile() {
+  if (editingDraftLLMProfile()) return
   const preset = llmPresets[0]
-  const status = await invoke<LLMProfileStatus>('save_llm_profile', {
-    input: {
-      name: 'New API Profile',
-      providerPreset: preset.id,
-      llmBaseUrl: preset.baseUrl,
-      wireApi: preset.wireApi,
-      capabilities: preset.capabilities,
-      researchModel: preset.model,
-      researchReasoningEffort: 'high',
-      utilityModel: preset.model,
-      utilityReasoningEffort: 'low',
-      disableResponseStorage: true,
-    },
-  })
-  const newest = status.profiles[0]
-  await syncLLMProfilesFromStatus(status, newest?.id)
-  showToast('New API profile created.')
+  state.llmDraftProfile = {
+    id: DRAFT_LLM_PROFILE_ID,
+    name: uniqueLLMProfileName('New API Setting'),
+    providerPreset: preset.id,
+    llmBaseUrl: preset.baseUrl,
+    wireApi: preset.wireApi,
+    capabilities: preset.capabilities,
+    researchModel: preset.model,
+    researchReasoningEffort: 'high',
+    utilityModel: preset.model,
+    utilityReasoningEffort: 'low',
+    disableResponseStorage: true,
+    hasApiKey: false,
+    keyFormat: 'missing',
+    useForBuyer: false,
+    useForSeller: false,
+  }
+  state.editingLLMProfileId = DRAFT_LLM_PROFILE_ID
+  clearLLMTestStatus()
+  renderLLMSettings(state.sellerSettings)
 }
 
 function presetById(id?: string) {
   return llmPresets.find((preset) => preset.id === id) || llmPresets[0]
+}
+
+function inferProviderPreset(baseUrl: string) {
+  const base = String(baseUrl || '').trim().toLowerCase()
+  if (base.includes('openrouter.ai')) return 'openrouter'
+  if (base.includes('api.openai.com')) return 'openai_responses'
+  if (base.includes('127.0.0.1:11434') || base.includes('localhost:11434')) return 'ollama'
+  if (base.includes('127.0.0.1:1234') || base.includes('localhost:1234')) return 'lm_studio'
+  return 'custom_openai_compatible'
+}
+
+function defaultWireForPreset(presetId: string) {
+  return presetId === 'openai_responses' ? 'responses' : 'chat_completions'
+}
+
+function capabilitiesForWire(base: LLMCapabilities, wire: string): LLMCapabilities {
+  if (wire === 'responses') {
+    return {
+      ...base,
+      supportsResponses: true,
+      supportsChatCompletions: true,
+      supportsSystemMessage: true,
+      supportsJsonResponseFormat: true,
+      supportsStreaming: true,
+      supportsTools: true,
+      supportsReasoningEffort: true,
+    }
+  }
+  return {
+    ...base,
+    supportsResponses: false,
+    supportsChatCompletions: true,
+    supportsReasoningEffort: false,
+  }
+}
+
+function hostLabelForURL(baseUrl: string) {
+  try {
+    return new URL(baseUrl).host || 'API'
+  } catch {
+    return baseUrl.replace(/^https?:\/\//, '').split('/')[0] || 'API'
+  }
+}
+
+function uniqueLLMProfileName(name: string, currentId = '') {
+  const requested = name.trim() || 'API Profile'
+  const current = currentId.trim()
+  const existingNames = new Set(
+    state.llmProfiles
+      .filter((profile) => profile.id !== current)
+      .map((profile) => profile.name.trim().toLowerCase())
+      .filter(Boolean),
+  )
+  if (!existingNames.has(requested.toLowerCase())) return requested
+
+  const numbered = requested.match(/^(.*?)\s+(\d+)$/)
+  const numberedBase = numbered?.[1]?.trim()
+  const base = numberedBase && existingNames.has(numberedBase.toLowerCase()) ? numberedBase : requested
+  let index = numberedBase && base === numberedBase ? Math.max(2, Number(numbered?.[2] || 1) + 1) : 2
+  let candidate = `${base} ${index}`
+  while (existingNames.has(candidate.toLowerCase())) {
+    index += 1
+    candidate = `${base} ${index}`
+  }
+  return candidate
 }
 
 function capabilitySummary(capabilities: LLMCapabilities) {
@@ -6587,29 +7654,28 @@ function setBusy(next: boolean) {
     if (button.dataset.toolbarAction === 'toggle-sidebar') return
     button.disabled = next
   })
-  agentQuery.disabled = next
+  agentQuery.disabled = next || builtInBuyerInputLocked()
   fields.localAgentTask.disabled = next
   renderLocalAgentPromptControls()
+  renderExternalWorkLockControls()
   renderChromeControls()
 }
 
 function showToast(message: string) {
-  fields.message.textContent = message
+  fields.message.textContent = translatePhrase(message, state.language)
 }
 
-const settingsTitles: Record<SettingsView, { kicker: string; title: string }> = {
-  api: { kicker: 'AI & Models', title: 'Provider API' },
-  'buyer-agent': { kicker: 'Agents', title: 'Buyer Agent' },
-  'buyer-card': { kicker: 'Agents', title: 'Buyer Card' },
-  'seller-card': { kicker: 'Agents', title: 'Seller Card' },
-  seller: { kicker: 'Agents', title: 'Seller Agent' },
-  agents: { kicker: 'Agents', title: 'External MCP' },
-  pwa: { kicker: 'Mobile', title: 'PWA Link' },
-  wallet: { kicker: 'Account', title: 'Wallet' },
-  security: { kicker: 'Account', title: 'Security' },
-  archives: { kicker: 'Account', title: 'Archive Records' },
-  runtime: { kicker: 'System', title: 'Runtime' },
-  diagnostics: { kicker: 'System', title: 'Diagnostics' },
+function settingsTitles(): Record<SettingsView, { kicker: string; title: string }> {
+  return {
+    api: { kicker: t('settings.api.kicker'), title: t('settings.api.title') },
+    'buyer-agent': { kicker: t('settings.buyerAgent.kicker'), title: t('settings.buyerAgent.title') },
+    'buyer-card': { kicker: t('settings.buyerCard.kicker'), title: t('settings.buyerCard.title') },
+    'seller-card': { kicker: t('settings.sellerCard.kicker'), title: t('settings.sellerCard.title') },
+    seller: { kicker: t('settings.seller.kicker'), title: t('settings.seller.title') },
+    pwa: { kicker: t('settings.pwa.kicker'), title: t('settings.pwa.title') },
+    wallet: { kicker: t('settings.wallet.kicker'), title: t('settings.wallet.title') },
+    archives: { kicker: t('settings.archives.kicker'), title: t('settings.archives.title') },
+  }
 }
 
 function settingsViewForCardRole(role: AgentCardRole): SettingsView {
@@ -6626,7 +7692,7 @@ function renderSettingsAgentCardPages() {
 }
 
 function renderSettingsPanel() {
-  const meta = settingsTitles[state.activeSettingsView]
+  const meta = settingsTitles()[state.activeSettingsView]
   fields.mainKicker.textContent = meta.kicker
   fields.decisionTitle.textContent = meta.title
   fields.decisionStep.textContent = 'settings'
@@ -6638,12 +7704,13 @@ function renderSettingsPanel() {
   app.querySelectorAll<HTMLElement>('[data-settings-page]').forEach((page) => {
     page.classList.toggle('hidden', page.dataset.settingsPage !== state.activeSettingsView)
   })
+  if (state.activeSettingsView === 'api') renderLLMSettings(state.sellerSettings)
   renderSettingsAgentCardPages()
   renderLLMTestNote()
   renderPwaLinkStatus()
   renderWalletStatus()
-  renderSecurityStatus()
   renderArchiveRecords()
+  localize(fields.settingsView)
 }
 
 function renderArchiveRecords() {
@@ -6680,46 +7747,58 @@ function renderArchiveRecord(record: ArchivedWorkRecord) {
 
 function renderPwaLinkStatus() {
   const link = state.pwaLink
-  fields.pwaLinkState.textContent = link?.linked ? 'linked' : link?.status || 'not started'
-  fields.pwaUserCode.textContent = link?.userCode || 'not generated'
-  fields.pwaCloudURL.textContent = link?.cloudUrl || 'not configured'
-  fields.pwaExpires.textContent = link?.expiresAt ? compactTimestamp(link.expiresAt) : 'not started'
-  fields.pwaTokenPath.textContent = link?.tokenPath || 'local after scan'
-  fields.pwaLinkNote.textContent = state.pwaLinkMessage || link?.message || 'Start a QR session, then scan it from the Exora PWA Remote Console.'
+  fields.pwaLinkState.textContent = uiText(link?.linked ? 'linked' : link?.status || 'not started')
+  fields.pwaUserCode.textContent = link?.userCode || uiText('not generated')
+  fields.pwaCloudURL.textContent = link?.cloudUrl || uiText('not configured')
+  fields.pwaExpires.textContent = link?.expiresAt ? compactTimestamp(link.expiresAt) : uiText('not started')
+  fields.pwaTokenPath.textContent = link?.tokenPath || uiText('local after scan')
+  fields.pwaLinkNote.textContent = uiText(state.pwaLinkMessage || link?.message || 'Start a QR session, then scan it from the Exora PWA Remote Console.')
   if (link?.qrSvg) {
     fields.pwaQR.innerHTML = link.qrSvg
   } else {
-    fields.pwaQR.innerHTML = '<span>QR</span>'
+    fields.pwaQR.innerHTML = `<span>${escapeHTML(uiText('QR'))}</span>`
   }
 }
 
 function renderWalletStatus() {
   const wallet = state.walletStatus
-  if (!wallet) {
-    fields.walletState.textContent = 'checking'
-    return
+  const accountWallet = wallet?.accountBound === true
+  const address = accountWallet ? wallet?.address?.trim() || '' : ''
+  const readyToReceive = Boolean(address)
+
+  fields.walletState.textContent = readyToReceive ? uiText('receive ready') : uiText(wallet ? 'preparing' : 'checking')
+  fields.walletReceive.classList.remove('hidden')
+  fields.walletAddress.textContent = address || uiText('not configured')
+  fields.walletCopyButton.disabled = !readyToReceive
+
+  if (readyToReceive) {
+    void renderWalletQRCode(address)
+  } else {
+    fields.walletQR.innerHTML = `<span>${escapeHTML(uiText('QR'))}</span>`
   }
-  fields.walletState.textContent = wallet.configured ? 'configured' : 'missing'
-  fields.walletAddress.textContent = wallet.address || 'not configured'
-  fields.walletMode.textContent = wallet.localKeypair
-    ? 'local keypair'
-    : wallet.boundOnly
-      ? 'bound address only'
-      : 'not configured'
-  fields.walletKeypair.textContent = wallet.localKeypair && wallet.keypairPath ? wallet.keypairPath : 'not stored or not exposed'
 }
 
-function renderSecurityStatus() {
-  const security = state.securityStatus
-  if (!security) {
-    fields.securityState.textContent = 'checking'
+async function renderWalletQRCode(address: string) {
+  const currentAddress = address.trim()
+  if (!currentAddress) {
+    fields.walletQR.innerHTML = `<span>${escapeHTML(uiText('QR'))}</span>`
     return
   }
-  fields.securityState.textContent = 'local'
-  fields.securityPin.textContent = security.paymentPinConfigured ? 'configured' : 'not configured'
-  fields.securityOwnerToken.textContent = security.ownerTokenPresent ? 'present, hidden' : 'missing'
-  fields.securityAgentToken.textContent = security.agentTokenPresent ? 'present, hidden' : 'missing'
-  fields.securityAuthPath.textContent = security.authPath || 'hidden'
+  try {
+    const svg = await qrToString(currentAddress, {
+      type: 'svg',
+      margin: SETTINGS_QR_MARGIN,
+      width: SETTINGS_QR_WIDTH,
+      color: SETTINGS_QR_COLOR,
+    })
+    const wallet = state.walletStatus
+    const accountWallet = wallet?.accountBound === true
+    if (accountWallet && wallet?.address?.trim() === currentAddress) {
+      fields.walletQR.innerHTML = svg
+    }
+  } catch {
+    fields.walletQR.innerHTML = `<span>${escapeHTML(uiText('QR'))}</span>`
+  }
 }
 
 function openSettings(view?: SettingsView) {
@@ -6756,31 +7835,22 @@ function returnFromSettings() {
 
 async function refreshSettingsStatus() {
   if (state.activeView !== 'settings') return
-  let walletError = ''
-  let securityError = ''
-  const [wallet, security] = await Promise.all([
-    invoke<{ wallet?: WalletStatus }>('wallet_status').catch((error) => ({ error: humanizeError(error) })),
-    invoke<SecurityStatus>('security_status').catch((error) => ({ error: humanizeError(error) })),
-  ])
-  if ('wallet' in wallet) {
-    state.walletStatus = wallet.wallet || {}
-  } else if ('error' in wallet) {
-    walletError = wallet.error
-  }
-  if ('error' in security) {
-    securityError = security.error
-  } else {
-    state.securityStatus = security
-  }
+  const walletError = await refreshWalletStatus()
   renderSettingsPanel()
   if (walletError) {
-    fields.walletState.textContent = 'offline'
+    fields.walletState.textContent = uiText('offline')
     fields.walletAddress.textContent = walletError
   }
-  if (securityError) {
-    fields.securityState.textContent = 'offline'
-    fields.securityPin.textContent = securityError
+}
+
+async function refreshWalletStatus() {
+  const wallet = await invoke<{ wallet?: WalletStatus }>('wallet_status').catch((error) => ({ error: humanizeError(error) }))
+  if ('wallet' in wallet) {
+    state.walletStatus = wallet.wallet || {}
+    if (state.activeView === 'settings') renderWalletStatus()
+    return ''
   }
+  return 'error' in wallet ? wallet.error : 'Wallet status unavailable.'
 }
 
 function input(name: string) {
@@ -6804,15 +7874,36 @@ function setChecked(name: string, next: boolean) {
 }
 
 function llmInput(name: string) {
-  return llmSettingsForm.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-chat-api-field="${name}"]`)!
+  return llmSettingsForm.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-chat-api-field="${name}"]`)
 }
 
 function setLLMValue(name: string, next: string) {
-  llmInput(name).value = next
+  const input = llmInput(name)
+  if (input) input.value = next
 }
 
 function setLLMChecked(name: string, next: boolean) {
-  ;(llmInput(name) as HTMLInputElement).checked = next
+  const input = llmInput(name) as HTMLInputElement | null
+  if (input) input.checked = next
+}
+
+function isMaskedApiKeyInput(input: HTMLInputElement | null | undefined) {
+  return Boolean(input && input.dataset.maskedApiKey === 'true' && input.value === MASKED_API_KEY_VALUE)
+}
+
+function setMaskedApiKeyInput(input: HTMLInputElement) {
+  input.value = MASKED_API_KEY_VALUE
+  input.dataset.maskedApiKey = 'true'
+}
+
+function clearMaskedApiKeyInput(input: HTMLInputElement) {
+  delete input.dataset.maskedApiKey
+}
+
+function apiKeyValueForPayload(form: HTMLFormElement) {
+  const input = form.querySelector<HTMLInputElement>('[data-chat-api-field="apiKey"]')
+  if (!input || isMaskedApiKeyInput(input)) return ''
+  return input.value.trim()
 }
 
 function selectOrderSide(side: OrderSide) {
@@ -6974,6 +8065,7 @@ app.addEventListener('click', (event) => {
   if (state.projectFolderMenuOpen && !(target instanceof Element && target.closest('.project-folder-head'))) closeProjectFolderMenu()
   if (state.taskMenuOpen && !(target instanceof Element && target.closest('.task-context-menu'))) closeTaskContextMenu()
   if (state.permissionMenuOpen && !(target instanceof Element && target.closest('.permission-control'))) closePermissionMenu()
+  if (!(target instanceof Element && target.closest('[data-llm-profile-menu]'))) closeLLMProfileMenu()
 })
 
 document.addEventListener('keydown', (event) => {
@@ -6982,6 +8074,7 @@ document.addEventListener('keydown', (event) => {
     closeProjectFolderMenu()
     closeTaskContextMenu()
     closePermissionMenu()
+    closeLLMProfileMenu()
     closeMarketProjectPicker()
   }
 })
@@ -7138,114 +8231,120 @@ app.querySelectorAll<HTMLButtonElement>('[data-action="open-pwa-link"]').forEach
   })
 })
 
-app.querySelector<HTMLButtonElement>('[data-action="settings-pin"]')!.addEventListener('click', () => {
-  setActiveView('work')
-  state.pinStep = { action: { kind: 'settings_pin' }, setup: true, pin: '', confirm: '' }
-  renderAll()
-})
-
-app.querySelector<HTMLButtonElement>('[data-action="start"]')!.addEventListener('click', () => {
-  run(() => invoke('start_dock'))
-})
-
-app.querySelector<HTMLButtonElement>('[data-action="stop"]')!.addEventListener('click', () => {
-  run(() => invoke('stop_dock'))
-})
-
-app.querySelector<HTMLButtonElement>('[data-action="restart"]')!.addEventListener('click', () => {
-  run(() => invoke('restart_dock'))
-})
-
-app.querySelector<HTMLButtonElement>('[data-action="copy-prompt"]')!.addEventListener('click', () => {
-  run(() => copyFrom('copy_agent_prompt', 'Agent prompt copied.'))
-})
-
-app.querySelector<HTMLButtonElement>('[data-action="copy-opencode"]')!.addEventListener('click', () => {
-  run(() => copyFrom('copy_opencode_config', 'OpenCode MCP config copied.'))
-})
-
-app.querySelector<HTMLButtonElement>('[data-action="copy-mcp"]')!.addEventListener('click', () => {
-  run(() => copyFrom('copy_mcp_command', 'MCP command copied.'))
-})
-
 fields.localAgentCopyButton.addEventListener('click', () => {
   copyLocalAgentPrompt().catch((error) => showToast(humanizeError(error)))
 })
 
-app.querySelectorAll<HTMLButtonElement>('[data-action="copy-rest"]').forEach((button) => {
-  button.addEventListener('click', () => {
-    run(() => copyFrom('copy_rest_base_url', 'REST base URL copied.'))
-  })
+fields.externalWorkTakeoverButton.addEventListener('click', () => {
+  takeOverExternalWork().catch((error) => showToast(humanizeError(error)))
 })
 
-app.querySelector<HTMLButtonElement>('[data-action="health"]')!.addEventListener('click', () => {
-  run(() => invoke('open_health'))
-})
-
-app.querySelector<HTMLButtonElement>('[data-action="manifest"]')!.addEventListener('click', () => {
-  run(() => invoke('open_manifest'))
-})
-
-app.querySelector<HTMLButtonElement>('[data-action="logs"]')!.addEventListener('click', () => {
-  run(() => invoke('open_logs'))
-})
-
-llmSettingsForm.querySelector<HTMLSelectElement>('[data-chat-api-field="providerPreset"]')!.addEventListener('change', (event) => {
+llmSettingsForm.querySelector<HTMLSelectElement>('[data-chat-api-field="providerPreset"]')?.addEventListener('change', (event) => {
   applyPresetToForm(llmSettingsForm, presetById((event.currentTarget as HTMLSelectElement).value))
 })
+llmSettingsForm.addEventListener('focusin', handleLLMApiKeyFocus)
+llmSettingsForm.addEventListener('beforeinput', handleLLMApiKeyBeforeInput)
+llmSettingsForm.addEventListener('input', handleLLMApiKeyInput)
+llmSettingsForm.addEventListener('input', handleLLMSettingsDraftSync)
+llmSettingsForm.addEventListener('input', handleLLMSettingsTestInvalidation)
+llmSettingsForm.addEventListener('focusout', handleLLMApiKeyBlur)
+llmSettingsForm.addEventListener('change', handleLLMApiKeyClearChange)
+llmSettingsForm.addEventListener('change', handleLLMSettingsDraftSync)
+llmSettingsForm.addEventListener('change', handleLLMSettingsTestInvalidation)
+
+function setLLMProfileMenuOpen(open: boolean) {
+  const menu = fields.llmProfileList.querySelector<HTMLElement>('[data-llm-profile-menu]')
+  const toggle = fields.llmProfileList.querySelector<HTMLButtonElement>('[data-llm-profile-toggle]')
+  const list = fields.llmProfileList.querySelector<HTMLElement>('[data-llm-profile-menu-list]')
+  if (!menu || !toggle || !list) return
+  menu.classList.toggle('open', open)
+  toggle.setAttribute('aria-expanded', String(open))
+  list.classList.toggle('hidden', !open)
+}
+
+function closeLLMProfileMenu() {
+  setLLMProfileMenuOpen(false)
+}
 
 fields.llmProfileList.addEventListener('click', (event) => {
   const target = event.target
   if (!(target instanceof Element)) return
-  const button = target.closest<HTMLButtonElement>('[data-llm-profile-id]')
-  if (!button) return
-  const profileId = button.dataset.llmProfileId
+  const toggle = target.closest<HTMLButtonElement>('[data-llm-profile-toggle]')
+  if (toggle) {
+    event.preventDefault()
+    event.stopPropagation()
+    setLLMProfileMenuOpen(toggle.getAttribute('aria-expanded') !== 'true')
+    return
+  }
+  const option = target.closest<HTMLButtonElement>('[data-llm-profile-option]')
+  if (!option) return
+  event.preventDefault()
+  event.stopPropagation()
+  const profileId = option.dataset.llmProfileOption
+  if (!profileId) return
+  state.llmDraftProfile = undefined
   state.editingLLMProfileId = profileId
   state.llmTestMessage = undefined
+  state.llmTestStatus = undefined
   renderLLMSettings(state.sellerSettings)
-  if (profileId && profileId !== state.activeLLMProfileId) {
-    run(async () => {
-      const applied = await invoke<LLMProfileStatus>('apply_llm_profile', { input: { id: profileId } })
-      await syncLLMProfilesFromStatus(applied, profileId)
-      showToast('API profile applied.')
-    })
-  }
 })
 
 app.querySelector<HTMLButtonElement>('[data-action="new-llm-profile"]')!.addEventListener('click', () => {
   run(() => newLLMProfile())
 })
 
-llmSettingsForm.querySelector<HTMLButtonElement>('[data-action="duplicate-llm-profile"]')!.addEventListener('click', () => {
+llmSettingsForm.querySelector<HTMLButtonElement>('[data-action="duplicate-llm-profile"]')?.addEventListener('click', () => {
   run(() => saveLLMProfile({ duplicate: true }))
 })
 
-llmSettingsForm.querySelector<HTMLButtonElement>('[data-action="delete-llm-profile"]')!.addEventListener('click', () => {
+llmSettingsForm.querySelector<HTMLButtonElement>('[data-action="delete-llm-profile"]')?.addEventListener('click', () => {
   run(() => deleteLLMProfile())
 })
 
-llmSettingsForm.querySelector<HTMLButtonElement>('[data-action="save-llm-profile"]')!.addEventListener('click', () => {
+llmSettingsForm.querySelector<HTMLButtonElement>('[data-action="save-llm-profile"]')?.addEventListener('click', () => {
   run(() => saveLLMProfile())
 })
 
 llmSettingsForm.querySelector<HTMLButtonElement>('[data-action="test-llm"]')!.addEventListener('click', () => {
   run(async () => {
-    const result = await invoke<{ ok: boolean; status: string; message: string; route: string }>('test_llm_connection', {
-      input: apiSettingsPayload(llmSettingsForm),
-    })
-    state.llmTestMessage = `${result.ok ? 'Ready' : result.status}: ${result.message}`
-    renderLLMTestNote()
+    try {
+      const result = await invoke<{ ok: boolean; status: string; message: string; route: string; llmBaseUrl?: string; wireApi?: LLMProfile['wireApi']; providerPreset?: string; capabilities?: LLMCapabilities; models?: string[] }>('test_llm_connection', {
+        input: apiSettingsPayload(llmSettingsForm),
+      })
+      if (result.ok) {
+        if (result.llmBaseUrl) setLLMValue('llmBaseUrl', result.llmBaseUrl)
+        if (result.wireApi) setLLMValue('wireApi', result.wireApi)
+        if (result.providerPreset) setLLMValue('providerPreset', result.providerPreset)
+        if (result.models?.length) state.llmModels = result.models
+        syncLLMDraftProfileFromForm()
+      }
+      state.llmTestStatus = result.ok ? 'passed' : 'failed'
+      state.llmTestMessage = result.message
+      const datalist = llmSettingsForm.querySelector<HTMLDataListElement>('#llm-model-options')
+      if (datalist) datalist.innerHTML = state.llmModels.map((model) => `<option value="${escapeHTML(model)}"></option>`).join('')
+      renderLLMTestNote()
+    } catch (error) {
+      state.llmTestStatus = 'failed'
+      state.llmTestMessage = humanizeError(error)
+      renderLLMTestNote()
+      throw error
+    }
   })
 })
 
-llmSettingsForm.querySelector<HTMLButtonElement>('[data-action="load-models"]')!.addEventListener('click', () => {
+llmSettingsForm.querySelector<HTMLButtonElement>('[data-action="load-models"]')?.addEventListener('click', () => {
   run(async () => {
-    const result = await invoke<{ ok: boolean; models: string[]; message: string }>('list_llm_models', {
+    const result = await invoke<{ ok: boolean; models: string[]; message: string; llmBaseUrl?: string }>('list_llm_models', {
       input: apiSettingsPayload(llmSettingsForm),
     })
+    if (result.ok && result.llmBaseUrl) setLLMValue('llmBaseUrl', result.llmBaseUrl)
+    syncLLMDraftProfileFromForm()
     state.llmModels = result.models || []
-    state.llmTestMessage = result.ok ? `Loaded ${state.llmModels.length} model(s).` : result.message
-    renderLLMSettings(state.sellerSettings)
+    state.llmTestStatus = result.ok ? 'passed' : 'failed'
+    state.llmTestMessage = result.message
+    const datalist = llmSettingsForm.querySelector<HTMLDataListElement>('#llm-model-options')
+    if (datalist) datalist.innerHTML = state.llmModels.map((model) => `<option value="${escapeHTML(model)}"></option>`).join('')
+    renderLLMTestNote()
   })
 })
 
@@ -7254,7 +8353,8 @@ llmSettingsForm.addEventListener('submit', (event) => {
   run(async () => {
     await saveLLMProfile({ apply: true })
     state.chatMode = 'expanded'
-    state.llmTestMessage = 'API profile applied.'
+    state.llmTestMessage = undefined
+    state.llmTestStatus = undefined
     renderAll()
   })
 })
@@ -7263,30 +8363,20 @@ app.querySelector<HTMLButtonElement>('[data-action="wallet-refresh"]')!.addEvent
   run(() => refreshSettingsStatus())
 })
 
+app.querySelector<HTMLButtonElement>('[data-action="wallet-copy-address"]')!.addEventListener('click', () => {
+  run(async () => {
+    const address = state.walletStatus?.address
+    if (!address) throw new Error('Wallet address is not configured.')
+    await navigator.clipboard.writeText(address)
+  }, 'Wallet address copied.')
+})
+
 app.querySelector<HTMLButtonElement>('[data-action="pwa-link-start"]')!.addEventListener('click', () => {
   run(() => startPwaLink()).catch(() => undefined)
 })
 
 app.querySelector<HTMLButtonElement>('[data-action="pwa-link-check"]')!.addEventListener('click', () => {
   run(() => checkPwaLink()).catch(() => undefined)
-})
-
-app.querySelector<HTMLButtonElement>('[data-action="wallet-create"]')!.addEventListener('click', () => {
-  run(async () => {
-    const response = await invoke<{ wallet?: WalletStatus }>('wallet_create')
-    state.walletStatus = response.wallet || {}
-    renderWalletStatus()
-  }, 'Local wallet created.')
-})
-
-walletBindForm.addEventListener('submit', (event) => {
-  event.preventDefault()
-  const address = walletBindForm.querySelector<HTMLInputElement>('[data-wallet-address-input]')?.value.trim() || ''
-  run(async () => {
-    const response = await invoke<{ wallet?: WalletStatus }>('wallet_bind', { input: { address } })
-    state.walletStatus = response.wallet || {}
-    renderWalletStatus()
-  }, 'Wallet address bound.')
 })
 
 buyerAgentForm.addEventListener('submit', (event) => {
@@ -7321,7 +8411,8 @@ async function bootstrap() {
   renderChat()
   renderAll()
   refreshProjectFolder()
-  refreshStatus()
+  void startDockOnLaunch()
+  refreshWalletStatus().catch(() => undefined)
   refreshSeller({ market: true })
   refreshAgentCards()
   window.setTimeout(() => refreshWorkspace({ quiet: true }), 250)

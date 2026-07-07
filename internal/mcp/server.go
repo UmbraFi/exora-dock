@@ -18,7 +18,11 @@ import (
 	"github.com/exora-dock/exora-dock/internal/discovery"
 )
 
-const protocolVersion = "2025-06-18"
+const (
+	protocolVersion   = "2025-06-18"
+	workMCPLeaseTTL   = 5 * time.Minute
+	workMCPLeaseLimit = 100
+)
 
 type Options struct {
 	ConfigPath     string
@@ -96,7 +100,7 @@ func (s *Server) handle(ctx context.Context, req rpcRequest) any {
 				"title":   "Exora Dock",
 				"version": "0.1.0",
 			},
-			"instructions": "Use Exora Dock tools as a continuous task flow. For buyer work, call exora.run_buyer_work first; it searches suitable sellers, negotiates with the best candidates, creates a durable owner seller-choice plan from quoted sellers, and then stops for the owner choice. Include the copied workUid on every related request when the Dock prompt provides one; if the UID is not registered yet, also include the copied projectPath. If run_buyer_work returns pending negotiations, continue with resume_negotiation and create_order_plan_from_quote without making the user prompt each step. If Exora Dock returns no suitable task card, seller card, quote, or order option, stop and tell the user that Exora Dock cannot help with this task right now, including the Dock/MCP reason. start_task_flow remains a realtime quote fallback. Never treat MCP tool invocation as user approval, seller selection, or payment consent.",
+			"instructions": "Use Exora Dock tools as a continuous task flow. For buyer work, call exora.run_buyer_work first; it is plan-first. It classifies the request, stops for clarification or local plan confirmation when needed, writes .exora/agent-plans/<plan_id>/ files only after confirmation, and requires Dock owner approval of submit_remote_task_manifest before seller matching or quoting. Include the copied workUid on every related request when the Dock prompt provides one; if the UID is not registered yet, also include the copied projectPath. Preserve and pass the returned resumeJson or runId on every follow-up so each step can checkpoint and resume through JSON. Calls with workUid mark that Work as actively controlled by this external MCP agent for a short renewable lease so the built-in Dock buyer composer does not race the same task. Do not call exora.negotiate_task as the default path for an unreviewed manifest; use it only as a low-level compatibility tool after the owner has approved an equivalent manifest. If Exora Dock returns no suitable task card, seller card, signed quote, or order option, stop and tell the user that Exora Dock cannot help with this task right now, including the Dock/MCP reason. start_task_flow remains a realtime quote fallback. For paid work, call exora.find_payment_evidence and require found_finalized Cloud/chain evidence before any paid worker/job continuation; local payment records alone are not enough. Never treat MCP tool invocation as user approval, seller selection, manifest submission approval, or payment consent.",
 		})
 	case "notifications/initialized":
 		return nil
@@ -170,79 +174,113 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 		if err := s.injectWorkContext(body); err != nil {
 			return workContextError(err), nil
 		}
+		injectExternalWorkRunContext(body)
 		setDefaultBool(body, "prepareOrderOptions", true)
 		setDefaultBool(body, "createSelectionRequest", true)
 		setDefaultNumber(body, "maxOptions", 5)
 		setDefaultNumber(body, "maxResults", 5)
-		return s.proxy(ctx, http.MethodPost, "/v1/agent/search-sellers", nil, body)
+		result, err := s.proxy(ctx, http.MethodPost, "/v1/agent/search-sellers", nil, body)
+		return s.withWorkRunCheckpoint(ctx, args, "find_sellers", result, err)
 	case "exora.start_task_flow":
 		body := cloneArgs(args)
 		if err := s.injectWorkContext(body); err != nil {
 			return workContextError(err), nil
 		}
+		injectExternalWorkRunContext(body)
 		setDefaultBool(body, "prepareOrderOptions", true)
 		setDefaultBool(body, "createSelectionRequest", true)
 		setDefaultBool(body, "requireRealtimeQuotes", true)
 		setDefaultNumber(body, "maxOptions", 6)
 		setDefaultNumber(body, "maxResults", 6)
-		return s.proxy(ctx, http.MethodPost, "/v1/agent/search-sellers", nil, body)
+		result, err := s.proxy(ctx, http.MethodPost, "/v1/agent/search-sellers", nil, body)
+		return s.withWorkRunCheckpoint(ctx, args, "start_task_flow", result, err)
 	case "exora.run_buyer_work":
 		body := cloneArgs(args)
 		if err := s.injectWorkContext(body); err != nil {
 			return workContextError(err), nil
 		}
+		injectExternalWorkRunContext(body)
 		setDefaultNumber(body, "maxCandidates", 3)
 		setDefaultNumber(body, "maxOptions", 6)
 		setDefaultNumber(body, "maxResults", 6)
-		return s.proxy(ctx, http.MethodPost, "/v1/agent/buyer-work", nil, body)
+		result, err := s.proxy(ctx, http.MethodPost, "/v1/agent/buyer-work", nil, body)
+		return s.withWorkRunCheckpoint(ctx, args, "run_buyer_work", result, err)
 	case "exora.negotiate_task":
 		body := cloneArgs(args)
 		if err := s.injectWorkContext(body); err != nil {
 			return workContextError(err), nil
 		}
+		injectExternalWorkRunContext(body)
 		setDefaultNumber(body, "maxCandidates", 3)
-		return s.proxy(ctx, http.MethodPost, "/v1/negotiations", nil, body)
+		result, err := s.proxy(ctx, http.MethodPost, "/v1/negotiations", nil, body)
+		return s.withWorkRunCheckpoint(ctx, args, "negotiate_task", result, err)
 	case "exora.list_negotiations":
 		query := url.Values{}
 		copyStringArg(query, args, "status")
 		copyStringArg(query, args, "providerPubkey")
 		copyStringArg(query, args, "requesterPubkey")
 		copyStringArg(query, args, "orderPlanId")
-		return s.proxy(ctx, http.MethodGet, "/v1/negotiations", query, nil)
+		result, err := s.proxy(ctx, http.MethodGet, "/v1/negotiations", query, nil)
+		return s.withWorkRunCheckpoint(ctx, args, "compare_quotes", result, err)
 	case "exora.get_negotiation":
 		id := firstString(args, "negotiationId", "id")
 		if id == "" {
 			return errorResult("negotiationId required", nil), nil
 		}
-		return s.proxy(ctx, http.MethodGet, "/v1/negotiations/"+url.PathEscape(id), nil, nil)
+		result, err := s.proxy(ctx, http.MethodGet, "/v1/negotiations/"+url.PathEscape(id), nil, nil)
+		return s.withWorkRunCheckpoint(ctx, args, "compare_quotes", result, err)
 	case "exora.resume_negotiation":
 		id := firstString(args, "negotiationId", "id")
 		if id == "" {
 			return errorResult("negotiationId required", nil), nil
 		}
-		return s.proxy(ctx, http.MethodPost, "/v1/negotiations/"+url.PathEscape(id)+"/resume", nil, map[string]any{})
+		result, err := s.proxy(ctx, http.MethodPost, "/v1/negotiations/"+url.PathEscape(id)+"/resume", nil, map[string]any{})
+		return s.withWorkRunCheckpoint(ctx, args, "negotiate_task", result, err)
 	case "exora.create_order_plan_from_quote":
 		body := cloneArgs(args)
 		if err := s.injectWorkContext(body); err != nil {
 			return workContextError(err), nil
 		}
-		return s.proxy(ctx, http.MethodPost, "/v1/order-plans/from-negotiations", nil, body)
+		injectExternalWorkRunContext(body)
+		result, err := s.proxy(ctx, http.MethodPost, "/v1/order-plans/from-negotiations", nil, body)
+		return s.withWorkRunCheckpoint(ctx, args, "create_order_plan", result, err)
 	case "exora.create_order_draft":
 		body := cloneArgs(args)
 		if err := s.injectWorkContext(body); err != nil {
 			return workContextError(err), nil
 		}
-		return s.proxy(ctx, http.MethodPost, "/v1/tasks", nil, body)
+		injectExternalWorkRunContext(body)
+		result, err := s.proxy(ctx, http.MethodPost, "/v1/tasks", nil, body)
+		return s.withWorkRunCheckpoint(ctx, args, "request_approval", result, err)
 	case "exora.prepare_task_bundle":
 		return s.prepareTaskBundle(ctx, args)
 	case "exora.request_approval":
-		return s.proxy(ctx, http.MethodPost, "/v1/approvals", nil, args)
+		body := cloneArgs(args)
+		injectExternalWorkRunContext(body)
+		result, err := s.proxy(ctx, http.MethodPost, "/v1/approvals", nil, body)
+		return s.withWorkRunCheckpoint(ctx, args, "request_approval", result, err)
+	case "exora.find_payment_evidence":
+		paymentID, err := s.paymentIDFromArgs(ctx, args)
+		if err != nil {
+			return errorResult(err.Error(), nil), nil
+		}
+		result, err := s.proxy(ctx, http.MethodGet, "/v1/payments/"+url.PathEscape(paymentID)+"/evidence", nil, nil)
+		return s.withWorkRunCheckpoint(ctx, args, "verify_payment_evidence", result, err)
+	case "exora.sync_payment_evidence":
+		paymentID, err := s.paymentIDFromArgs(ctx, args)
+		if err != nil {
+			return errorResult(err.Error(), nil), nil
+		}
+		body := cloneArgs(args)
+		result, err := s.proxy(ctx, http.MethodPost, "/v1/payments/"+url.PathEscape(paymentID)+"/chain/evidence", nil, body)
+		return s.withWorkRunCheckpoint(ctx, args, "sync_payment_evidence", result, err)
 	case "exora.get_order_status":
 		id, err := requiredTaskID(args)
 		if err != nil {
 			return errorResult(err.Error(), nil), nil
 		}
-		return s.proxy(ctx, http.MethodGet, "/v1/tasks/"+url.PathEscape(id), nil, nil)
+		result, err := s.proxy(ctx, http.MethodGet, "/v1/tasks/"+url.PathEscape(id), nil, nil)
+		return s.withWorkRunCheckpoint(ctx, args, "poll_worker_job", result, err)
 	case "exora.resume_order":
 		id, err := requiredTaskID(args)
 		if err != nil {
@@ -252,13 +290,16 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 		if err != nil || result.IsError {
 			return result, err
 		}
-		return withNextAction(result), nil
+		result = withNextAction(result)
+		return s.withWorkRunCheckpoint(ctx, args, "poll_worker_job", result, nil)
 	case "exora.list_pending_orders":
-		return s.listPendingOrders(ctx, args)
+		result, err := s.listPendingOrders(ctx, args)
+		return s.withWorkRunCheckpoint(ctx, args, "poll_worker_job", result, err)
 	case "exora.list_order_plans":
 		query := url.Values{}
 		copyStringArg(query, args, "status")
-		return s.proxy(ctx, http.MethodGet, "/v1/order-plans", query, nil)
+		result, err := s.proxy(ctx, http.MethodGet, "/v1/order-plans", query, nil)
+		return s.withWorkRunCheckpoint(ctx, args, "wait_owner_seller_choice", result, err)
 	case "exora.get_order_plan", "exora.resume_task_flow":
 		id := firstString(args, "planId", "orderPlanId", "id")
 		if id == "" {
@@ -268,13 +309,21 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 		if err != nil || result.IsError {
 			return result, err
 		}
-		return withOrderPlanNextAction(result), nil
+		result = withOrderPlanNextAction(result)
+		return s.withWorkRunCheckpoint(ctx, args, "wait_owner_seller_choice", result, nil)
 	case "exora.get_artifact_manifest":
 		id, err := requiredTaskID(args)
 		if err != nil {
 			return errorResult(err.Error(), nil), nil
 		}
-		return s.proxy(ctx, http.MethodGet, "/v1/tasks/"+url.PathEscape(id)+"/artifacts", nil, nil)
+		result, err := s.proxy(ctx, http.MethodGet, "/v1/tasks/"+url.PathEscape(id)+"/artifacts", nil, nil)
+		return s.withWorkRunCheckpoint(ctx, args, "fetch_artifacts", result, err)
+	case "exora.get_work_checkpoint":
+		return s.getWorkCheckpoint(ctx, args)
+	case "exora.resume_work_run":
+		return s.resumeWorkRun(ctx, args)
+	case "exora.stop_work_run":
+		return s.stopWorkRun(ctx, args)
 	default:
 		return toolResult{}, fmt.Errorf("Unknown tool: %s", name)
 	}
@@ -366,6 +415,297 @@ func (s *Server) injectWorkContext(body map[string]any) error {
 	return nil
 }
 
+func injectExternalWorkRunContext(body map[string]any) {
+	if body == nil {
+		return
+	}
+	if firstString(body, "controller") == "" {
+		body["controller"] = "external-mcp"
+	}
+	if firstString(body, "runId") == "" {
+		if runID := stringFromNestedMap(body, "resumeJson", "runId"); runID != "" {
+			body["runId"] = runID
+		}
+	}
+	if firstString(body, "workUid") == "" {
+		if workUID := stringFromNestedMap(body, "resumeJson", "workUid"); workUID != "" {
+			body["workUid"] = workUID
+		}
+	}
+	if firstString(body, "projectPath") == "" {
+		if projectPath := stringFromNestedMap(body, "resumeJson", "projectPath"); projectPath != "" {
+			body["projectPath"] = projectPath
+		}
+	}
+}
+
+func (s *Server) withWorkRunCheckpoint(ctx context.Context, args map[string]any, step string, result toolResult, err error) (toolResult, error) {
+	if err != nil || result.IsError {
+		return result, err
+	}
+	payload, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		return result, nil
+	}
+	if _, ok := payload["resumeJson"]; ok {
+		_ = s.bindWorkRunLease(args, payload)
+		return result, nil
+	}
+	runID, shouldRecord, resolveErr := s.resolveWorkRunID(ctx, args)
+	if resolveErr != nil {
+		if workRunEndpointUnavailable(resolveErr) {
+			payload["workRunError"] = resolveErr.Error()
+			return successResult(payload), nil
+		}
+		return workContextError(resolveErr), nil
+	}
+	if !shouldRecord {
+		return result, nil
+	}
+	body := map[string]any{
+		"controller":  "external-mcp",
+		"currentStep": step,
+		"nextAction":  stringFromAny(payload["nextAction"]),
+		"summary":     stringFromAny(payload["summary"]),
+		"result":      payload,
+	}
+	if intent := firstString(args, "intent", "query", "q"); intent != "" {
+		body["intent"] = intent
+	}
+	if workUID := workUIDFromBody(args); workUID != "" {
+		body["workUid"] = workUID
+	}
+	if projectPath := projectPathFromBody(args); projectPath != "" {
+		body["projectPath"] = projectPath
+	}
+	if resume, ok := args["resumeJson"].(map[string]any); ok {
+		body["resumeJson"] = resume
+	}
+	recorded, recordErr := s.daemonJSON(ctx, http.MethodPost, "/v1/work-runs/"+url.PathEscape(runID)+"/resume", nil, body)
+	if recordErr != nil {
+		payload["workRunError"] = recordErr.Error()
+		return successResult(payload), nil
+	}
+	if recordedMap, ok := recorded.(map[string]any); ok {
+		for _, key := range []string{"workRun", "checkpoint", "resumeJson"} {
+			if value, exists := recordedMap[key]; exists {
+				payload[key] = value
+			}
+		}
+	}
+	_ = s.bindWorkRunLease(args, payload)
+	return successResult(payload), nil
+}
+
+func workRunEndpointUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "404") || strings.Contains(text, "not found")
+}
+
+func (s *Server) bindWorkRunLease(args map[string]any, payload map[string]any) error {
+	statePath := s.desktopStatePath()
+	if statePath == "" {
+		return nil
+	}
+	workUID := firstNonEmptyString(workUIDFromBody(args), stringFromAny(payload["workUid"]))
+	runID := ""
+	checkpointID := ""
+	status := ""
+	step := ""
+	if run, ok := payload["workRun"].(map[string]any); ok {
+		workUID = firstNonEmptyString(workUID, stringFromAny(run["workUid"]))
+		runID = stringFromAny(run["runId"])
+		status = stringFromAny(run["status"])
+		step = stringFromAny(run["currentStep"])
+	}
+	if resume, ok := payload["resumeJson"].(map[string]any); ok {
+		workUID = firstNonEmptyString(workUID, stringFromAny(resume["workUid"]))
+		runID = firstNonEmptyString(runID, stringFromAny(resume["runId"]))
+		checkpointID = stringFromAny(resume["checkpointId"])
+		status = firstNonEmptyString(status, stringFromAny(resume["status"]))
+		step = firstNonEmptyString(step, stringFromAny(resume["currentStep"]))
+	}
+	if checkpoint, ok := payload["checkpoint"].(map[string]any); ok {
+		checkpointID = firstNonEmptyString(checkpointID, stringFromAny(checkpoint["checkpointId"]))
+		status = firstNonEmptyString(status, stringFromAny(checkpoint["status"]))
+		step = firstNonEmptyString(step, stringFromAny(checkpoint["currentStep"]))
+	}
+	if workUID == "" || runID == "" {
+		return nil
+	}
+	state, err := readDesktopStateMap(statePath)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	changed := false
+	items := []any{}
+	for _, item := range anySlice(state["workMcpLeases"]) {
+		lease, ok := item.(map[string]any)
+		if !ok {
+			items = append(items, item)
+			continue
+		}
+		if stringFromAny(lease["workUid"]) == workUID {
+			lease["runId"] = runID
+			if checkpointID != "" {
+				lease["checkpointId"] = checkpointID
+			}
+			if status != "" {
+				lease["workRunStatus"] = status
+			}
+			if step != "" {
+				lease["currentStep"] = step
+			}
+			lease["updatedAt"] = now
+			changed = true
+		}
+		items = append(items, lease)
+	}
+	if !changed {
+		return nil
+	}
+	state["workMcpLeases"] = items
+	return writeDesktopStateMap(statePath, state)
+}
+
+func (s *Server) resolveWorkRunID(ctx context.Context, args map[string]any) (string, bool, error) {
+	runID := firstString(args, "runId")
+	if runID == "" {
+		runID = stringFromNestedMap(args, "resumeJson", "runId")
+	}
+	workUID := workUIDFromBody(args)
+	projectPath := projectPathFromBody(args)
+	if runID != "" {
+		return runID, true, nil
+	}
+	if workUID == "" && projectPath == "" {
+		return "", false, nil
+	}
+	if workUID != "" {
+		query := url.Values{}
+		query.Set("workUid", workUID)
+		if listed, err := s.daemonJSON(ctx, http.MethodGet, "/v1/work-runs", query, nil); err == nil {
+			if payload, ok := listed.(map[string]any); ok {
+				for _, item := range anySlice(payload["workRuns"]) {
+					if run, ok := item.(map[string]any); ok {
+						if id := stringFromAny(run["runId"]); id != "" {
+							return id, true, nil
+						}
+					}
+				}
+			}
+		}
+		if projectPath == "" {
+			return "", true, fmt.Errorf("workUid %q has no WorkRun yet; include the copied projectPath or call exora.run_buyer_work first", workUID)
+		}
+	}
+	createBody := map[string]any{
+		"workUid":     workUID,
+		"projectPath": projectPath,
+		"controller":  "external-mcp",
+		"intent":      firstString(args, "intent", "query", "q"),
+		"currentStep": "discover_agent_cards",
+	}
+	if resume, ok := args["resumeJson"].(map[string]any); ok {
+		createBody["resumeJson"] = resume
+	}
+	created, err := s.daemonJSON(ctx, http.MethodPost, "/v1/work-runs", nil, createBody)
+	if err != nil {
+		return "", true, err
+	}
+	if payload, ok := created.(map[string]any); ok {
+		if run, ok := payload["workRun"].(map[string]any); ok {
+			if id := stringFromAny(run["runId"]); id != "" {
+				return id, true, nil
+			}
+		}
+	}
+	return "", true, fmt.Errorf("work run creation returned no runId")
+}
+
+func (s *Server) getWorkCheckpoint(ctx context.Context, args map[string]any) (toolResult, error) {
+	runID, shouldRecord, err := s.resolveWorkRunID(ctx, args)
+	if err != nil {
+		return workContextError(err), nil
+	}
+	if !shouldRecord || runID == "" {
+		return errorResult("runId or workUid required", nil), nil
+	}
+	return s.proxy(ctx, http.MethodGet, "/v1/work-runs/"+url.PathEscape(runID), nil, nil)
+}
+
+func (s *Server) resumeWorkRun(ctx context.Context, args map[string]any) (toolResult, error) {
+	runID, shouldRecord, err := s.resolveWorkRunID(ctx, args)
+	if err != nil {
+		return workContextError(err), nil
+	}
+	if !shouldRecord || runID == "" {
+		return errorResult("runId or workUid required", nil), nil
+	}
+	body := cloneArgs(args)
+	injectExternalWorkRunContext(body)
+	return s.proxy(ctx, http.MethodPost, "/v1/work-runs/"+url.PathEscape(runID)+"/resume", nil, body)
+}
+
+func (s *Server) stopWorkRun(ctx context.Context, args map[string]any) (toolResult, error) {
+	runID, shouldRecord, err := s.resolveWorkRunID(ctx, args)
+	if err != nil {
+		return workContextError(err), nil
+	}
+	if !shouldRecord || runID == "" {
+		return errorResult("runId or workUid required", nil), nil
+	}
+	return s.proxy(ctx, http.MethodPost, "/v1/work-runs/"+url.PathEscape(runID)+"/stop", nil, map[string]any{
+		"reason": firstNonEmptyString(firstString(args, "reason"), "Stopped through external MCP agent."),
+	})
+}
+
+func (s *Server) paymentIDFromArgs(ctx context.Context, args map[string]any) (string, error) {
+	if paymentID := firstString(args, "paymentId", "id"); paymentID != "" {
+		return paymentID, nil
+	}
+	if planID := firstString(args, "orderPlanId", "planId"); planID != "" {
+		payload, err := s.daemonJSON(ctx, http.MethodGet, "/v1/order-plans/"+url.PathEscape(planID), nil, nil)
+		if err != nil {
+			return "", err
+		}
+		if mapped, ok := payload.(map[string]any); ok {
+			if id := stringFromAny(mapped["paymentId"]); id != "" {
+				return id, nil
+			}
+			if plan, ok := mapped["orderPlan"].(map[string]any); ok {
+				if id := stringFromAny(plan["paymentId"]); id != "" {
+					return id, nil
+				}
+			}
+			if payment, ok := mapped["payment"].(map[string]any); ok {
+				if id := stringFromAny(payment["paymentId"]); id != "" {
+					return id, nil
+				}
+			}
+		}
+	}
+	if resume, ok := args["resumeJson"].(map[string]any); ok {
+		if entities, ok := resume["knownEntities"].(map[string]any); ok {
+			if id := stringFromAny(entities["paymentId"]); id != "" {
+				return id, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("paymentId required; resolve the order plan/payment first")
+}
+
+func stringFromNestedMap(args map[string]any, parent, key string) string {
+	if nested, ok := args[parent].(map[string]any); ok {
+		return firstString(nested, key)
+	}
+	return ""
+}
+
 func workUIDFromBody(body map[string]any) string {
 	if workUID := firstString(body, "workUid", "workUID", "uid"); workUID != "" {
 		return workUID
@@ -446,7 +786,9 @@ func (s *Server) ensureWorkProjectFolder(workUID, projectPath string) error {
 	if err != nil {
 		return fmt.Errorf("read desktop work state: %w", err)
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
+	nowTime := time.Now().UTC()
+	now := nowTime.Format(time.RFC3339)
+	expiresAt := nowTime.Add(workMCPLeaseTTL).Format(time.RFC3339)
 	projectName := filepath.Base(projectPath)
 	upsertWorkMCPUID(state, map[string]any{
 		"workUid":     workUID,
@@ -459,10 +801,35 @@ func (s *Server) ensureWorkProjectFolder(workUID, projectPath string) error {
 		"name": projectName,
 		"path": projectPath,
 	})
+	upsertWorkMCPLease(state, map[string]any{
+		"workUid":     workUID,
+		"projectPath": projectPath,
+		"projectName": projectName,
+		"controller":  "external-mcp",
+		"source":      "mcp.stdio",
+		"clientName":  firstNonEmptyString(s.opts.ClientName, "MCP stdio client"),
+		"sessionId":   s.workMCPLeaseSessionID(workUID),
+		"status":      "active",
+		"startedAt":   now,
+		"lastSeenAt":  now,
+		"expiresAt":   expiresAt,
+		"updatedAt":   now,
+	})
 	if err := writeDesktopStateMap(statePath, state); err != nil {
 		return fmt.Errorf("write desktop work state: %w", err)
 	}
 	return nil
+}
+
+func (s *Server) workMCPLeaseSessionID(workUID string) string {
+	seed := strings.Join([]string{
+		strings.TrimSpace(workUID),
+		s.connectionRole(),
+		strings.TrimSpace(s.opts.ClientCWD),
+		firstNonEmptyString(s.opts.ClientName, "MCP stdio client"),
+	}, "\x00")
+	sum := sha256.Sum256([]byte(seed))
+	return fmt.Sprintf("mcp-%x", sum[:8])
 }
 
 func (s *Server) desktopStatePath() string {
@@ -561,6 +928,35 @@ func upsertProjectFolder(state map[string]any, entry map[string]any) {
 		items = append(items, entry)
 	}
 	state["projectFolders"] = items
+}
+
+func upsertWorkMCPLease(state map[string]any, entry map[string]any) {
+	workUID := stringFromAny(entry["workUid"])
+	projectPath := stringFromAny(entry["projectPath"])
+	if workUID == "" || projectPath == "" {
+		return
+	}
+	items := []any{entry}
+	for _, item := range anySlice(state["workMcpLeases"]) {
+		existing, ok := item.(map[string]any)
+		if !ok {
+			items = append(items, item)
+			continue
+		}
+		if stringFromAny(existing["workUid"]) == workUID {
+			if stringFromAny(existing["status"]) == "active" {
+				if startedAt := stringFromAny(existing["startedAt"]); startedAt != "" {
+					entry["startedAt"] = startedAt
+				}
+			}
+			continue
+		}
+		items = append(items, existing)
+	}
+	if len(items) > workMCPLeaseLimit {
+		items = items[:workMCPLeaseLimit]
+	}
+	state["workMcpLeases"] = items
 }
 
 func cleanWorkProjectPath(value string) string {
@@ -773,6 +1169,9 @@ func (s *Server) daemonJSON(ctx context.Context, method, path string, query url.
 func (s *Server) resolveDaemon(ctx context.Context) (string, error) {
 	candidates := []string{}
 	startCommand := s.opts.StartCommand
+	if strings.TrimSpace(s.opts.BaseURL) != "" {
+		candidates = append(candidates, s.opts.BaseURL)
+	}
 	if manifest, _, err := discovery.ReadFirst(); err == nil {
 		if strings.TrimSpace(manifest.BaseURL) != "" {
 			candidates = append(candidates, manifest.BaseURL)
@@ -780,9 +1179,6 @@ func (s *Server) resolveDaemon(ctx context.Context) (string, error) {
 		if len(manifest.StartCommand) > 0 {
 			startCommand = manifest.StartCommand
 		}
-	}
-	if strings.TrimSpace(s.opts.BaseURL) != "" {
-		candidates = append(candidates, s.opts.BaseURL)
 	}
 	for _, candidate := range uniqueStrings(candidates) {
 		if s.healthOK(ctx, candidate) {
@@ -1079,6 +1475,8 @@ func toolDefinitions() []toolDefinition {
 			InputSchema: objectSchema(map[string]any{
 				"query":                  stringProp("Natural-language request, for example: find servers with at least 20GB VRAM."),
 				"workUid":                stringProp("Optional Work UID copied from the Dock Local agent via MCP prompt. Use it on every related request."),
+				"runId":                  stringProp("Optional WorkRun id from a previous checkpoint/resumeJson."),
+				"resumeJson":             objectProp("Optional resumeJson returned by a prior Exora MCP/API step."),
 				"projectPath":            stringProp("Optional project folder path. If omitted, Dock resolves it from workUid when possible."),
 				"requesterPubkey":        stringProp("Optional requester/user public key."),
 				"agentId":                stringProp("Optional agent identifier."),
@@ -1097,6 +1495,8 @@ func toolDefinitions() []toolDefinition {
 			InputSchema: objectSchema(map[string]any{
 				"query":           stringProp("Concrete task or resource need, for example: rent a GPU server and run a Docker job."),
 				"workUid":         stringProp("Optional Work UID copied from the Dock Local agent via MCP prompt. Use it on every related request."),
+				"runId":           stringProp("Optional WorkRun id from a previous checkpoint/resumeJson."),
+				"resumeJson":      objectProp("Optional resumeJson returned by a prior Exora MCP/API step."),
 				"projectPath":     stringProp("Optional project folder path. If omitted, Dock resolves it from workUid when possible."),
 				"requesterPubkey": stringProp("Optional requester/user public key. The Dock may replace this with the local signing wallet for realtime provider requests."),
 				"agentId":         stringProp("Optional agent identifier."),
@@ -1109,12 +1509,18 @@ func toolDefinitions() []toolDefinition {
 		{
 			Name:        "exora.run_buyer_work",
 			Title:       "Run Buyer Work",
-			Description: "Negotiation-first buyer workflow: find suitable seller agents, negotiate with the best candidates, create an owner-selectable order plan from quoted sellers, and stop for owner choice. Include the copied workUid on every related request when provided by the Dock prompt.",
+			Description: "Plan-first buyer workflow: classify the request, confirm remote-task planning, write local plan/manifest files, require owner manifest approval, then match sellers and create an owner-selectable order plan only from signed quotes.",
 			InputSchema: objectSchema(map[string]any{
 				"query":           stringProp("Concrete task or resource need."),
 				"intent":          stringProp("Alias for query."),
 				"workUid":         stringProp("Optional Work UID copied from the Dock Local agent via MCP prompt. Use it on every related request."),
+				"runId":           stringProp("Optional WorkRun id from a previous checkpoint/resumeJson."),
+				"resumeJson":      objectProp("Optional resumeJson returned by a prior Exora MCP/API step."),
 				"projectPath":     stringProp("Optional project folder path. If omitted, Dock resolves it from workUid when possible."),
+				"prePlanConfirmed": boolProp("Set true only after the user confirms Exora should generate local plan files. This does not approve remote submission."),
+				"approvalId":      stringProp("Owner approval id for a reviewed submit_remote_task_manifest approval. Required before seller matching continues."),
+				"planId":          stringProp("Optional plan id returned by an earlier run_buyer_work response."),
+				"manifestHash":    stringProp("Optional manifest hash to verify against the owner approval before seller matching."),
 				"requesterPubkey": stringProp("Optional requester/user public key. The Dock may replace this with the local signing wallet."),
 				"agentId":         stringProp("Optional buyer agent identifier."),
 				"constraints":     objectProp("Optional structured constraints such as type, minVramGb, minGpuCount, or region."),
@@ -1127,11 +1533,13 @@ func toolDefinitions() []toolDefinition {
 		{
 			Name:        "exora.negotiate_task",
 			Title:       "Negotiate Exora Task",
-			Description: "Send signed discussion requests to candidate seller agents so each seller can return a formal quote or rejection before any order is created.",
+			Description: "Low-level compatibility tool. Send signed discussion requests to candidate seller agents only after the owner has reviewed and approved an equivalent remote task manifest.",
 			InputSchema: objectSchema(map[string]any{
 				"intent":            stringProp("Concrete task intent. Alias: query."),
 				"query":             stringProp("Concrete task intent. Alias for intent."),
 				"workUid":           stringProp("Optional Work UID copied from the Dock Local agent via MCP prompt. Use it on every related request."),
+				"runId":             stringProp("Optional WorkRun id from a previous checkpoint/resumeJson."),
+				"resumeJson":        objectProp("Optional resumeJson returned by a prior Exora MCP/API step."),
 				"projectPath":       stringProp("Optional project folder path. If omitted, Dock resolves it from workUid when possible."),
 				"buyerAgentCardId":  stringProp("Optional buyer Agent Card id."),
 				"sellerAgentCardId": stringProp("Optional seller Agent Card id when targeting one seller."),
@@ -1152,6 +1560,9 @@ func toolDefinitions() []toolDefinition {
 			Description: "List pre-order seller discussions with quote, rejection, manual-review, or pending status.",
 			InputSchema: objectSchema(map[string]any{
 				"status":          stringProp("Optional negotiation status."),
+				"workUid":         stringProp("Optional Work UID for checkpoint continuation."),
+				"runId":           stringProp("Optional WorkRun id from a previous checkpoint/resumeJson."),
+				"resumeJson":      objectProp("Optional resumeJson returned by a prior Exora MCP/API step."),
 				"providerPubkey":  stringProp("Optional provider filter."),
 				"requesterPubkey": stringProp("Optional requester filter."),
 				"orderPlanId":     stringProp("Optional order plan filter."),
@@ -1161,13 +1572,23 @@ func toolDefinitions() []toolDefinition {
 			Name:        "exora.get_negotiation",
 			Title:       "Get Exora Negotiation",
 			Description: "Fetch a pre-order seller discussion by id.",
-			InputSchema: objectSchema(map[string]any{"negotiationId": stringProp("Negotiation id.")}, []string{"negotiationId"}),
+			InputSchema: objectSchema(map[string]any{
+				"negotiationId": stringProp("Negotiation id."),
+				"workUid":       stringProp("Optional Work UID for checkpoint continuation."),
+				"runId":         stringProp("Optional WorkRun id from a previous checkpoint/resumeJson."),
+				"resumeJson":    objectProp("Optional resumeJson returned by a prior Exora MCP/API step."),
+			}, []string{"negotiationId"}),
 		},
 		{
 			Name:        "exora.resume_negotiation",
 			Title:       "Resume Exora Negotiation",
 			Description: "Refresh a pending negotiation from the provider and return its next action.",
-			InputSchema: objectSchema(map[string]any{"negotiationId": stringProp("Negotiation id.")}, []string{"negotiationId"}),
+			InputSchema: objectSchema(map[string]any{
+				"negotiationId": stringProp("Negotiation id."),
+				"workUid":       stringProp("Optional Work UID for checkpoint continuation."),
+				"runId":         stringProp("Optional WorkRun id from a previous checkpoint/resumeJson."),
+				"resumeJson":    objectProp("Optional resumeJson returned by a prior Exora MCP/API step."),
+			}, []string{"negotiationId"}),
 		},
 		{
 			Name:        "exora.create_order_plan_from_quote",
@@ -1177,6 +1598,8 @@ func toolDefinitions() []toolDefinition {
 				"negotiationIds": arrayProp("Quoted negotiation ids."),
 				"query":          stringProp("Optional original task query."),
 				"workUid":        stringProp("Optional Work UID copied from the Dock Local agent via MCP prompt. Use it on every related request."),
+				"runId":          stringProp("Optional WorkRun id from a previous checkpoint/resumeJson."),
+				"resumeJson":     objectProp("Optional resumeJson returned by a prior Exora MCP/API step."),
 				"projectPath":    stringProp("Optional project folder path. If omitted, Dock resolves it from workUid when possible."),
 			}, []string{"negotiationIds"}),
 		},
@@ -1188,6 +1611,8 @@ func toolDefinitions() []toolDefinition {
 				"requesterPubkey":   stringProp("Requester/user public key."),
 				"agentId":           stringProp("Agent identifier."),
 				"workUid":           stringProp("Optional Work UID copied from the Dock Local agent via MCP prompt. Use it on every related request."),
+				"runId":             stringProp("Optional WorkRun id from a previous checkpoint/resumeJson."),
+				"resumeJson":        objectProp("Optional resumeJson returned by a prior Exora MCP/API step."),
 				"projectPath":       stringProp("Optional project folder path. If omitted, Dock resolves it from workUid when possible."),
 				"type":              stringProp("Task type, for example compute.inference."),
 				"goal":              stringProp("Human-readable task goal."),
@@ -1220,22 +1645,62 @@ func toolDefinitions() []toolDefinition {
 			Title:       "Request Human Approval",
 			Description: "Create a human approval request for a task action. This does not approve the action.",
 			InputSchema: objectSchema(map[string]any{
-				"taskId":    stringProp("Task id requiring approval."),
-				"action":    stringProp("Approval action, defaults to approve_quote."),
-				"expiresAt": stringProp("Optional RFC3339 expiry."),
+				"taskId":     stringProp("Task id requiring approval."),
+				"action":     stringProp("Approval action, defaults to approve_quote."),
+				"expiresAt":  stringProp("Optional RFC3339 expiry."),
+				"workUid":    stringProp("Optional Work UID for checkpoint continuation."),
+				"runId":      stringProp("Optional WorkRun id from a previous checkpoint/resumeJson."),
+				"resumeJson": objectProp("Optional resumeJson returned by a prior Exora MCP/API step."),
 			}, []string{"taskId"}),
+		},
+		{
+			Name:        "exora.find_payment_evidence",
+			Title:       "Find Payment Evidence",
+			Description: "Read chain payment evidence for paid work. External agents must call this and require found_finalized Cloud/chain evidence before continuing to any paid worker/job submission.",
+			InputSchema: objectSchema(map[string]any{
+				"paymentId":   stringProp("Payment id. Preferred when known."),
+				"orderPlanId": stringProp("Optional order plan id used to discover paymentId."),
+				"planId":      stringProp("Alias for orderPlanId."),
+				"workUid":     stringProp("Optional Work UID for checkpoint continuation."),
+				"runId":       stringProp("Optional WorkRun id from a previous checkpoint/resumeJson."),
+				"resumeJson":  objectProp("Optional resumeJson returned by a prior Exora MCP/API step."),
+			}, nil),
+		},
+		{
+			Name:        "exora.sync_payment_evidence",
+			Title:       "Sync Payment Evidence",
+			Description: "Store Cloud/chain payment evidence in the Dock payment ledger. This does not approve payment or move funds; it only records independently resolved chain_scan evidence.",
+			InputSchema: objectSchema(map[string]any{
+				"paymentId":   stringProp("Payment id. Preferred when known."),
+				"orderPlanId": stringProp("Optional order plan id used to discover paymentId."),
+				"planId":      stringProp("Alias for orderPlanId."),
+				"evidence":    objectProp("PaymentEvidence JSON returned by Exora Cloud, usually with status found_finalized."),
+				"workUid":     stringProp("Optional Work UID for checkpoint continuation."),
+				"runId":       stringProp("Optional WorkRun id from a previous checkpoint/resumeJson."),
+				"resumeJson":  objectProp("Optional resumeJson returned by a prior Exora MCP/API step."),
+			}, nil),
 		},
 		{
 			Name:        "exora.get_order_status",
 			Title:       "Get Order Status",
 			Description: "Read a task/order ledger entry.",
-			InputSchema: objectSchema(map[string]any{"taskId": stringProp("Task id.")}, []string{"taskId"}),
+			InputSchema: objectSchema(map[string]any{
+				"taskId":     stringProp("Task id."),
+				"workUid":    stringProp("Optional Work UID for checkpoint continuation."),
+				"runId":      stringProp("Optional WorkRun id from a previous checkpoint/resumeJson."),
+				"resumeJson": objectProp("Optional resumeJson returned by a prior Exora MCP/API step."),
+			}, []string{"taskId"}),
 		},
 		{
 			Name:        "exora.resume_order",
 			Title:       "Resume Order",
 			Description: "Read a task/order ledger entry and include the next suggested protocol action.",
-			InputSchema: objectSchema(map[string]any{"taskId": stringProp("Task id.")}, []string{"taskId"}),
+			InputSchema: objectSchema(map[string]any{
+				"taskId":     stringProp("Task id."),
+				"workUid":    stringProp("Optional Work UID for checkpoint continuation."),
+				"runId":      stringProp("Optional WorkRun id from a previous checkpoint/resumeJson."),
+				"resumeJson": objectProp("Optional resumeJson returned by a prior Exora MCP/API step."),
+			}, []string{"taskId"}),
 		},
 		{
 			Name:        "exora.list_pending_orders",
@@ -1246,6 +1711,9 @@ func toolDefinitions() []toolDefinition {
 				"status":     stringProp("Optional task status filter."),
 				"userPubkey": stringProp("Optional user filter for approvals."),
 				"agentId":    stringProp("Optional agent filter for approvals."),
+				"workUid":    stringProp("Optional Work UID for checkpoint continuation."),
+				"runId":      stringProp("Optional WorkRun id from a previous checkpoint/resumeJson."),
+				"resumeJson": objectProp("Optional resumeJson returned by a prior Exora MCP/API step."),
 			}, nil),
 		},
 		{
@@ -1253,26 +1721,78 @@ func toolDefinitions() []toolDefinition {
 			Title:       "List Order Plans",
 			Description: "List durable seller-selection/task-flow plans, including realtime provider candidate states.",
 			InputSchema: objectSchema(map[string]any{
-				"status": stringProp("Optional order plan status, for example pending_selection or selected."),
+				"status":     stringProp("Optional order plan status, for example pending_selection or selected."),
+				"workUid":    stringProp("Optional Work UID for checkpoint continuation."),
+				"runId":      stringProp("Optional WorkRun id from a previous checkpoint/resumeJson."),
+				"resumeJson": objectProp("Optional resumeJson returned by a prior Exora MCP/API step."),
 			}, nil),
 		},
 		{
 			Name:        "exora.get_order_plan",
 			Title:       "Get Order Plan",
 			Description: "Fetch a durable seller-selection/task-flow plan with realtime candidate state and progress events.",
-			InputSchema: objectSchema(map[string]any{"planId": stringProp("Order plan id.")}, []string{"planId"}),
+			InputSchema: objectSchema(map[string]any{
+				"planId":     stringProp("Order plan id."),
+				"workUid":    stringProp("Optional Work UID for checkpoint continuation."),
+				"runId":      stringProp("Optional WorkRun id from a previous checkpoint/resumeJson."),
+				"resumeJson": objectProp("Optional resumeJson returned by a prior Exora MCP/API step."),
+			}, []string{"planId"}),
 		},
 		{
 			Name:        "exora.resume_task_flow",
 			Title:       "Resume Task Flow",
 			Description: "Resume a durable task flow/order plan and return the next suggested action.",
-			InputSchema: objectSchema(map[string]any{"planId": stringProp("Order plan id.")}, []string{"planId"}),
+			InputSchema: objectSchema(map[string]any{
+				"planId":     stringProp("Order plan id."),
+				"workUid":    stringProp("Optional Work UID for checkpoint continuation."),
+				"runId":      stringProp("Optional WorkRun id from a previous checkpoint/resumeJson."),
+				"resumeJson": objectProp("Optional resumeJson returned by a prior Exora MCP/API step."),
+			}, []string{"planId"}),
 		},
 		{
 			Name:        "exora.get_artifact_manifest",
 			Title:       "Get Artifact Manifest",
 			Description: "Fetch artifact metadata for a completed task.",
-			InputSchema: objectSchema(map[string]any{"taskId": stringProp("Task id.")}, []string{"taskId"}),
+			InputSchema: objectSchema(map[string]any{
+				"taskId":     stringProp("Task id."),
+				"workUid":    stringProp("Optional Work UID for checkpoint continuation."),
+				"runId":      stringProp("Optional WorkRun id from a previous checkpoint/resumeJson."),
+				"resumeJson": objectProp("Optional resumeJson returned by a prior Exora MCP/API step."),
+			}, []string{"taskId"}),
+		},
+		{
+			Name:        "exora.get_work_checkpoint",
+			Title:       "Get Work Checkpoint",
+			Description: "Fetch the latest WorkRun checkpoint and resumeJson for a runId or workUid.",
+			InputSchema: objectSchema(map[string]any{
+				"runId":   stringProp("Optional WorkRun id."),
+				"workUid": stringProp("Optional Work UID copied from Dock."),
+			}, nil),
+		},
+		{
+			Name:        "exora.resume_work_run",
+			Title:       "Resume Work Run",
+			Description: "Record or resume a WorkRun from resumeJson. Returns the updated checkpoint and resumeJson.",
+			InputSchema: objectSchema(map[string]any{
+				"runId":       stringProp("Optional WorkRun id."),
+				"workUid":     stringProp("Optional Work UID copied from Dock."),
+				"projectPath": stringProp("Optional project folder path when the workUid has no WorkRun yet."),
+				"resumeJson":  objectProp("resumeJson returned by a prior Exora MCP/API step."),
+				"currentStep": stringProp("Optional current resumable step."),
+				"nextAction":  stringProp("Optional next suggested action."),
+				"summary":     stringProp("Optional safe summary to disclose."),
+			}, nil),
+		},
+		{
+			Name:        "exora.stop_work_run",
+			Title:       "Stop Work Run",
+			Description: "Cooperatively stop an externally controlled WorkRun and return a checkpoint that can be resumed later.",
+			InputSchema: objectSchema(map[string]any{
+				"runId":      stringProp("Optional WorkRun id."),
+				"workUid":    stringProp("Optional Work UID copied from Dock."),
+				"resumeJson": objectProp("Optional resumeJson returned by a prior Exora MCP/API step."),
+				"reason":     stringProp("Optional stop reason."),
+			}, nil),
 		},
 	}
 }

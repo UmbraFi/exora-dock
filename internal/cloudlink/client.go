@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/exora-dock/exora-dock/internal/remotecontrol"
+	"github.com/exora-dock/exora-dock/internal/wallet"
 )
 
 type TokenFile struct {
@@ -48,11 +49,74 @@ type DeviceTokenResult struct {
 	ExpiresAt  string `json:"expiresAt"`
 }
 
+type AccountWallet struct {
+	ID              string                 `json:"accountWalletId,omitempty"`
+	AccountID       string                 `json:"accountId,omitempty"`
+	Chain           string                 `json:"chain"`
+	Address         string                 `json:"address"`
+	EncryptedBackup wallet.EncryptedBackup `json:"encryptedBackup,omitempty"`
+	Version         int                    `json:"version,omitempty"`
+	BackedUpAt      string                 `json:"backedUpAt,omitempty"`
+	UpdatedAt       string                 `json:"updatedAt,omitempty"`
+}
+
 type RemoteCommand struct {
 	ID     string         `json:"commandId"`
 	Method string         `json:"method"`
 	Path   string         `json:"path"`
 	Body   map[string]any `json:"body,omitempty"`
+}
+
+func PutAccountWallet(ctx context.Context, cloudURL string, tokenPath string, dockID string, backup wallet.EncryptedBackup, client *http.Client) (AccountWallet, error) {
+	cloudURL = strings.TrimRight(strings.TrimSpace(cloudURL), "/")
+	dockID = strings.TrimSpace(dockID)
+	if cloudURL == "" || dockID == "" {
+		return AccountWallet{}, fmt.Errorf("cloud_url and dock_id required")
+	}
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
+	token, err := LoadToken(tokenPath)
+	if err != nil {
+		return AccountWallet{}, err
+	}
+	var wrapped struct {
+		AccountWallet AccountWallet `json:"accountWallet"`
+	}
+	err = doJSON(ctx, client, http.MethodPut, cloudURL+"/v1/docks/"+url.PathEscape(dockID)+"/account-wallet", token.CloudToken, map[string]any{
+		"chain":           "solana",
+		"address":         backup.PublicKey,
+		"encryptedBackup": backup,
+		"kdf":             backup.KDF,
+		"version":         backup.Version,
+	}, &wrapped)
+	if err != nil {
+		return AccountWallet{}, err
+	}
+	return wrapped.AccountWallet, nil
+}
+
+func GetAccountWallet(ctx context.Context, cloudURL string, tokenPath string, dockID string, client *http.Client) (AccountWallet, error) {
+	cloudURL = strings.TrimRight(strings.TrimSpace(cloudURL), "/")
+	dockID = strings.TrimSpace(dockID)
+	if cloudURL == "" || dockID == "" {
+		return AccountWallet{}, fmt.Errorf("cloud_url and dock_id required")
+	}
+	if client == nil {
+		client = &http.Client{Timeout: 10 * time.Second}
+	}
+	token, err := LoadToken(tokenPath)
+	if err != nil {
+		return AccountWallet{}, err
+	}
+	var wrapped struct {
+		AccountWallet AccountWallet `json:"accountWallet"`
+	}
+	err = doJSON(ctx, client, http.MethodGet, cloudURL+"/v1/docks/"+url.PathEscape(dockID)+"/account-wallet", token.CloudToken, nil, &wrapped)
+	if err != nil {
+		return AccountWallet{}, err
+	}
+	return wrapped.AccountWallet, nil
 }
 
 type Poller struct {
@@ -314,4 +378,40 @@ func getJSONStatus(ctx context.Context, client *http.Client, endpoint string, to
 		}
 	}
 	return resp.StatusCode, nil
+}
+
+func doJSON(ctx context.Context, client *http.Client, method string, endpoint string, token string, body any, out any) error {
+	var reader io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		reader = bytes.NewReader(data)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, reader)
+	if err != nil {
+		return err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("%s returned %d: %s", endpoint, resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			return err
+		}
+	}
+	return nil
 }

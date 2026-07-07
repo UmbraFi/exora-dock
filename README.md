@@ -302,14 +302,14 @@ Buyer flow:
 
 Seller flow:
 
-1. Open the Seller tab and enter an OpenAI-compatible LLM base URL, API key,
-   wire API, research/utility models, provider id, and default quote settings.
-   Custom provider base URLs may omit `/v1`; Exora Dock will try `/v1` first
-   and fall back to the raw base URL.
-2. Save settings. The desktop shell writes `config.yaml` and restarts the local
-   daemon so the updated config is reloaded.
-3. With `seller_agent.enabled=true`, Exora Dock can auto-quote new tasks. If
-   `auto_complete_text_tasks=true`, it can also complete lightweight `text.*`,
+1. Open Settings > API Profile and save an OpenAI-compatible profile. Assign it
+   to Seller with `Use this setting for: Seller`.
+2. Open Settings > Seller Agent and set provider id, quote defaults,
+   `auto_quote`, and `auto_accept_low_risk`.
+3. Open Settings > Seller Card, scan diagnostics, complete capability/pricing/
+   availability/policy fields, then save and publish the card.
+4. With `seller_agent.enabled=true`, Exora Dock can auto-quote new tasks. If
+   `auto_accept_low_risk=true`, it can also complete lightweight `text.*`,
    `agent.*`, and `connectivity.smoke` tasks after buyer consent.
 
 ## Distribution
@@ -358,7 +358,6 @@ approve or reject on the user's behalf.
 | `GET /.well-known/exora-dock.json` | Local agent discovery manifest |
 | `GET /v1/wallet` | Current local wallet status |
 | `POST /v1/wallet/create` | Create a local Solana keypair |
-| `POST /v1/wallet/bind` | Bind an existing Solana address |
 | `DELETE /v1/wallet` | Clear the local wallet binding |
 | `POST /v1/tasks` | Create a remote job task envelope |
 | `GET /v1/tasks?status=:status&party=:pubkey` | List remote job tasks |

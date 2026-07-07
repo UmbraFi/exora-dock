@@ -62,6 +62,55 @@ func TestProviderQuoteRejectsDisallowedDockerImage(t *testing.T) {
 	}
 }
 
+func TestProviderJobRejectsPaidRequestWithoutFinalizedEvidence(t *testing.T) {
+	router, providerAddress, buyerWallet := newProviderProtocolTestRouter(t, true)
+	req := signedJobRequest(t, buyerWallet, providerAddress, "python:3.12-alpine")
+	req.PaymentID = "pay-1"
+	resignJobRequest(t, buyerWallet, &req)
+	body, _ := json.Marshal(req)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/provider/jobs", bytes.NewReader(body)))
+	if rec.Code != http.StatusPaymentRequired || !strings.Contains(rec.Body.String(), "payment_evidence_required") {
+		t.Fatalf("job status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestProviderJobAcceptsPaidRequestWithFinalizedEvidence(t *testing.T) {
+	router, providerAddress, buyerWallet := newProviderProtocolTestRouter(t, true)
+	req := signedJobRequest(t, buyerWallet, providerAddress, "python:3.12-alpine")
+	req.PaymentID = "pay-1"
+	req.PaymentEvidence = &providerprotocol.PaymentEvidence{
+		PaymentID:   "pay-1",
+		Status:      "found_finalized",
+		Chain:       "solana",
+		EscrowPDA:   "escrow-pda",
+		BuyerPubkey: req.RequesterPubkey,
+		Finality:    "finalized",
+		Source:      "chain_scan",
+	}
+	resignJobRequest(t, buyerWallet, &req)
+	body, _ := json.Marshal(req)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/provider/jobs", bytes.NewReader(body)))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("job status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func resignJobRequest(t *testing.T, buyerWallet *wallet.Store, req *providerprotocol.JobRequest) {
+	t.Helper()
+	req.Signature = ""
+	payload, err := providerprotocol.JobRequestPayload(*req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, sig, err := buyerWallet.SignPayload(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Signature = sig
+}
+
 func newProviderProtocolTestRouter(t *testing.T, dockerEnabled bool) (*chi.Mux, string, *wallet.Store) {
 	t.Helper()
 	dir := t.TempDir()
@@ -111,7 +160,9 @@ func newProviderProtocolTestRouter(t *testing.T, dockerEnabled bool) (*chi.Mux, 
 	})
 	router := chi.NewRouter()
 	router.Post("/provider/quote-requests", handler.CreateProviderQuoteRequest)
+	router.Post("/provider/jobs", handler.CreateProviderJob)
 	router.Post("/v1/provider/quote-requests", handler.CreateProviderQuoteRequest)
+	router.Post("/v1/provider/jobs", handler.CreateProviderJob)
 	return router, providerStatus.Address, buyerWallet
 }
 
@@ -140,6 +191,42 @@ func signedQuoteRequest(t *testing.T, buyerWallet *wallet.Store, providerAddress
 		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
 	payload, err := providerprotocol.QuoteRequestPayload(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, sig, err := buyerWallet.SignPayload(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Signature = sig
+	return req
+}
+
+func signedJobRequest(t *testing.T, buyerWallet *wallet.Store, providerAddress string, image string) providerprotocol.JobRequest {
+	t.Helper()
+	buyerStatus, err := buyerWallet.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := providerprotocol.JobRequest{
+		RequestID:       "jreq-test",
+		RequesterPubkey: buyerStatus.Address,
+		AgentID:         "test-agent",
+		ProviderPubkey:  providerAddress,
+		ResourceID:      "gpu-1",
+		Draft: market.OrderDraft{
+			RequesterPubkey: buyerStatus.Address,
+			AgentID:         "test-agent",
+			Type:            "compute.gpu",
+			Goal:            "run docker job",
+			Requirements: map[string]any{
+				"docker": map[string]any{"image": image, "command": "python", "args": []string{"-V"}},
+			},
+			ConsentPolicy: task.ConsentPolicy{RequireHumanApproval: true},
+		},
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+	}
+	payload, err := providerprotocol.JobRequestPayload(req)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,18 +10,20 @@ import (
 	"strings"
 	"time"
 
-	"github.com/exora-dock/exora-dock/internal/agentcard"
 	"github.com/exora-dock/exora-dock/internal/market"
 	"github.com/exora-dock/exora-dock/internal/negotiation"
 	"github.com/exora-dock/exora-dock/internal/orderplan"
 	"github.com/exora-dock/exora-dock/internal/providerprotocol"
 	"github.com/exora-dock/exora-dock/internal/task"
+	"github.com/exora-dock/exora-dock/internal/workrun"
 	"github.com/go-chi/chi/v5"
 )
 
 type createNegotiationsRequest struct {
 	Intent            string                    `json:"intent,omitempty"`
 	Query             string                    `json:"query,omitempty"`
+	RunID             string                    `json:"runId,omitempty"`
+	Controller        string                    `json:"controller,omitempty"`
 	ProjectPath       string                    `json:"projectPath,omitempty"`
 	WorkUID           string                    `json:"workUid,omitempty"`
 	BuyerAgentCardID  string                    `json:"buyerAgentCardId,omitempty"`
@@ -42,6 +44,8 @@ type createNegotiationsRequest struct {
 type createOrderPlanFromNegotiationsRequest struct {
 	NegotiationIDs  []string `json:"negotiationIds"`
 	Query           string   `json:"query,omitempty"`
+	RunID           string   `json:"runId,omitempty"`
+	Controller      string   `json:"controller,omitempty"`
 	ProjectPath     string   `json:"projectPath,omitempty"`
 	WorkUID         string   `json:"workUid,omitempty"`
 	AgentID         string   `json:"agentId,omitempty"`
@@ -51,8 +55,11 @@ type createOrderPlanFromNegotiationsRequest struct {
 type coordinateBuyerWorkRequest struct {
 	Query            string             `json:"query,omitempty"`
 	Intent           string             `json:"intent,omitempty"`
+	RunID            string             `json:"runId,omitempty"`
+	Controller       string             `json:"controller,omitempty"`
 	ProjectPath      string             `json:"projectPath,omitempty"`
 	WorkUID          string             `json:"workUid,omitempty"`
+	BuyerAgentCardID string             `json:"buyerAgentCardId,omitempty"`
 	RequesterPubkey  string             `json:"requesterPubkey,omitempty"`
 	AgentID          string             `json:"agentId,omitempty"`
 	Constraints      map[string]any     `json:"constraints,omitempty"`
@@ -61,6 +68,10 @@ type coordinateBuyerWorkRequest struct {
 	MaxResults       int                `json:"maxResults,omitempty"`
 	MaxOptions       int                `json:"maxOptions,omitempty"`
 	FallbackToQuotes bool               `json:"fallbackToQuotes,omitempty"`
+	PrePlanConfirmed bool              `json:"prePlanConfirmed,omitempty"`
+	ApprovalID       string            `json:"approvalId,omitempty"`
+	PlanID           string            `json:"planId,omitempty"`
+	ManifestHash     string            `json:"manifestHash,omitempty"`
 }
 
 func (h *Handler) CoordinateBuyerWork(w http.ResponseWriter, r *http.Request) {
@@ -98,21 +109,166 @@ func (h *Handler) CoordinateBuyerWork(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.TaskTemplate.AgentID) == "" {
 		req.TaskTemplate.AgentID = req.AgentID
 	}
+	workCtx := workRunContext{
+		RunID:       req.RunID,
+		WorkUID:     req.WorkUID,
+		ProjectPath: req.ProjectPath,
+		Controller:  firstNonEmpty(req.Controller, workrun.ControllerInternalAPI),
+		Intent:      intent,
+		CurrentStep: workrun.StepClassifyIntent,
+	}
+	classification := classifyBuyerIntent(req, intent)
+	switch classification.Mode {
+	case "chat":
+		result := map[string]any{
+			"mode":                 "buyer_intake",
+			"query":                intent,
+			"intentClassification": classification,
+			"summary":              "This looks like a chat request, so Exora Dock did not create a remote task plan or contact sellers.",
+			"nextAction":           "continue_chat",
+		}
+		result = h.decorateWorkRunPayload(result, workCtx.withStep(workrun.StepClassifyIntent), result)
+		writeJSON(w, http.StatusOK, result)
+		return
+	case "clarify":
+		result := map[string]any{
+			"mode":                 "buyer_intake",
+			"query":                intent,
+			"intentClassification": classification,
+			"summary":              "More detail is needed before Exora Dock can safely prepare a remote task manifest.",
+			"clarifyingQuestion":   classification.ClarifyingQuestion,
+			"nextAction":           "ask_clarifying_question",
+		}
+		result = h.decorateWorkRunPayload(result, workCtx.withStep(workrun.StepClassifyIntent), result)
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+	if classification.Mode == "candidate_task" && !req.PrePlanConfirmed && strings.TrimSpace(req.ApprovalID) == "" {
+		result := map[string]any{
+			"mode":                 "buyer_intake",
+			"query":                intent,
+			"intentClassification": classification,
+			"summary":              "This looks like remote seller work. Confirm that Exora Dock should generate a local plan before it writes files or contacts sellers.",
+			"nextAction":           "start_exora_plan_confirmation",
+		}
+		result = h.decorateWorkRunPayload(result, workCtx.withStep(workrun.StepConfirmExoraPlan), result)
+		writeJSON(w, http.StatusAccepted, result)
+		return
+	}
+	planID := ""
+	manifestHash := ""
+	planFiles := map[string]string{}
+	var manifestApproval any
+	if strings.TrimSpace(req.ApprovalID) != "" {
+		a, err := h.approvedManifestApproval(req)
+		if err != nil {
+			result := map[string]any{
+				"mode":                 "plan_first",
+				"query":                intent,
+				"intentClassification": classification,
+				"approvalId":           strings.TrimSpace(req.ApprovalID),
+				"summary":              err.Error(),
+				"nextAction":           "review_remote_task_manifest",
+			}
+			result = h.decorateWorkRunPayload(result, workCtx.withStep(workrun.StepReviewRemoteManifest), result)
+			writeJSON(w, http.StatusConflict, result)
+			return
+		}
+		a = decorateApproval(a, requestBaseURL(r))
+		planID = firstNonEmpty(req.PlanID, a.PlanID, a.SubjectID)
+		manifestHash = firstNonEmpty(req.ManifestHash, a.ManifestHash)
+		if files, ok := a.Metadata["planFiles"].(map[string]any); ok {
+			for key, value := range files {
+				if text := stringFromAny(value); text != "" {
+					planFiles[key] = text
+				}
+			}
+		}
+		manifestApproval = a
+	} else {
+		if strings.TrimSpace(req.ProjectPath) == "" {
+			result := map[string]any{
+				"mode":                 "plan_first",
+				"query":                intent,
+				"intentClassification": classification,
+				"summary":              "projectPath is required before Exora Dock can write local plan files.",
+				"nextAction":           "select_project_path",
+			}
+			result = h.decorateWorkRunPayload(result, workCtx.withStep(workrun.StepWritePlanFiles), result)
+			writeJSON(w, http.StatusBadRequest, result)
+			return
+		}
+		planID = buyerPlanID(req, intent)
+		planResult := map[string]any{
+			"intentClassification": classification,
+			"mode":                 "plan_first",
+		}
+		paths, err := writeAgentPlanFiles(req.ProjectPath, planID, intent, buyerWorkArgs(req), planResult)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		planFiles = paths
+		manifestHash = readManifestHash(paths["remote_task_manifest"])
+		if manifestHash == "" {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "remote_task_manifest manifest_hash missing"})
+			return
+		}
+		a, err := h.ensureBuyerManifestApproval(req, planID, manifestHash, paths)
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
+			return
+		}
+		a = decorateApproval(a, requestBaseURL(r))
+		result := map[string]any{
+			"mode":                 "plan_first",
+			"query":                intent,
+			"plan_id":              planID,
+			"planId":               planID,
+			"manifest_hash":        manifestHash,
+			"manifestHash":         manifestHash,
+			"agentPlanFiles":       planFilesPayload(paths, manifestHash),
+			"intentClassification": classification,
+			"approval":             a,
+			"approvalId":           a.ID,
+			"summary":              "Local plan files are ready. Review and approve the remote task manifest before seller matching starts.",
+			"nextAction":           "review_remote_task_manifest",
+		}
+		result = h.decorateWorkRunPayload(result, workCtx.withStep(workrun.StepReviewRemoteManifest), result)
+		writeJSON(w, http.StatusAccepted, result)
+		return
+	}
 	maxCandidates := req.MaxCandidates
 	if maxCandidates <= 0 {
 		maxCandidates = 3
 	}
-	agentCardSearch := h.searchAgentCards(r.Context(), string(agentcard.RoleSeller), intent)
+	agentCardSearch := searchSellerCards(h, r, intent)
 	negotiationBody := map[string]any{
-		"intent":          intent,
-		"query":           intent,
-		"projectPath":     req.ProjectPath,
-		"workUid":         req.WorkUID,
-		"requesterPubkey": req.RequesterPubkey,
-		"agentId":         req.AgentID,
-		"constraints":     req.Constraints,
-		"taskTemplate":    req.TaskTemplate,
-		"maxCandidates":   maxCandidates,
+		"intent":           intent,
+		"query":            intent,
+		"runId":            req.RunID,
+		"controller":       req.Controller,
+		"projectPath":      req.ProjectPath,
+		"workUid":          req.WorkUID,
+		"buyerAgentCardId": req.BuyerAgentCardID,
+		"requesterPubkey":  req.RequesterPubkey,
+		"agentId":          req.AgentID,
+		"constraints":      req.Constraints,
+		"taskTemplate":     req.TaskTemplate,
+		"maxCandidates":    maxCandidates,
+	}
+	if planID != "" || manifestHash != "" {
+		constraints := map[string]any{}
+		for key, value := range req.Constraints {
+			constraints[key] = value
+		}
+		if planID != "" {
+			constraints["plan_id"] = planID
+		}
+		if manifestHash != "" {
+			constraints["manifest_hash"] = manifestHash
+		}
+		negotiationBody["constraints"] = constraints
 	}
 	negotiationPayload, err := h.invokeJSONHandler(r.Context(), http.MethodPost, "/v1/negotiations", negotiationBody, h.CreateNegotiations)
 	if err != nil {
@@ -121,8 +277,12 @@ func (h *Handler) CoordinateBuyerWork(w http.ResponseWriter, r *http.Request) {
 	}
 	ids, quoted, rejected := negotiationStats(negotiationPayload)
 	result := map[string]any{
-		"mode":            "negotiation_first",
+		"mode":            "plan_first",
 		"query":           intent,
+		"plan_id":         planID,
+		"planId":          planID,
+		"manifest_hash":   manifestHash,
+		"manifestHash":    manifestHash,
 		"projectPath":     req.ProjectPath,
 		"workUid":         req.WorkUID,
 		"agentCardSearch": agentCardSearch,
@@ -132,14 +292,32 @@ func (h *Handler) CoordinateBuyerWork(w http.ResponseWriter, r *http.Request) {
 		"rejectionCount":  rejected,
 		"summary":         stringFromAny(negotiationPayload["summary"]),
 		"nextAction":      stringFromAny(negotiationPayload["nextAction"]),
+		"intentClassification": classification,
+	}
+	if len(planFiles) > 0 {
+		result["agentPlanFiles"] = planFilesPayload(planFiles, manifestHash)
+	}
+	if manifestApproval != nil {
+		result["approval"] = manifestApproval
+		result["approvalId"] = req.ApprovalID
 	}
 	if events, ok := negotiationPayload["events"]; ok {
 		result["events"] = events
 	}
-	if quoted > 0 {
+	signedIDs := signedQuotedIDsFromStore(h, ids)
+	if quoted > 0 && len(signedIDs) == 0 {
+		result["summary"] = "Seller quotes were returned without verifiable quote signatures. They are shown for review only and cannot create an order plan."
+		result["nextAction"] = "review_unsigned_quotes"
+		result = h.decorateWorkRunPayload(result, workCtx.withStep(workrun.StepSubmitManifestForMatching), result)
+		writeJSON(w, http.StatusAccepted, result)
+		return
+	}
+	if len(signedIDs) > 0 {
 		planBody := map[string]any{
-			"negotiationIds":  ids,
+			"negotiationIds":  signedIDs,
 			"query":           intent,
+			"runId":           req.RunID,
+			"controller":      req.Controller,
 			"projectPath":     req.ProjectPath,
 			"workUid":         req.WorkUID,
 			"requesterPubkey": req.RequesterPubkey,
@@ -149,6 +327,7 @@ func (h *Handler) CoordinateBuyerWork(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			result["nextAction"] = "review_negotiations_before_order_plan"
 			result["orderPlanError"] = err.Error()
+			result = h.decorateWorkRunPayload(result, workCtx.withStep(workrun.StepCreateOrderPlan), result)
 			writeJSON(w, http.StatusAccepted, result)
 			return
 		}
@@ -160,12 +339,17 @@ func (h *Handler) CoordinateBuyerWork(w http.ResponseWriter, r *http.Request) {
 		}
 		result["summary"] = firstNonEmpty(stringFromAny(planPayload["summary"]), fmt.Sprintf("Created owner seller choice from %d quoted negotiation(s).", quoted))
 		result["nextAction"] = firstNonEmpty(stringFromAny(planPayload["nextAction"]), "choose_seller_option")
+		if quoteReviewFiles, err := writeQuoteReviewFiles(req.ProjectPath, planID, result); err == nil && len(quoteReviewFiles) > 0 {
+			result["quoteReviewFiles"] = quoteReviewFiles
+		}
+		result = h.decorateWorkRunPayload(result, workCtx.withStep(workrun.StepWaitOwnerSellerChoice), result)
 		writeJSON(w, http.StatusCreated, result)
 		return
 	}
 	if result["nextAction"] == "" {
 		result["nextAction"] = "wait_for_seller_decision"
 	}
+	result = h.decorateWorkRunPayload(result, workCtx.withStep(workrun.StepSubmitManifestForMatching), result)
 	writeJSON(w, http.StatusAccepted, result)
 }
 
@@ -196,13 +380,23 @@ func (h *Handler) CreateNegotiations(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.AgentID) == "" {
 		req.AgentID = "exora-agent-runtime"
 	}
+	workCtx := workRunContext{
+		RunID:       req.RunID,
+		WorkUID:     req.WorkUID,
+		ProjectPath: req.ProjectPath,
+		Controller:  firstNonEmpty(req.Controller, workrun.ControllerInternalAPI),
+		Intent:      intent,
+		CurrentStep: workrun.StepNegotiateTask,
+	}
 	options := h.negotiationOptions(req, intent)
 	if len(options) == 0 {
-		writeJSON(w, http.StatusOK, map[string]any{
+		payload := map[string]any{
 			"negotiations": []negotiation.Negotiation{},
 			"summary":      "No seller candidates were available for negotiation.",
 			"nextAction":   "search_agent_cards_or_refine_task",
-		})
+		}
+		payload = h.decorateWorkRunPayload(payload, workCtx, payload)
+		writeJSON(w, http.StatusOK, payload)
 		return
 	}
 
@@ -277,6 +471,7 @@ func (h *Handler) CreateNegotiations(w http.ResponseWriter, r *http.Request) {
 	if len(events) > 0 {
 		payload["events"] = events
 	}
+	payload = h.decorateWorkRunPayload(payload, workCtx, payload)
 	writeJSON(w, http.StatusAccepted, payload)
 }
 
@@ -447,10 +642,18 @@ func (h *Handler) CreateOrderPlanFromNegotiations(w http.ResponseWriter, r *http
 	workUID := strings.TrimSpace(req.WorkUID)
 	requester := strings.TrimSpace(req.RequesterPubkey)
 	agentID := strings.TrimSpace(req.AgentID)
+	workCtx := workRunContext{
+		RunID:       req.RunID,
+		WorkUID:     workUID,
+		ProjectPath: projectPath,
+		Controller:  firstNonEmpty(req.Controller, workrun.ControllerInternalAPI),
+		Intent:      query,
+		CurrentStep: workrun.StepCreateOrderPlan,
+	}
 	expiresAt := ""
 	for _, id := range ids {
 		n, ok := h.negotiations.Get(id)
-		if !ok || n.Status != negotiation.StatusQuoted || n.Quote == nil {
+		if !ok || n.Status != negotiation.StatusQuoted || n.Quote == nil || strings.TrimSpace(n.Quote.Signature) == "" {
 			continue
 		}
 		if query == "" {
@@ -486,7 +689,7 @@ func (h *Handler) CreateOrderPlanFromNegotiations(w http.ResponseWriter, r *http
 			PriceSnapshot: market.PriceSnapshot{
 				PricePerUnit: n.Quote.PriceAmount,
 				BillingUnit:  "task",
-				Currency:     firstNonEmpty(n.Quote.Currency, "USD"),
+				Currency:     firstNonEmpty(n.Quote.Currency, "USDC"),
 				Availability: "quoted",
 			},
 			Draft: n.Draft,
@@ -500,14 +703,19 @@ func (h *Handler) CreateOrderPlanFromNegotiations(w http.ResponseWriter, r *http
 			Message:        firstNonEmpty(n.Quote.Notes, n.Quote.ExecutionPlanSummary),
 			QuoteID:        n.Quote.ID,
 			PriceAmount:    n.Quote.PriceAmount,
-			Currency:       firstNonEmpty(n.Quote.Currency, "USD"),
+			Currency:       firstNonEmpty(n.Quote.Currency, "USDC"),
 			ExpiresAt:      n.Quote.ExpiresAt,
 			UpdatedAt:      n.UpdatedAt,
 		})
 		events = append(events, orderplan.Event{Type: "seller_negotiation_quoted", Message: firstNonEmpty(n.Quote.Notes, n.Quote.ExecutionPlanSummary), OptionID: optionID})
 	}
+	workCtx.WorkUID = firstNonEmpty(workCtx.WorkUID, workUID)
+	workCtx.ProjectPath = firstNonEmpty(workCtx.ProjectPath, projectPath)
+	workCtx.Intent = firstNonEmpty(workCtx.Intent, query)
 	if len(options) == 0 {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "no quoted negotiations available"})
+		payload := map[string]any{"error": "no quoted negotiations available", "summary": "No quoted negotiations are available.", "nextAction": "tell_user_exora_cannot_help"}
+		payload = h.decorateWorkRunPayload(payload, workCtx, payload)
+		writeJSON(w, http.StatusConflict, payload)
 		return
 	}
 	plan, err := h.orderPlans.Create(orderplan.CreateRequest{
@@ -529,7 +737,7 @@ func (h *Handler) CreateOrderPlanFromNegotiations(w http.ResponseWriter, r *http
 	for _, id := range ids {
 		_, _ = h.negotiations.AttachOrderPlan(id, plan.ID)
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{
+	payload := map[string]any{
 		"orderPlan": plan,
 		"selectionRequest": market.SelectionRequestSummary{
 			PlanID:      plan.ID,
@@ -540,7 +748,9 @@ func (h *Handler) CreateOrderPlanFromNegotiations(w http.ResponseWriter, r *http
 		},
 		"summary":    fmt.Sprintf("Created order plan from %d quoted negotiation(s).", len(options)),
 		"nextAction": plan.NextAction,
-	})
+	}
+	payload = h.decorateWorkRunPayload(payload, workCtx.withStep(workrun.StepWaitOwnerSellerChoice), payload)
+	writeJSON(w, http.StatusCreated, payload)
 }
 
 func (h *Handler) negotiationOptions(req createNegotiationsRequest, intent string) []market.OrderDraftOption {
@@ -718,6 +928,12 @@ func (h *Handler) applyNegotiationReply(id string, reply providerprotocol.Negoti
 			DataProvenance:       reply.DataProvenance,
 			RetentionCommitment:  reply.RetentionCommitment,
 			SellerApprovalMode:   reply.SellerApprovalMode,
+			ValuationDecision:    reply.ValuationDecision,
+			SellerAgentCardID:    reply.SellerAgentCardID,
+			CapabilitySummary:    reply.CapabilitySummary,
+			PricingPolicyID:      reply.PricingPolicyID,
+			ValuationHash:        reply.ValuationHash,
+			QuoteBindingHash:     reply.QuoteBindingHash,
 			Notes:                reply.Notes,
 			Runtime:              reply.Runtime,
 			Docker:               reply.Docker,
@@ -736,6 +952,20 @@ func (h *Handler) applyNegotiationReply(id string, reply providerprotocol.Negoti
 			RiskSummary:   reply.RejectRiskSummary,
 			MissingInputs: reply.RejectMissingInputs,
 			Signature:     reply.Signature,
+		})
+		return n, true, err
+	case "needs_negotiation":
+		if !verified {
+			if err := verifyNegotiationReply(reply); err != nil {
+				return negotiation.Negotiation{}, false, err
+			}
+		}
+		n, err := h.negotiations.MarkNeedsNegotiation(id, negotiation.NeedsNegotiationRequest{
+			Reason:              firstNonEmpty(reply.NeedsNegotiationReason, reply.Notes, reply.Error, "seller needs more detail before quoting"),
+			RiskSummary:         reply.RejectRiskSummary,
+			MissingInputs:       reply.RejectMissingInputs,
+			RequiredPermissions: reply.RequiredPermissions,
+			Signature:           reply.Signature,
 		})
 		return n, true, err
 	case "manual_review":
@@ -809,6 +1039,12 @@ func (h *Handler) buildNegotiationReply(n negotiation.Negotiation) providerproto
 			reply.DataProvenance = n.Quote.DataProvenance
 			reply.RetentionCommitment = n.Quote.RetentionCommitment
 			reply.SellerApprovalMode = n.Quote.SellerApprovalMode
+			reply.ValuationDecision = n.Quote.ValuationDecision
+			reply.SellerAgentCardID = n.Quote.SellerAgentCardID
+			reply.CapabilitySummary = n.Quote.CapabilitySummary
+			reply.PricingPolicyID = n.Quote.PricingPolicyID
+			reply.ValuationHash = n.Quote.ValuationHash
+			reply.QuoteBindingHash = n.Quote.QuoteBindingHash
 			reply.Notes = n.Quote.Notes
 			reply.Runtime = n.Quote.Runtime
 			reply.Docker = n.Quote.Docker
@@ -827,6 +1063,17 @@ func (h *Handler) buildNegotiationReply(n negotiation.Negotiation) providerproto
 	case negotiation.StatusManualReview:
 		reply.Status = "manual_review"
 		reply.Notes = firstNonEmpty(n.Error, "seller manual review required")
+	case negotiation.StatusNeedsNegotiation:
+		reply.Status = "needs_negotiation"
+		if n.NeedsNegotiation != nil {
+			reply.NeedsNegotiationReason = n.NeedsNegotiation.Reason
+			reply.RejectRiskSummary = n.NeedsNegotiation.RiskSummary
+			reply.RejectMissingInputs = n.NeedsNegotiation.MissingInputs
+			reply.RequiredPermissions = n.NeedsNegotiation.RequiredPermissions
+			reply.Error = n.NeedsNegotiation.Reason
+		} else {
+			reply.Error = firstNonEmpty(n.Error, "seller needs more detail before quoting")
+		}
 	default:
 		reply.Status = "pending_seller_decision"
 		reply.Notes = "Seller agent has not returned a quote or rejection yet."
@@ -879,11 +1126,11 @@ func verifyNegotiationReply(reply providerprotocol.NegotiationReply) error {
 
 func isTerminalNegotiationReply(status string) bool {
 	status = strings.ToLower(strings.TrimSpace(status))
-	return status == "quoted" || status == "rejected"
+	return status == "quoted" || status == "rejected" || status == "needs_negotiation"
 }
 
 func negotiationSummary(items []negotiation.Negotiation) (string, string) {
-	quoted, rejected, pending, manual := 0, 0, 0, 0
+	quoted, rejected, pending, manual, needs := 0, 0, 0, 0, 0
 	for _, item := range items {
 		switch item.Status {
 		case negotiation.StatusQuoted:
@@ -892,13 +1139,17 @@ func negotiationSummary(items []negotiation.Negotiation) (string, string) {
 			rejected++
 		case negotiation.StatusManualReview:
 			manual++
+		case negotiation.StatusNeedsNegotiation:
+			needs++
 		default:
 			pending++
 		}
 	}
 	switch {
 	case quoted > 0:
-		return fmt.Sprintf("Received %d seller quote(s), %d rejection(s), %d pending.", quoted, rejected, pending+manual), "create_order_plan_from_quote"
+		return fmt.Sprintf("Received %d seller quote(s), %d rejection(s), %d need negotiation, %d pending.", quoted, rejected, needs, pending+manual), "create_order_plan_from_quote"
+	case needs > 0:
+		return fmt.Sprintf("%d seller(s) need clarification or negotiation before quoting.", needs), "provide_more_details_or_negotiate"
 	case pending+manual > 0:
 		return fmt.Sprintf("Negotiation started with %d seller(s).", pending+manual), "wait_for_seller_decision"
 	default:
