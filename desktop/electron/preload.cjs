@@ -6,12 +6,17 @@ function argValue(name) {
   return arg ? arg.slice(prefix.length) : ''
 }
 
-contextBridge.exposeInMainWorld('exora', {
-  initialLocale: {
+const exoraBridge = Object.freeze({
+  initialLocale: Object.freeze({
     language: argValue('exora-language') || 'en',
     chromiumLocale: argValue('exora-chromium-locale') || 'en-US',
-  },
+  }),
   invoke(command, payload) {
+    if (typeof command !== 'string' || !command.trim()) {
+      return Promise.reject(new Error('Desktop command must be a non-empty string.'))
+    }
     return ipcRenderer.invoke('exora:invoke', command, payload ?? {})
   },
 })
+
+contextBridge.exposeInMainWorld('exora', exoraBridge)

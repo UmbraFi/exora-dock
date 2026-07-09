@@ -74,3 +74,27 @@ func TestDockerExecutorRejectsUnsafePolicy(t *testing.T) {
 		t.Fatalf("memory policy error = %v", err)
 	}
 }
+
+func TestDockerRequirementHelpers(t *testing.T) {
+	if !DockerSpecEmpty(DockerRunSpec{}) {
+		t.Fatalf("empty DockerRunSpec should be empty")
+	}
+	if DockerSpecEmpty(DockerRunSpec{ArtifactPaths: []string{"out"}}) {
+		t.Fatalf("artifact paths make DockerRunSpec non-empty")
+	}
+
+	requirements := WithDockerRequirement(map[string]any{"priority": "low"}, DockerRunSpec{})
+	if _, ok := requirements["docker"]; ok {
+		t.Fatalf("empty DockerRunSpec should not add docker requirement")
+	}
+
+	spec := DockerRunSpec{Image: "python:3.12-alpine", Command: "python"}
+	requirements = WithDockerRequirement(nil, spec)
+	got, ok := requirements["docker"].(DockerRunSpec)
+	if !ok {
+		t.Fatalf("docker requirement type = %T", requirements["docker"])
+	}
+	if got.Image != spec.Image || got.Command != spec.Command {
+		t.Fatalf("docker requirement = %#v, want %#v", got, spec)
+	}
+}

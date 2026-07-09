@@ -319,6 +319,7 @@ func main() {
 			CloudURL:        cfg.CloudURL,
 			CloudTokenPath:  cfg.CloudTokenPath,
 			DockID:          cfg.DockID,
+			ConfigPath:      cfgPath,
 			Auth:            authStore,
 			AllowedOrigins:  cfg.CORSAllowedOrigins,
 		}),

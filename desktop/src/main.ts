@@ -559,6 +559,7 @@ const DEFAULT_TRANSACTION_DETAIL_WIDTH = DEFAULT_SIDEBAR_WIDTH
 const TRANSACTION_DETAIL_MIN_WIDTH = SIDEBAR_MIN_WIDTH
 const TRANSACTION_DETAIL_MAX_WIDTH = SIDEBAR_MAX_WIDTH
 const CHAT_SAVE_DELAY = 500
+const TOAST_DURATION_MS = 3200
 const MASKED_API_KEY_VALUE = '************'
 const DRAFT_LLM_PROFILE_ID = '__draft_llm_profile__'
 const SETTINGS_QR_WIDTH = 236
@@ -848,8 +849,18 @@ const windowControlButtons = isMacPlatform
     <button type="button" data-window-action="close" aria-label="Close">${windowIcons.close}</button>
   `
 
+const transactionDetailOpenButton = `
+  <button class="transaction-detail-panel-popout" type="button" data-action="open-transaction-detail" aria-label="Select a transaction to inspect details" aria-disabled="true" title="Select a transaction to inspect details" disabled>${toolbarIcons.detailExpand}</button>
+`
+
 app.innerHTML = `
   <main class="app-shell">
+    <div class="window-control-rail global-window-controls" data-global-window-controls aria-label="Window controls">
+      ${transactionDetailOpenButton}
+      <div class="window-controls ${isMacPlatform ? 'traffic-lights' : ''}" aria-label="Window controls">
+        ${windowControlButtons}
+      </div>
+    </div>
     <div class="sidebar-chrome">
       <div class="workspace-toolbar" aria-label="Workspace tools">
         <button type="button" data-toolbar-action="search" aria-label="Search" title="Search">${toolbarIcons.search}</button>
@@ -924,6 +935,7 @@ app.innerHTML = `
     </aside>
 
     <section class="main-workspace">
+      <div class="main-window-drag-strip" data-window-drag-handle data-drag-region aria-hidden="true"></div>
       <header class="main-header drag-region" data-drag-region>
         <div>
           <p class="eyebrow" data-main-kicker>Transaction Agent</p>
@@ -931,9 +943,6 @@ app.innerHTML = `
         </div>
         <div class="main-head-actions">
           <span class="mode-pill" data-decision-step>work</span>
-          <div class="window-controls ${isMacPlatform ? 'traffic-lights' : ''}" aria-label="Window controls">
-            ${windowControlButtons}
-          </div>
         </div>
       </header>
       <div class="context-strip" data-context-strip>
@@ -1199,19 +1208,20 @@ app.innerHTML = `
 
     <aside class="transaction-detail-sidebar" data-transaction-detail-sidebar aria-hidden="true">
       <div class="transaction-detail-resize-handle no-drag" data-transaction-detail-resize-handle role="separator" aria-label="Resize detail panel" aria-orientation="vertical" aria-valuemin="${TRANSACTION_DETAIL_MIN_WIDTH}" aria-valuemax="${TRANSACTION_DETAIL_MAX_WIDTH}" tabindex="0" title="Resize detail panel"></div>
-      <header class="transaction-detail-head">
-        <div class="transaction-detail-controls">
-          <button class="transaction-detail-panel-toggle" type="button" data-action="close-transaction-detail" aria-label="Collapse stage detail" title="Collapse detail">${toolbarIcons.detailCollapse}</button>
-          <div class="window-controls ${isMacPlatform ? 'traffic-lights' : ''}" aria-label="Window controls">
-          ${windowControlButtons}
-          </div>
-        </div>
-      </header>
       <div class="transaction-detail-content" data-transaction-detail-content></div>
     </aside>
 
-    <div class="transaction-detail-popout-controls" data-transaction-detail-popout-controls aria-hidden="true">
-      <button class="transaction-detail-panel-popout" type="button" data-action="open-transaction-detail" aria-label="Expand stage detail" title="Expand detail">${toolbarIcons.detailExpand}</button>
+    <header class="transaction-detail-head" aria-label="Detail panel controls">
+      <div class="window-control-rail transaction-detail-controls">
+        <button class="transaction-detail-panel-toggle" type="button" data-action="close-transaction-detail" aria-label="Collapse stage detail" title="Collapse detail">${toolbarIcons.detailCollapse}</button>
+        <div class="window-controls ${isMacPlatform ? 'traffic-lights' : ''}" aria-label="Window controls">
+        ${windowControlButtons}
+        </div>
+      </div>
+    </header>
+
+    <div class="window-control-rail transaction-detail-popout-controls" data-transaction-detail-popout-controls aria-hidden="true">
+      ${transactionDetailOpenButton}
       <div class="window-controls ${isMacPlatform ? 'traffic-lights' : ''}" aria-label="Window controls">
         ${windowControlButtons}
       </div>
@@ -1236,7 +1246,7 @@ app.innerHTML = `
       </section>
     </div>
 
-    <div class="toast" data-message>Starting local Dock...</div>
+    <div class="toast" data-message role="status" aria-live="polite" aria-atomic="true"></div>
 
     <template data-legacy-settings-overlay>
       <button class="settings-scrim" data-action="close-settings" aria-label="Close settings"></button>
@@ -1468,7 +1478,7 @@ const fields = {
   transactionDetailPopoutControls: app.querySelector<HTMLElement>('[data-transaction-detail-popout-controls]')!,
   transactionDetailContent: app.querySelector<HTMLElement>('[data-transaction-detail-content]')!,
   transactionDetailCloseButton: app.querySelector<HTMLButtonElement>('[data-action="close-transaction-detail"]')!,
-  transactionDetailOpenButton: app.querySelector<HTMLButtonElement>('[data-action="open-transaction-detail"]')!,
+  transactionDetailOpenButtons: Array.from(app.querySelectorAll<HTMLButtonElement>('[data-action="open-transaction-detail"]')),
   transactionDetailResizeHandle: app.querySelector<HTMLElement>('[data-transaction-detail-resize-handle]')!,
   chatFeed: app.querySelector<HTMLElement>('[data-chat-feed]')!,
   contextStrip: app.querySelector<HTMLElement>('[data-context-strip]')!,
@@ -1851,11 +1861,16 @@ let sidebarResizePointerId: number | undefined
 let transactionDetailResizePointerId: number | undefined
 let pendingTransactionStageScroll: { threadId: string; stageId: string } | undefined
 let lastChatFeedRenderKey = ''
+let lastTransactionDetailRenderKey = ''
 let forceChatFeedScrollBottom = false
 const chatFeedScrollPositions = new Map<string, number>()
 const chatSaveTimers = new Map<string, number>()
 const chatSaveQueues = new Map<string, Promise<void>>()
 const threadStorageKeys = new Map<string, string>()
+let toastTimer: number | undefined
+let workspaceRefreshInFlight: Promise<void> | undefined
+let workspaceRefreshQueued = false
+let workspaceRefreshQueuedQuiet = true
 
 function localize(root: ParentNode = app) {
   setI18nLanguage(state.language)
@@ -3070,6 +3085,13 @@ function renderChromeControls() {
   fields.cartButton.setAttribute('title', state.cartOpen ? 'Cards open' : 'Cards')
   fields.backButton.disabled = state.busy || state.viewHistoryIndex <= 0
   fields.forwardButton.disabled = state.busy || state.viewHistoryIndex >= state.viewHistory.length - 1
+}
+
+function setSidebarCollapsed(collapsed: boolean) {
+  if (state.sidebarCollapsed === collapsed) return
+  state.sidebarCollapsed = collapsed
+  renderChromeControls()
+  scheduleSaveAppSettings()
 }
 
 function renderProfileSummary() {
@@ -4297,10 +4319,188 @@ function sellerFieldsFromForm(data: FormData, current: SellerManualFields): Sell
   }
 }
 
+function signaturePart(value: unknown) {
+  if (value === undefined || value === null) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  return JSON.stringify(value)
+}
+
+function signatureRow(values: unknown[]) {
+  return values.map(signaturePart).join('\x1f')
+}
+
+function workspaceRenderSignature() {
+  const workRunEventRows = Object.keys(state.workRunEvents || {}).sort().map((runId) => {
+    const events = state.workRunEvents[runId] || []
+    const last = events[events.length - 1]
+    return signatureRow([runId, events.length, last?.eventId, last?.type, last?.status, last?.checkpointId, last?.step, last?.createdAt])
+  })
+  return JSON.stringify({
+    online: state.workspaceOnline,
+    errors: state.workspaceErrors,
+    activeProjectFolderPath: state.activeProjectFolderPath,
+    selectedId: state.selectedId,
+    selectedWorkThreadId: state.selectedWorkThreadId,
+    plans: state.orderPlans.map((plan) => signatureRow([
+      plan.planId,
+      plan.status,
+      plan.updatedAt,
+      plan.createdAt,
+      plan.expiresAt,
+      plan.selectedOptionId,
+      plan.taskId,
+      plan.approvalId,
+      plan.paymentId,
+      plan.providerJobId,
+      plan.invalidationCause,
+      plan.nextAction,
+      plan.orderState?.state,
+      plan.orderState?.waitingFor,
+      plan.orderState?.updatedAt,
+      plan.options?.length || 0,
+      (plan.options || []).map((option) => signatureRow([
+        option.optionId,
+        option.realtimeStatus,
+        option.quoteId,
+        option.confirmedAt,
+        option.expiresAt,
+        option.priceSnapshot?.pricePerUnit,
+        option.priceSnapshot?.currency,
+      ])).join('\x1e'),
+      plan.candidates?.length || 0,
+      (plan.candidates || []).map((candidate) => signatureRow([
+        candidate.optionId,
+        candidate.providerPubkey,
+        candidate.status,
+        candidate.message,
+        candidate.quoteId,
+        candidate.updatedAt,
+      ])).join('\x1e'),
+      plan.events?.length || 0,
+      (plan.events || []).slice(-3).map((event) => signatureRow([event.time, event.type, event.message, event.optionId])).join('\x1e'),
+    ])),
+    approvals: state.approvals.map((approval) => signatureRow([
+      approval.approvalId,
+      approval.status,
+      approval.taskId,
+      approval.planId,
+      approval.workRunId,
+      approval.providerPubkey,
+      approval.paymentRequired,
+      approval.action,
+      approval.createdAt,
+      approval.expiresAt,
+      approval.amount?.value,
+      approval.amount?.currency,
+      approval.quote?.priceAmount,
+      approval.quote?.currency,
+    ])),
+    tasks: state.tasks.map((task) => signatureRow([
+      task.id,
+      task.orderId,
+      task.status,
+      task.providerPubkey,
+      task.updatedAt,
+      task.createdAt,
+      task.consentedAt,
+      task.claimedAt,
+      task.completedAt,
+      task.error,
+      task.quote?.id,
+      task.quote?.providerPubkey,
+      task.quote?.priceAmount,
+      task.quote?.currency,
+      task.artifacts?.length || 0,
+    ])),
+    payments: state.payments.map((payment) => signatureRow([
+      payment.paymentId,
+      payment.approvalId,
+      payment.taskId,
+      payment.status,
+      payment.mode,
+      payment.proofRef,
+      payment.amount,
+      payment.currency,
+      payment.createdAt,
+      payment.updatedAt,
+      payment.confirmedAt,
+    ])),
+    mcpConnections: state.mcpConnections.map((connection) => signatureRow([
+      connection.id,
+      connection.role,
+      connection.cwd,
+      connection.projectPath,
+      connection.projectName,
+      connection.source,
+      connection.clientName,
+      connection.lastSeen,
+    ])),
+    leases: state.workMcpLeases.map((lease) => signatureRow([
+      lease.workUid,
+      lease.projectPath,
+      lease.controller,
+      lease.status,
+      lease.clientName,
+      lease.lastSeenAt,
+      lease.updatedAt,
+      lease.expiresAt,
+    ])),
+    runs: state.workRuns.map((run) => signatureRow([
+      run.runId,
+      run.workUid,
+      run.projectPath,
+      run.status,
+      run.currentStep,
+      run.nextAction,
+      run.lastCheckpointId,
+      run.error,
+      run.updatedAt,
+      run.completedAt,
+      run.entities?.orderPlanId,
+      run.entities?.taskId,
+      run.entities?.approvalId,
+      run.entities?.paymentId,
+      run.entities?.providerJobId,
+      run.activeWorker?.workerId,
+      run.activeWorker?.status,
+      run.activeWorker?.jobId,
+      run.activeWorker?.updatedAt,
+    ])),
+    runEvents: workRunEventRows,
+    projectFolders: state.projectFolders.map((folder) => signatureRow([folder.path, folder.name, folder.daemonRestarted])),
+  })
+}
+
 async function refreshWorkspace(options: { quiet?: boolean } = {}) {
+  if (workspaceRefreshInFlight) {
+    workspaceRefreshQueued = true
+    workspaceRefreshQueuedQuiet = workspaceRefreshQueuedQuiet && options.quiet === true
+    return workspaceRefreshInFlight
+  }
+  workspaceRefreshQueued = false
+  workspaceRefreshQueuedQuiet = options.quiet === true
+  workspaceRefreshInFlight = refreshWorkspaceLoop(options).finally(() => {
+    workspaceRefreshInFlight = undefined
+  })
+  return workspaceRefreshInFlight
+}
+
+async function refreshWorkspaceLoop(options: { quiet?: boolean }) {
+  let nextOptions = options
+  do {
+    workspaceRefreshQueued = false
+    await refreshWorkspaceNow(nextOptions)
+    nextOptions = { quiet: workspaceRefreshQueuedQuiet }
+    workspaceRefreshQueuedQuiet = true
+  } while (workspaceRefreshQueued)
+}
+
+async function refreshWorkspaceNow(options: { quiet?: boolean } = {}) {
   if (state.workspaceLoading) return
   state.workspaceLoading = true
   const previousSelected = state.selectedId
+  const previousSignature = workspaceRenderSignature()
   const previousSnapshot = {
     orderPlans: state.orderPlans,
     approvals: state.approvals,
@@ -4349,10 +4549,12 @@ async function refreshWorkspace(options: { quiet?: boolean } = {}) {
     if (snapshot.online === true && !(snapshot.errors || []).length) {
       void saveTransactionsSnapshot()
     }
-    renderLedger()
-    renderContextStrip()
-    renderDecisionPanel()
-    renderExternalWorkLockControls()
+    if (workspaceRenderSignature() !== previousSignature) {
+      renderLedger()
+      renderContextStrip()
+      renderDecisionPanel()
+      renderExternalWorkLockControls()
+    }
     syncTransactionProgressPolling()
   } finally {
     state.workspaceLoading = false
@@ -4654,7 +4856,6 @@ function renderStatus(status: AppStatus) {
   state.appStatus = status
   fields.daemon.textContent = status.daemon
   fields.daemon.dataset.state = status.daemon
-  fields.message.textContent = translatePhrase(status.message, state.language)
   renderLocalAgentPromptControls()
 }
 
@@ -5443,9 +5644,133 @@ function renderTransactionStageDetailFrame(thread: WorkThread, snapshot: Transac
   `
 }
 
+function canInspectTransactionDetail(thread = selectedWorkThread()) {
+  return Boolean(thread && (state.activeView === 'chat' || state.activeView === 'work') && !state.pinStep && !sellerMonitorActive() && !state.newConversationDraft)
+}
+
+function updateTransactionDetailOpenButtons(canInspect: boolean, visible: boolean) {
+  const disabled = !canInspect || visible
+  const label = !canInspect
+    ? 'Select a transaction to inspect details'
+    : visible
+      ? 'Transaction details are open'
+      : 'Open transaction details'
+  for (const button of fields.transactionDetailOpenButtons) {
+    button.disabled = disabled
+    button.setAttribute('aria-disabled', String(disabled))
+    button.setAttribute('aria-label', label)
+    button.setAttribute('title', label)
+  }
+}
+
+function transactionDetailRenderKey(
+  thread: WorkThread,
+  side: OrderSide,
+  stageId: string,
+  snapshot: TransactionProgressSnapshot,
+  data: TransactionProgressData,
+  messages: ChatMessage[],
+) {
+  const lastEvent = snapshot.events[snapshot.events.length - 1]
+  const lastMessage = messages[messages.length - 1]
+  return JSON.stringify({
+    language: state.language,
+    thread: [
+      thread.id,
+      thread.timestamp,
+      thread.status,
+      thread.primarySelectionId,
+      thread.taskIds.join(','),
+      thread.planIds.join(','),
+      thread.approvalIds.join(','),
+      thread.paymentIds.join(','),
+    ],
+    side,
+    stageId,
+    snapshot: [
+      snapshot.state,
+      snapshot.owner,
+      snapshot.waitingFor,
+      snapshot.nextAction,
+      snapshot.updatedAt,
+      snapshot.syncStatus,
+      snapshot.currentStageId,
+      snapshot.terminal,
+      snapshot.quote,
+      snapshot.payment,
+      snapshot.provider,
+      snapshot.artifacts,
+      snapshot.events.length,
+      lastEvent?.id,
+      lastEvent?.timestamp,
+    ],
+    plans: data.plans.map((plan) => [
+      plan.planId,
+      plan.status,
+      plan.updatedAt,
+      plan.selectedOptionId,
+      plan.taskId,
+      plan.approvalId,
+      plan.paymentId,
+      plan.providerJobId,
+      plan.orderState?.state,
+      plan.orderState?.updatedAt,
+      plan.options?.length || 0,
+      plan.candidates?.length || 0,
+      plan.events?.length || 0,
+    ]),
+    tasks: data.tasks.map((task) => [
+      task.id,
+      task.status,
+      task.providerPubkey,
+      task.updatedAt,
+      task.completedAt,
+      task.error,
+      task.artifacts?.length || 0,
+    ]),
+    approvals: data.approvals.map((approval) => [
+      approval.approvalId,
+      approval.status,
+      approval.paymentRequired,
+      approval.createdAt,
+      approval.expiresAt,
+    ]),
+    payments: data.payments.map((payment) => [
+      payment.paymentId,
+      payment.status,
+      payment.updatedAt,
+      payment.confirmedAt,
+      payment.proofRef,
+    ]),
+    runs: data.workRuns.map((run) => [
+      run.runId,
+      run.status,
+      run.currentStep,
+      run.lastCheckpointId,
+      run.updatedAt,
+      run.error,
+      run.activeWorker?.status,
+      run.activeWorker?.updatedAt,
+    ]),
+    runEvents: data.workRunEvents.map((event) => [
+      event.eventId,
+      event.type,
+      event.status,
+      event.step,
+      event.createdAt,
+    ]),
+    messages: [
+      messages.length,
+      lastMessage?.id,
+      lastMessage?.text,
+      lastMessage?.stageId,
+    ],
+  })
+}
+
 function renderTransactionDetailSidebar() {
   const thread = selectedWorkThread()
-  const canInspect = Boolean(thread && (state.activeView === 'chat' || state.activeView === 'work') && !state.pinStep && !sellerMonitorActive() && !state.newConversationDraft)
+  const canInspect = canInspectTransactionDetail(thread)
   const visible = Boolean(state.transactionStageInspectorOpen && canInspect)
   const canPopout = Boolean(!visible && canInspect)
   fields.appShell.classList.toggle('transaction-detail-dockable', canInspect)
@@ -5455,8 +5780,10 @@ function renderTransactionDetailSidebar() {
   fields.transactionDetailSidebar.toggleAttribute('inert', !visible)
   fields.transactionDetailPopoutControls.setAttribute('aria-hidden', String(!canPopout))
   fields.transactionDetailPopoutControls.toggleAttribute('inert', !canPopout)
+  updateTransactionDetailOpenButtons(canInspect, visible)
   if (!canInspect || !thread) {
     fields.transactionDetailContent.innerHTML = ''
+    lastTransactionDetailRenderKey = ''
     return
   }
   if (!visible) return
@@ -5465,13 +5792,20 @@ function renderTransactionDetailSidebar() {
   const messages = chatThread?.messages || []
   const snapshot = buildTransactionProgressSnapshot(thread, side)
   const explicitStageId = normalizeTransactionStageId(state.transactionStageSelections[thread.id])
+  const data = transactionProgressData(thread)
   if (!explicitStageId || !snapshot.stages.some((stage) => stage.id === explicitStageId)) {
+    const emptyKey = transactionDetailRenderKey(thread, side, 'empty', snapshot, data, messages)
+    if (lastTransactionDetailRenderKey === emptyKey) return
+    lastTransactionDetailRenderKey = emptyKey
     fields.transactionDetailContent.innerHTML = renderTransactionDetailEmpty()
     return
   }
   const stageId = explicitStageId as TransactionStageId
   const stage = snapshot.stages.find((item) => item.id === stageId) || snapshot.stages[0]
-  const body = renderTransactionStageBodyForSide(side, stageId, transactionProgressData(thread), thread, chatThread, messages, snapshot)
+  const renderKey = transactionDetailRenderKey(thread, side, stageId, snapshot, data, messages)
+  if (lastTransactionDetailRenderKey === renderKey) return
+  lastTransactionDetailRenderKey = renderKey
+  const body = renderTransactionStageBodyForSide(side, stageId, data, thread, chatThread, messages, snapshot)
   fields.transactionDetailContent.innerHTML = `
     <section class="transaction-detail-stage" data-selected-transaction-stage="${escapeAttr(stageId)}">
       <header class="transaction-detail-stage-head">
@@ -5516,9 +5850,9 @@ function closeTransactionStageInspector(render = true) {
 
 function openTransactionStageInspector() {
   const thread = selectedWorkThread()
-  if (!thread) return
+  if (!thread || !canInspectTransactionDetail(thread)) return
   state.transactionStageInspectorOpen = true
-  renderChat()
+  renderTransactionDetailSidebar()
 }
 
 function renderBuyerTransactionStageContent(thread: WorkThread, chatThread: ChatThread | undefined, messages: ChatMessage[]) {
@@ -7217,7 +7551,6 @@ function renderTransactionProgressForSelection(selected: ReturnType<typeof selec
 }
 
 function renderDecisionPanel() {
-  window.queueMicrotask(() => localize())
   renderViewTabs()
   const selected = selectedObjectForActiveView()
 
@@ -7234,7 +7567,6 @@ function renderDecisionPanel() {
 
   if (showingChat) {
     renderChat()
-    renderChatSurface()
     const sideLabel = state.workOrderSide === 'buyer' ? t('orderSide.buyer') : t('orderSide.seller')
     fields.mainKicker.textContent = sideLabel
     fields.decisionTitle.textContent = `${sideLabel} Transactions`
@@ -7255,6 +7587,7 @@ function renderDecisionPanel() {
     fields.decisionStep.textContent = 'Enter PIN'
     fields.decisionContent.innerHTML = renderPinStep(state.pinStep)
     attachPinHandlers()
+    localize(fields.actionView)
     return
   }
 
@@ -7270,6 +7603,7 @@ function renderDecisionPanel() {
     attachCardHandlers()
     attachCardMarketHandlers()
     renderContextStrip()
+    localize(fields.actionView)
     return
   }
 
@@ -7278,6 +7612,7 @@ function renderDecisionPanel() {
     fields.decisionTitle.textContent = 'Transactions'
     fields.decisionStep.textContent = 'empty'
     fields.decisionContent.innerHTML = '<p class="empty-copy">No seller choices, approvals, tasks, or payments yet. Use Buyer, Seller, or Cart to start.</p>'
+    localize(fields.actionView)
     return
   }
 
@@ -7303,6 +7638,7 @@ function renderDecisionPanel() {
     fields.decisionContent.innerHTML = renderTransactionProgressForSelection(selected) + renderPaymentDecision(selected.value)
   }
   attachDecisionHandlers()
+  localize(fields.actionView)
 }
 
 function renderOrderPlanDecision(plan: OrderPlan) {
@@ -11408,7 +11744,17 @@ function setBusy(next: boolean) {
 }
 
 function showToast(message: string) {
-  fields.message.textContent = translatePhrase(message, state.language)
+  const text = translatePhrase(message, state.language).trim()
+  if (!text) return
+  window.clearTimeout(toastTimer)
+  fields.message.textContent = text
+  fields.message.classList.add('show')
+  toastTimer = window.setTimeout(() => {
+    fields.message.classList.remove('show')
+    toastTimer = window.setTimeout(() => {
+      if (!fields.message.classList.contains('show')) fields.message.textContent = ''
+    }, 180)
+  }, TOAST_DURATION_MS)
 }
 
 function settingsTitles(): Record<SettingsView, { kicker: string; title: string }> {
@@ -11731,7 +12077,9 @@ fields.cartButton.addEventListener('click', () => {
 })
 
 fields.transactionDetailCloseButton.addEventListener('click', () => closeTransactionStageInspector())
-fields.transactionDetailOpenButton.addEventListener('click', openTransactionStageInspector)
+fields.transactionDetailOpenButtons.forEach((button) => {
+  button.addEventListener('click', openTransactionStageInspector)
+})
 
 fields.settingsReturnButton.addEventListener('click', returnFromSettings)
 
@@ -12033,13 +12381,59 @@ fields.sidebarButton.addEventListener('click', (event) => {
   event.stopPropagation()
   closeProfileMenu()
   closeProjectFolderMenu()
-  state.sidebarCollapsed = !state.sidebarCollapsed
-  scheduleSaveAppSettings()
-  renderAll()
+  setSidebarCollapsed(!state.sidebarCollapsed)
 })
 
 fields.forwardButton.addEventListener('click', () => navigateWorkspaceHistory(1))
 fields.backButton.addEventListener('click', () => navigateWorkspaceHistory(-1))
+
+let manualWindowDragActive = false
+let manualWindowDragMoveScheduled = false
+
+app.addEventListener('mousedown', (event) => {
+  if (event.button !== 0) return
+  const target = event.target
+  if (!(target instanceof Element)) return
+  if (!target.closest('[data-window-drag-handle]')) return
+  if (target.closest('button, input, select, textarea, a, [role="button"], .no-drag')) return
+  event.preventDefault()
+  manualWindowDragActive = true
+  invoke<boolean>('window_begin_manual_drag')
+    .then((started) => {
+      if (!started) {
+        manualWindowDragActive = false
+        return
+      }
+      scheduleManualWindowDragMove()
+    })
+    .catch(() => {
+      manualWindowDragActive = false
+    })
+})
+
+window.addEventListener('mousemove', () => {
+  if (manualWindowDragActive) scheduleManualWindowDragMove()
+})
+
+function scheduleManualWindowDragMove() {
+  if (!manualWindowDragActive || manualWindowDragMoveScheduled) return
+  manualWindowDragMoveScheduled = true
+  window.requestAnimationFrame(() => {
+    manualWindowDragMoveScheduled = false
+    if (!manualWindowDragActive) return
+    invoke('window_manual_drag_move').catch(() => undefined)
+  })
+}
+
+function endManualWindowDrag() {
+  if (!manualWindowDragActive) return
+  manualWindowDragActive = false
+  manualWindowDragMoveScheduled = false
+  invoke('window_end_manual_drag').catch(() => undefined)
+}
+
+window.addEventListener('mouseup', endManualWindowDrag)
+window.addEventListener('blur', endManualWindowDrag)
 
 app.addEventListener('dblclick', (event) => {
   const target = event.target

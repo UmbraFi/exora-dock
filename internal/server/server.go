@@ -54,6 +54,7 @@ type RuntimeStores struct {
 	CloudURL        string
 	CloudTokenPath  string
 	DockID          string
+	ConfigPath      string
 	Auth            *localauth.Store
 	AllowedOrigins  []string
 }
@@ -86,6 +87,7 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 		CloudURL:        stores.CloudURL,
 		CloudTokenPath:  stores.CloudTokenPath,
 		DockID:          stores.DockID,
+		ConfigPath:      stores.ConfigPath,
 	})
 	r := chi.NewRouter()
 
@@ -127,6 +129,7 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 		// Built-in requester agent endpoints
 		r.Post("/agent/search-sellers", h.SearchSellers)
 		r.Get("/market/rail-cards", h.MarketRailCards)
+		r.Get("/console/snapshot", h.ConsoleSnapshot)
 		r.Post("/agent/buyer-work", h.CoordinateBuyerWork)
 		r.Post("/agent/runs", h.StartAgentRun)
 		r.Get("/agent/runs", h.ListAgentRuns)
@@ -152,6 +155,16 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 		r.Post("/agent-cards/draft", h.DraftAgentCard)
 		r.Put("/agent-cards/{role}", h.SaveAgentCard)
 		r.Post("/agent-cards/{role}/publish", h.PublishAgentCard)
+		r.Get("/settings/buyer-agent", h.GetBuyerAgentSettings)
+		r.Put("/settings/buyer-agent", h.SaveBuyerAgentSettings)
+		r.Get("/settings/seller-agent", h.GetSellerAgentSettings)
+		r.Put("/settings/seller-agent", h.SaveSellerAgentSettings)
+		r.Get("/settings/llm-profiles", h.ListLLMProfiles)
+		r.Post("/settings/llm-profiles", h.SaveLLMProfile)
+		r.Put("/settings/llm-profiles", h.SaveLLMProfile)
+		r.Delete("/settings/llm-profiles", h.DeleteLLMProfile)
+		r.Post("/settings/llm-profiles/test", h.TestLLMProfile)
+		r.Get("/settings/llm-profiles/models", h.ListLLMProfileModels)
 
 		// Remote job task endpoints
 		r.Post("/tasks", h.CreateTask)
