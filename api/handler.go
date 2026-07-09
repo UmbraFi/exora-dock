@@ -36,6 +36,7 @@ import (
 	"github.com/exora-dock/exora-dock/internal/product"
 	"github.com/exora-dock/exora-dock/internal/providerprotocol"
 	"github.com/exora-dock/exora-dock/internal/resource"
+	"github.com/exora-dock/exora-dock/internal/samplemarket"
 	"github.com/exora-dock/exora-dock/internal/task"
 	"github.com/exora-dock/exora-dock/internal/wallet"
 	"github.com/exora-dock/exora-dock/internal/workrun"
@@ -1115,6 +1116,10 @@ func (h *Handler) SearchSellers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, payload)
 }
 
+func (h *Handler) MarketRailCards(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, samplemarket.RailCards(h.agentCards))
+}
+
 func (h *Handler) realtimeOrderOptions(r *http.Request, req market.SearchRequest, options []market.OrderDraftOption) ([]market.OrderDraftOption, []orderplan.CandidateState, []orderplan.Event) {
 	confirmed := make([]market.OrderDraftOption, 0, len(options))
 	states := make([]orderplan.CandidateState, 0, len(options))
@@ -1464,10 +1469,10 @@ func (h *Handler) ListApprovals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	filter := approval.ListFilter{
-		Status:     approval.Status(strings.TrimSpace(r.URL.Query().Get("status"))),
-		UserPubkey: firstQueryValue(r, "userPubkey", "user"),
-		AgentID:    strings.TrimSpace(r.URL.Query().Get("agentId")),
-		TaskID:     strings.TrimSpace(r.URL.Query().Get("taskId")),
+		Status:      approval.Status(strings.TrimSpace(r.URL.Query().Get("status"))),
+		UserPubkey:  firstQueryValue(r, "userPubkey", "user"),
+		AgentID:     strings.TrimSpace(r.URL.Query().Get("agentId")),
+		TaskID:      strings.TrimSpace(r.URL.Query().Get("taskId")),
 		SubjectType: strings.TrimSpace(r.URL.Query().Get("subjectType")),
 		SubjectID:   strings.TrimSpace(r.URL.Query().Get("subjectId")),
 		WorkRunID:   strings.TrimSpace(r.URL.Query().Get("workRunId")),

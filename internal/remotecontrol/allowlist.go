@@ -29,6 +29,9 @@ func Allowed(method string, path string) bool {
 	if path == "/v1/agent/search-sellers" {
 		return method == http.MethodPost
 	}
+	if path == "/v1/market/rail-cards" {
+		return method == http.MethodGet
+	}
 	if negotiationAllowed(method, path) {
 		return true
 	}

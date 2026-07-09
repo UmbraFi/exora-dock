@@ -297,7 +297,7 @@ func BuildWithBaseURL(baseURL string, dockID string) Manifest {
 }
 
 func AgentPrompt() string {
-	return "Find my local Exora Dock by reading %LOCALAPPDATA%\\ExoraDock\\agent-discovery.json, start the stdio MCP server from mcpCommand, then use its Exora tools instead of guessing HTTP endpoints. For concrete buyer work, use exora.run_buyer_work first: it searches suitable seller agents, negotiates with the best candidates, creates an owner-selectable plan from quoted sellers, and then stops for owner choice. If a prompt includes workUid, include that workUid on every related Exora MCP call. Continue with resume_negotiation / create_order_plan_from_quote / resume_task_flow as nextAction requires; do not make the user prompt each step. Never approve, select, pay, reveal credentials, or call Docker directly. Use baseUrl REST only as fallback."
+	return "Find my local Exora Dock by reading %LOCALAPPDATA%\\ExoraDock\\agent-discovery.json, start the stdio MCP server from mcpCommand, then use its Exora tools instead of guessing HTTP endpoints. For concrete buyer work, use exora.run_buyer_work first. It is plan-first: classify the request, ask for plan confirmation when needed, write local .exora/agent-plans files, and wait for Dock owner submit_remote_task_manifest approval before seller matching or quoting. If a prompt includes workUid, include that workUid on every related Exora MCP call. Continue only as nextAction requires, and never use exora.negotiate_task as the default path for an unreviewed manifest. Never approve, select, pay, reveal credentials, or call Docker directly. Use baseUrl REST only as fallback."
 }
 
 func OpenCodeConfig(command []string) map[string]any {

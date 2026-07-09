@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/exora-dock/exora-dock/internal/approval"
 	"github.com/exora-dock/exora-dock/internal/agentcard"
+	"github.com/exora-dock/exora-dock/internal/approval"
 	"github.com/exora-dock/exora-dock/internal/negotiation"
 )
 
@@ -91,7 +91,7 @@ func (h *Handler) ensureBuyerManifestApproval(req coordinateBuyerWorkRequest, pl
 		"workUid":     req.WorkUID,
 		"planFiles":   files,
 		"disclosure": map[string]any{
-			"remote": []string{"task_requirements", "agent_requirements", "remote_task_manifest"},
+			"remote":     []string{"task_requirements", "agent_requirements", "remote_task_manifest"},
 			"local_only": []string{"api_keys", "credentials", "private_paths", "raw_diagnostics"},
 		},
 	}

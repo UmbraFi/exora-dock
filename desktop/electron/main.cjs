@@ -10,7 +10,7 @@ const APP_ID = 'io.exora.dock'
 const BASE_URL = 'http://127.0.0.1:8080'
 const DAEMON_NAME = 'exora-dockd'
 const DAEMON_LOG_NAME = 'daemon.log'
-const DEFAULT_PROJECT_NAME = 'AgenStaff_Project'
+const DEFAULT_PROJECT_NAME = 'AgenStaff'
 const DESKTOP_STATE_NAME = 'desktop-state.json'
 const PERSISTENCE_DIR_NAME = 'exora-data'
 const WORK_MCP_LEASE_LIMIT = 100
@@ -121,6 +121,8 @@ function registerIpc() {
     save_agent_card,
     publish_agent_card,
     seller_market_status,
+    market_rail_cards,
+    agent_card_search,
     agent_search_sellers,
     list_approvals,
     decide_approval,
@@ -629,13 +631,14 @@ async function save_transactions(payload = {}) {
 
 async function save_seller_settings(payload) {
   const input = payload?.input ?? {}
+  const restart = payload?.restart !== false && input.restart !== false
   const paths = await dockPaths()
   await ensureLocalLayout(paths)
   const raw = await readTextOr(paths.configPath, defaultLocalConfig(paths))
   const updated = updateSellerSettingsYaml(raw, input)
   await fsp.writeFile(paths.configPath, updated)
   await writeDiscoveryManifest(paths)
-  if (await trackedDaemonRunning(paths)) {
+  if (restart && await trackedDaemonRunning(paths)) {
     await stopTrackedDaemon(paths)
     return start_dock()
   }
@@ -846,6 +849,25 @@ async function seller_market_status() {
   }
 }
 
+async function market_rail_cards() {
+  const paths = await dockPaths()
+  await ensureLocalLayout(paths)
+  return httpJson('GET', '/v1/market/rail-cards', undefined, await localOwnerToken(paths), { timeoutMs: 10000 })
+}
+
+async function agent_card_search(payload) {
+  const input = payload?.input ?? {}
+  const paths = await dockPaths()
+  await ensureLocalLayout(paths)
+  const params = new URLSearchParams()
+  const role = String(input.role || 'seller').trim()
+  const query = String(input.q || input.query || '').trim()
+  if (role) params.set('role', role)
+  if (query) params.set('q', query)
+  const suffix = params.toString() ? `?${params.toString()}` : ''
+  return httpJson('GET', `/v1/agent-cards/search${suffix}`, undefined, await localAgentToken(paths), { timeoutMs: 10000 })
+}
+
 async function agent_search_sellers(payload) {
   const input = payload?.input ?? {}
   const paths = await dockPaths()
@@ -858,6 +880,10 @@ async function agent_search_sellers(payload) {
     workUid: input.workUid,
     agentId: String(input.agentId || '').trim() || 'exora-desktop-agent',
     buyerAgentCardId: String(input.buyerAgentCardId || '').trim() || undefined,
+    prePlanConfirmed: Boolean(input.prePlanConfirmed),
+    approvalId: String(input.approvalId || '').trim() || undefined,
+    planId: String(input.planId || '').trim() || undefined,
+    manifestHash: String(input.manifestHash || '').trim() || undefined,
     maxResults: input.maxResults ?? 8,
     maxCandidates: input.maxCandidates ?? 3,
     maxOptions: input.maxOptions ?? 6,
@@ -1188,7 +1214,9 @@ async function open_console() {
 async function project_folder_status() {
   const paths = await dockPaths()
   await ensureLocalLayout(paths)
-  return activeProjectFolder(paths)
+  const folder = defaultProjectFolder(paths)
+  await saveProjectFolder(paths, folder, { select: false })
+  return folder
 }
 
 async function choose_project_folder(payload = {}) {
@@ -1682,6 +1710,7 @@ function normalizeConversationThread(thread) {
     updatedAt: finiteTimestamp(value.updatedAt, finiteTimestamp(value.createdAt, now)),
     projectPath: String(value.projectPath || '').trim() || undefined,
     origin: value.origin === 'market-card' ? 'market-card' : undefined,
+    side: value.side === 'seller' ? 'seller' : value.side === 'buyer' ? 'buyer' : undefined,
     orderId: String(value.orderId || '').trim() || undefined,
     taskIds,
     status: String(value.status || '').trim() || undefined,
@@ -1977,7 +2006,7 @@ function mcpCommandString(helperPath, configPath) {
 }
 
 function agentPrompt() {
-  return 'Find my local Exora Dock by reading the local ExoraDock agent-discovery.json, start the stdio MCP server from mcpCommand, then use its Exora tools instead of guessing HTTP endpoints. MCP is the external local-agent channel; use baseUrl REST only as fallback. For a specific Work task, use the prompt copied from Work so you also receive a workUid.'
+  return 'Find my local Exora Dock by reading the local ExoraDock agent-discovery.json, start the stdio MCP server from mcpCommand, then use its Exora tools instead of guessing HTTP endpoints. MCP is the external local-agent channel; use baseUrl REST only as fallback. For a specific transaction, use the prompt copied from Buyer/Seller so you also receive a workUid.'
 }
 
 function opencodeConfigString(helperPath, configPath) {

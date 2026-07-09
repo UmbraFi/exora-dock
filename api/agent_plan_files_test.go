@@ -26,7 +26,7 @@ func TestWriteAgentPlanFilesCreatesRequiredPlanArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(paths) != 3 {
+	if len(paths) != 4 {
 		t.Fatalf("paths = %#v", paths)
 	}
 	for _, name := range []string{"task_requirements", "agent_requirements", "remote_task_manifest"} {
@@ -38,6 +38,9 @@ func TestWriteAgentPlanFilesCreatesRequiredPlanArtifacts(t *testing.T) {
 			t.Fatalf("%s missing: %v", name, err)
 		}
 	}
+	if _, err := os.Stat(paths["user_review"]); err != nil {
+		t.Fatalf("user_review missing: %v", err)
+	}
 	data, err := os.ReadFile(paths["remote_task_manifest"])
 	if err != nil {
 		t.Fatal(err)
@@ -48,5 +51,8 @@ func TestWriteAgentPlanFilesCreatesRequiredPlanArtifacts(t *testing.T) {
 	}
 	if manifest["plan_id"] != "opln-test" || manifest["external_only"] != true || !strings.HasPrefix(manifest["manifest_hash"].(string), "sha256:") {
 		t.Fatalf("manifest = %#v", manifest)
+	}
+	if manifest["schema_version"] != "exora.remote_task_manifest.v0.1" || manifest["created_at"] == "" {
+		t.Fatalf("manifest schema fields = %#v", manifest)
 	}
 }

@@ -55,9 +55,9 @@ func buildTaskRequirements(query string, args map[string]any, result map[string]
 	requirements := mapFromAny(taskTemplate["requirements"])
 	out := map[string]any{
 		"schema_version": "exora.task_requirements.v0.1",
-		"query":         firstNonEmpty(strings.TrimSpace(query), firstAgentArgString(args, "query", "intent", "q")),
-		"requirements":  requirements,
-		"created_at":    time.Now().UTC().Format(time.RFC3339),
+		"query":          firstNonEmpty(strings.TrimSpace(query), firstAgentArgString(args, "query", "intent", "q")),
+		"requirements":   requirements,
+		"created_at":     time.Now().UTC().Format(time.RFC3339),
 	}
 	copyPlanField(out, taskTemplate, "type")
 	copyPlanField(out, taskTemplate, "goal")
@@ -77,10 +77,10 @@ func buildAgentRequirements(args map[string]any, result map[string]any) map[stri
 	requirements := mapFromAny(taskTemplate["requirements"])
 	out := map[string]any{
 		"schema_version": "exora.agent_requirements.v0.1",
-		"max_sellers":   firstNonNilValue(args["maxCandidates"], args["maxOptions"], args["maxResults"], 5),
-		"constraints":   firstNonNilValue(args["constraints"], map[string]any{}),
-		"capabilities":  inferAgentCapabilities(requirements, args),
-		"created_at":    time.Now().UTC().Format(time.RFC3339),
+		"max_sellers":    firstNonNilValue(args["maxCandidates"], args["maxOptions"], args["maxResults"], 5),
+		"constraints":    firstNonNilValue(args["constraints"], map[string]any{}),
+		"capabilities":   inferAgentCapabilities(requirements, args),
+		"created_at":     time.Now().UTC().Format(time.RFC3339),
 	}
 	if docker := firstNonNilValue(requirements["docker"], args["docker"], nil); docker != nil {
 		out["docker"] = docker
@@ -261,14 +261,14 @@ func writeQuoteReviewFiles(projectPath, planID string, payload map[string]any) (
 		return nil, err
 	}
 	review := map[string]any{
-		"schema_version": "exora.quote_review.v0.1",
-		"plan_id":        planID,
-		"created_at":     time.Now().UTC().Format(time.RFC3339),
-		"quote_count":    payload["quoteCount"],
+		"schema_version":  "exora.quote_review.v0.1",
+		"plan_id":         planID,
+		"created_at":      time.Now().UTC().Format(time.RFC3339),
+		"quote_count":     payload["quoteCount"],
 		"rejection_count": payload["rejectionCount"],
 		"negotiation_ids": payload["negotiationIds"],
-		"next_action":    payload["nextAction"],
-		"summary":        payload["summary"],
+		"next_action":     payload["nextAction"],
+		"summary":         payload["summary"],
 	}
 	if value, ok := payload["negotiations"]; ok {
 		review["negotiations"] = value

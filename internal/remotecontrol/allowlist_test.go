@@ -15,6 +15,7 @@ func TestAllowedBlocksSensitiveRemoteDownloads(t *testing.T) {
 		{"GET", "/v1/wallet"},
 		{"GET", "/v1/dispute-evidence?taskId=task_1"},
 		{"POST", "/v1/agent/search-sellers"},
+		{"GET", "/v1/market/rail-cards"},
 		{"POST", "/v1/agent/runs"},
 		{"GET", "/v1/agent/runs"},
 		{"GET", "/v1/agent/runs/arun_1"},
