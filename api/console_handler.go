@@ -8,6 +8,7 @@ import (
 	"github.com/exora-dock/exora-dock/internal/negotiation"
 	"github.com/exora-dock/exora-dock/internal/orderplan"
 	"github.com/exora-dock/exora-dock/internal/payment"
+	"github.com/exora-dock/exora-dock/internal/samplemarket"
 	"github.com/exora-dock/exora-dock/internal/task"
 	"github.com/exora-dock/exora-dock/internal/workrun"
 )
@@ -103,7 +104,7 @@ func (h *Handler) safeMarketRail() any {
 	if h.agentCards == nil {
 		return nil
 	}
-	return h.buildMarketRailCards()
+	return samplemarket.RailCards(h.agentCards)
 }
 
 func (h *Handler) safeOrderPlans() any {

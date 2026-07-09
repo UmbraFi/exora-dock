@@ -312,6 +312,7 @@ type TransactionSnapshotRecord = {
 type PinAction =
   | { kind: 'select_plan'; planId: string; optionId: string }
   | { kind: 'approve'; approvalId: string }
+  | { kind: 'gpu_demo_payment' }
 
 type PinStep = {
   action: PinAction
@@ -319,6 +320,72 @@ type PinStep = {
   pin: string
   confirm: string
   error?: string
+}
+
+type GpuDemoStage =
+  | 'idle'
+  | 'ready'
+  | 'thinking'
+  | 'questions'
+  | 'manifest_review'
+  | 'matching'
+  | 'seller_options'
+  | 'seller_confirming'
+  | 'seller_accepted'
+  | 'pin'
+  | 'paid'
+  | 'queued'
+  | 'pulling_image'
+  | 'running'
+  | 'uploading_artifacts'
+  | 'completed'
+
+type GpuDemoSeller = {
+  id: string
+  name: string
+  providerPubkey: string
+  resourceId: string
+  gpu: string
+  vramGb: number
+  region: string
+  price: number
+  eta: string
+  score: number
+  success: string
+  reason: string
+  risk: string
+}
+
+type GpuDemoAnswers = {
+  gpuProfile: string
+  budget: string
+  dataset: string
+  outputs: string
+}
+
+type GpuDemoIds = {
+  base: string
+  workUid: string
+  planId: string
+  orderId: string
+  taskId: string
+  approvalId: string
+  paymentId: string
+  runId: string
+}
+
+type GpuDemoState = {
+  active: boolean
+  stage: GpuDemoStage
+  ids: GpuDemoIds
+  taskText: string
+  projectPath: string
+  projectName: string
+  chatId?: string
+  selectedSellerId?: string
+  answers: GpuDemoAnswers
+  startedAt: string
+  updatedAt: string
 }
 
 type WorkspaceSnapshot = {
@@ -535,6 +602,7 @@ type PwaLinkStatus = {
   expiresAt?: string
   cloudUrl?: string
   dockId?: string
+  clientKind?: string
   deviceCode?: string
   accountId?: string
   tokenPath?: string
@@ -543,6 +611,22 @@ type PwaLinkStatus = {
   linked?: boolean
   daemonRestarted?: boolean
   message?: string
+}
+
+const MVP_DEMO_REMOTE_LINK = true
+const MVP_DEMO_PWA_MESSAGE = 'MVP demo mode: local presentation is already connected. No remote Cloud or PWA scan is required.'
+
+function demoPwaLinkStatus(): PwaLinkStatus {
+  return {
+    status: 'linked',
+    linked: true,
+    userCode: 'LOCAL-MVP',
+    cloudUrl: 'Local MVP demo',
+    expiresAt: 'not required',
+    tokenPath: 'not required',
+    clientKind: 'electron-demo',
+    message: MVP_DEMO_PWA_MESSAGE,
+  }
 }
 
 const app = document.querySelector<HTMLDivElement>('#app')!
@@ -803,6 +887,79 @@ const BUYER_AGENT_SEARCH_DEFAULTS = {
 } as const
 
 const DEFAULT_WORK_FOLDER_NAME = 'AgenStaff'
+const GPU_DEMO_PREFIX = 'gpu-job-demo'
+const GPU_DEMO_TASK = 'Run a GPU inference job for a small evaluation batch. Use one high-memory GPU, keep the budget under 15 USDC, and return results.jsonl, metrics.json, logs.txt, and receipt.json.'
+const GPU_DEMO_STAGE_ORDER: GpuDemoStage[] = [
+  'idle',
+  'ready',
+  'thinking',
+  'questions',
+  'manifest_review',
+  'matching',
+  'seller_options',
+  'seller_confirming',
+  'seller_accepted',
+  'pin',
+  'paid',
+  'queued',
+  'pulling_image',
+  'running',
+  'uploading_artifacts',
+  'completed',
+]
+const GPU_DEMO_DEFAULT_ANSWERS: GpuDemoAnswers = {
+  gpuProfile: 'A6000 48GB or better',
+  budget: '15',
+  dataset: '320 prompt evaluation batch with model outputs to score',
+  outputs: 'results.jsonl, metrics.json, logs.txt, receipt.json',
+}
+const GPU_DEMO_SELLERS: GpuDemoSeller[] = [
+  {
+    id: 'gpu-forge-a6000',
+    name: 'GPU Forge A6000',
+    providerPubkey: 'gpu-forge-a6000',
+    resourceId: 'gpu-a6000-night-window',
+    gpu: 'RTX A6000',
+    vramGb: 48,
+    region: 'US West',
+    price: 12.5,
+    eta: '45 min',
+    score: 94,
+    success: '97%',
+    reason: 'Best budget fit with enough VRAM, CUDA 12, Docker isolation, and artifact hash support.',
+    risk: 'Model download can add a few minutes if the requested weights are not cached.',
+  },
+  {
+    id: 'h100-spot-runner',
+    name: 'H100 Spot Runner',
+    providerPubkey: 'h100-spot-runner',
+    resourceId: 'gpu-h100-spot-25m',
+    gpu: 'H100',
+    vramGb: 80,
+    region: 'US Central',
+    price: 18,
+    eta: '25 min',
+    score: 97,
+    success: '99%',
+    reason: 'Fastest completion and highest memory headroom, but it exceeds the default budget.',
+    risk: 'Spot availability can change before payment confirmation.',
+  },
+  {
+    id: 'lab-node-4090',
+    name: '4090 Lab Node',
+    providerPubkey: 'lab-node-4090',
+    resourceId: 'gpu-4090-lab-node',
+    gpu: 'RTX 4090',
+    vramGb: 24,
+    region: 'US East',
+    price: 8.5,
+    eta: '70 min',
+    score: 87,
+    success: '92%',
+    reason: 'Lowest price, acceptable for smaller batches, with slower runtime and tighter VRAM.',
+    risk: 'May require smaller batch size if the model memory footprint is high.',
+  },
+]
 
 const projectFolderMenuIcons = {
   open: icon(FolderOpen),
@@ -966,6 +1123,10 @@ app.innerHTML = `
               <div class="composer-footer">
                 <button class="composer-action-button local-agent-copy-button" type="button" data-action="copy-local-agent-prompt" aria-label="Copy local agent MCP prompt" title="Copy">${toolbarIcons.copy}</button>
               </div>
+            </div>
+            <div class="local-agent-demo-actions">
+              <button class="secondary gpu-demo-start-button" type="button" data-action="start-gpu-demo">GPU Job Demo</button>
+              <button class="secondary ghost gpu-demo-reset-button" type="button" data-action="reset-gpu-demo">Reset Demo</button>
             </div>
           </section>
           <div class="work-or-divider" aria-hidden="true"><span>or</span></div>
@@ -1772,6 +1933,7 @@ const state: {
   transactionStageDetailCollapsed: Record<string, boolean>
   transactionStageInspectorOpen: boolean
   buyerFirstStepTransition: boolean
+  gpuDemo?: GpuDemoState
   newConversationDraft: boolean
   chatThreads: ChatThread[]
   pinStep?: PinStep
@@ -1810,6 +1972,8 @@ const state: {
   cartOpen: false,
   llmTestStatus: undefined,
   activeSettingsView: 'api',
+  pwaLink: demoPwaLinkStatus(),
+  pwaLinkMessage: MVP_DEMO_PWA_MESSAGE,
   projectFolders: [],
   mcpConnections: [],
   workMcpLeases: [],
@@ -1840,6 +2004,7 @@ const state: {
   transactionStageDetailCollapsed: {},
   transactionStageInspectorOpen: false,
   buyerFirstStepTransition: false,
+  gpuDemo: undefined,
   newConversationDraft: true,
   chatThreads: [],
   seenPlanIds: new Set(),
@@ -1863,6 +2028,7 @@ let pendingTransactionStageScroll: { threadId: string; stageId: string } | undef
 let lastChatFeedRenderKey = ''
 let lastTransactionDetailRenderKey = ''
 let forceChatFeedScrollBottom = false
+const gpuDemoTimers = new Set<number>()
 const chatFeedScrollPositions = new Map<string, number>()
 const chatSaveTimers = new Map<string, number>()
 const chatSaveQueues = new Map<string, Promise<void>>()
@@ -2206,6 +2372,527 @@ function applyDemoTransactionsToState() {
     ...workRunEvents,
     ...(demo.workRunEvents || {}),
   }
+}
+
+function isGpuDemoIdentifier(value?: string) {
+  return String(value || '').startsWith(GPU_DEMO_PREFIX)
+}
+
+function isGpuDemoOrderPlan(plan?: OrderPlan) {
+  return Boolean(plan && isGpuDemoIdentifier(plan.planId))
+}
+
+function isGpuDemoApproval(approval?: Approval) {
+  return Boolean(approval && (isGpuDemoIdentifier(approval.approvalId) || isGpuDemoIdentifier(approval.taskId) || isGpuDemoIdentifier(approval.planId)))
+}
+
+function isGpuDemoTask(task?: Task) {
+  return Boolean(task && (isGpuDemoIdentifier(task.id) || isGpuDemoIdentifier(task.orderId)))
+}
+
+function isGpuDemoPayment(payment?: PaymentRecord) {
+  return Boolean(payment && (isGpuDemoIdentifier(payment.paymentId) || isGpuDemoIdentifier(payment.taskId) || isGpuDemoIdentifier(payment.approvalId)))
+}
+
+function isGpuDemoWorkRun(run?: WorkRun) {
+  return Boolean(run && (isGpuDemoIdentifier(run.runId) || isGpuDemoIdentifier(run.workUid) || isGpuDemoIdentifier(run.entities?.taskId) || isGpuDemoIdentifier(run.entities?.orderPlanId)))
+}
+
+function gpuDemoStageIndex(stage?: GpuDemoStage) {
+  return Math.max(0, GPU_DEMO_STAGE_ORDER.indexOf(stage || 'idle'))
+}
+
+function gpuDemoAtLeast(stage: GpuDemoStage) {
+  const demo = state.gpuDemo
+  return Boolean(demo?.active && gpuDemoStageIndex(demo.stage) >= gpuDemoStageIndex(stage))
+}
+
+function selectedGpuDemoSeller(demo = state.gpuDemo) {
+  return GPU_DEMO_SELLERS.find((seller) => seller.id === demo?.selectedSellerId) || GPU_DEMO_SELLERS[0]
+}
+
+function gpuDemoOptionId(seller: GpuDemoSeller, demo = state.gpuDemo) {
+  return `${demo?.ids.base || GPU_DEMO_PREFIX}-option-${seller.id}`
+}
+
+function gpuDemoSellerFromOption(option?: OrderDraftOption) {
+  if (!option) return undefined
+  return GPU_DEMO_SELLERS.find((seller) => option.optionId === gpuDemoOptionId(seller) || option.providerPubkey === seller.providerPubkey)
+}
+
+function createGpuDemoIds(): GpuDemoIds {
+  const base = `${GPU_DEMO_PREFIX}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+  const planId = `${base}-plan`
+  return {
+    base,
+    workUid: `${base}-work`,
+    planId,
+    orderId: planId,
+    taskId: `${base}-task`,
+    approvalId: `${base}-approval`,
+    paymentId: `${base}-payment`,
+    runId: `${base}-run`,
+  }
+}
+
+function createGpuDemoState(): GpuDemoState {
+  const folder = defaultWorkProjectFolder()
+  const now = new Date().toISOString()
+  return {
+    active: true,
+    stage: 'ready',
+    ids: createGpuDemoIds(),
+    taskText: GPU_DEMO_TASK,
+    projectPath: folder.path,
+    projectName: folder.name,
+    answers: { ...GPU_DEMO_DEFAULT_ANSWERS },
+    startedAt: now,
+    updatedAt: now,
+  }
+}
+
+function clearGpuDemoTimers() {
+  for (const timer of gpuDemoTimers) window.clearTimeout(timer)
+  gpuDemoTimers.clear()
+}
+
+function scheduleGpuDemo(callback: () => void, delayMs: number) {
+  const timer = window.setTimeout(() => {
+    gpuDemoTimers.delete(timer)
+    callback()
+  }, delayMs)
+  gpuDemoTimers.add(timer)
+}
+
+function removeGpuDemoRecordsFromState() {
+  state.orderPlans = state.orderPlans.filter((item) => !isGpuDemoOrderPlan(item))
+  state.approvals = state.approvals.filter((item) => !isGpuDemoApproval(item))
+  state.tasks = state.tasks.filter((item) => !isGpuDemoTask(item))
+  state.payments = state.payments.filter((item) => !isGpuDemoPayment(item))
+  state.workRuns = state.workRuns.filter((item) => !isGpuDemoWorkRun(item))
+  for (const runId of Object.keys(state.workRunEvents)) {
+    if (isGpuDemoIdentifier(runId)) delete state.workRunEvents[runId]
+  }
+}
+
+function gpuDemoTaskType(demo: GpuDemoState) {
+  return demo.answers.gpuProfile.toLowerCase().includes('h100') ? 'compute.gpu.h100_inference' : 'compute.gpu.inference'
+}
+
+function gpuDemoSelectedPrice(demo: GpuDemoState) {
+  return selectedGpuDemoSeller(demo).price
+}
+
+function gpuDemoTaskStatus(stage: GpuDemoStage): Task['status'] {
+  if (stage === 'completed') return 'completed'
+  if (stage === 'pulling_image' || stage === 'running' || stage === 'uploading_artifacts') return 'running'
+  if (stage === 'paid' || stage === 'queued') return 'consented'
+  return 'pending_consent'
+}
+
+function gpuDemoRunStatus(stage: GpuDemoStage) {
+  if (stage === 'completed') return 'completed'
+  if (stage === 'pulling_image' || stage === 'running' || stage === 'uploading_artifacts') return 'running'
+  return 'queued'
+}
+
+function gpuDemoCurrentStep(stage: GpuDemoStage) {
+  if (stage === 'pulling_image') return 'submit_worker_job'
+  if (stage === 'running') return 'provider_execution'
+  if (stage === 'uploading_artifacts') return 'fetch_artifacts'
+  if (stage === 'completed') return 'terminal_report'
+  if (stage === 'seller_confirming') return 'seller_valuation'
+  if (stage === 'seller_accepted' || stage === 'pin') return 'wait_owner_approval_payment'
+  if (stage === 'paid' || stage === 'queued') return 'input_transfer'
+  return 'quote_review'
+}
+
+function gpuDemoOrderState(demo: GpuDemoState): NonNullable<OrderPlan['orderState']> | undefined {
+  if (!gpuDemoAtLeast('seller_options')) return undefined
+  const selected = Boolean(demo.selectedSellerId)
+  const stateByStage: Record<GpuDemoStage, string> = {
+    idle: 'plan_first',
+    ready: 'plan_first',
+    thinking: 'plan_first',
+    questions: 'plan_first',
+    manifest_review: 'plan_first',
+    matching: 'cloud_matching',
+    seller_options: 'quote_review',
+    seller_confirming: 'quote_review',
+    seller_accepted: 'order_authorized',
+    pin: 'order_authorized',
+    paid: 'input_transfer',
+    queued: 'input_transfer',
+    pulling_image: 'provider_execution',
+    running: 'provider_execution',
+    uploading_artifacts: 'provider_execution',
+    completed: 'buyer_verification',
+  }
+  const waitingFor = demo.stage === 'seller_confirming'
+    ? 'seller_agent'
+    : demo.stage === 'seller_options'
+      ? 'user_input'
+      : demo.stage === 'completed'
+        ? 'user_input'
+        : gpuDemoAtLeast('paid')
+          ? 'provider_response'
+          : 'buyer_user'
+  return {
+    planId: demo.ids.planId,
+    orderId: demo.ids.orderId,
+    taskId: gpuDemoAtLeast('seller_accepted') ? demo.ids.taskId : undefined,
+    state: stateByStage[demo.stage],
+    owner: demo.stage === 'seller_confirming' ? 'seller_agent' : gpuDemoAtLeast('paid') ? 'provider_docker' : 'buyer_agent',
+    waitingFor,
+    updatedAt: demo.updatedAt,
+    terminalReason: undefined,
+  }
+}
+
+function gpuDemoPlanEvents(demo: GpuDemoState): NonNullable<OrderPlan['events']> {
+  const seller = selectedGpuDemoSeller(demo)
+  const events: NonNullable<OrderPlan['events']> = [
+    { time: demo.startedAt, type: 'mcp_prompt_copied', message: 'MCP prompt copied for the local GPU job demo.' },
+    { time: demo.updatedAt, type: 'buyer_manifest_ready', message: `GPU job manifest requires ${demo.answers.gpuProfile}, budget ${demo.answers.budget} USDC, outputs ${demo.answers.outputs}.` },
+  ]
+  if (gpuDemoAtLeast('seller_options')) events.push({ time: demo.updatedAt, type: 'seller_quotes_ready', message: 'Three local demo sellers returned fixed quotes.' })
+  if (demo.selectedSellerId) events.push({ time: demo.updatedAt, type: 'seller_selected', message: `${seller.name} selected by the buyer.` })
+  if (gpuDemoAtLeast('seller_accepted')) events.push({ time: demo.updatedAt, type: 'seller_confirmed', message: `${seller.name} accepted the local demo job.` })
+  if (gpuDemoAtLeast('paid')) events.push({ time: demo.updatedAt, type: 'payment_confirmed', message: 'Simulated payment proof was recorded locally.' })
+  if (gpuDemoAtLeast('completed')) events.push({ time: demo.updatedAt, type: 'terminal_report', message: 'Result files, logs, metrics, and receipt are ready.' })
+  return events.slice(-6)
+}
+
+function gpuDemoWorkRunEvents(demo: GpuDemoState): WorkRunEvent[] {
+  const runId = demo.ids.runId
+  const events: WorkRunEvent[] = [
+    {
+      eventId: `${runId}-payment`,
+      type: 'verify_payment_evidence',
+      runId,
+      workUid: demo.ids.workUid,
+      step: 'Payment proof',
+      status: gpuDemoAtLeast('paid') ? 'confirmed_simulated' : 'pending',
+      summary: gpuDemoAtLeast('paid') ? 'Local demo payment proof is confirmed; no real chain payment was made.' : 'Waiting for owner PIN.',
+      createdAt: demo.updatedAt,
+    },
+  ]
+  if (gpuDemoAtLeast('queued')) {
+    events.push({
+      eventId: `${runId}-queued`,
+      type: 'submit_worker_job',
+      runId,
+      workUid: demo.ids.workUid,
+      step: 'Queue job',
+      status: 'queued',
+      summary: 'GPU job queued with Docker isolation and bounded inputs.',
+      createdAt: demo.updatedAt,
+    })
+  }
+  if (gpuDemoAtLeast('pulling_image')) {
+    events.push({
+      eventId: `${runId}-pull`,
+      type: 'pulling_image',
+      runId,
+      workUid: demo.ids.workUid,
+      step: 'Pull image',
+      status: 'running',
+      summary: 'Worker is preparing the CUDA runtime image and cached model files.',
+      createdAt: demo.updatedAt,
+    })
+  }
+  if (gpuDemoAtLeast('running')) {
+    events.push({
+      eventId: `${runId}-running`,
+      type: 'provider_execution',
+      runId,
+      workUid: demo.ids.workUid,
+      step: 'GPU execution',
+      status: 'running',
+      summary: 'Inference batch is running and writing checkpointed outputs.',
+      createdAt: demo.updatedAt,
+    })
+  }
+  if (gpuDemoAtLeast('uploading_artifacts')) {
+    events.push({
+      eventId: `${runId}-uploading`,
+      type: 'fetch_artifacts',
+      runId,
+      workUid: demo.ids.workUid,
+      step: 'Upload artifacts',
+      status: 'running',
+      summary: 'Seller is packaging results, metrics, logs, receipt, and hashes.',
+      createdAt: demo.updatedAt,
+    })
+  }
+  if (gpuDemoAtLeast('completed')) {
+    events.push({
+      eventId: `${runId}-terminal`,
+      type: 'terminal_report',
+      runId,
+      workUid: demo.ids.workUid,
+      step: 'Terminal report',
+      status: 'completed',
+      summary: 'Artifact manifest, receipt, and cleanup evidence were returned to the buyer.',
+      createdAt: demo.updatedAt,
+    })
+  }
+  return events.slice(-6)
+}
+
+function gpuDemoTransactionBundle(demo = state.gpuDemo): DemoTransactionBundle {
+  const bundle: DemoTransactionBundle = { orderPlans: [], approvals: [], tasks: [], payments: [], workRuns: [], workRunEvents: {} }
+  if (!demo?.active || !gpuDemoAtLeast('seller_options')) return bundle
+  const seller = selectedGpuDemoSeller(demo)
+  const selected = Boolean(demo.selectedSellerId)
+  const selectedOptionId = selected ? gpuDemoOptionId(seller, demo) : undefined
+  const price = gpuDemoSelectedPrice(demo)
+  const stage = demo.stage
+  const hasTask = gpuDemoAtLeast('seller_accepted')
+  const hasPayment = gpuDemoAtLeast('seller_accepted')
+  const hasRun = gpuDemoAtLeast('paid')
+  const options = GPU_DEMO_SELLERS.map((item): OrderDraftOption => ({
+    optionId: gpuDemoOptionId(item, demo),
+    resourceId: item.resourceId,
+    providerPubkey: item.providerPubkey,
+    score: item.score,
+    reason: item.reason,
+    quoteId: `${demo.ids.base}-quote-${item.id}`,
+    realtimeStatus: selected && item.id === demo.selectedSellerId ? 'selected' : 'quoted',
+    expiresAt: 'local demo',
+    priceSnapshot: { pricePerUnit: item.price, billingUnit: 'job', currency: 'USDC', availability: item.eta },
+    draft: {
+      goal: demo.taskText,
+      requirements: {
+        type: gpuDemoTaskType(demo),
+        minVramGb: item.vramGb,
+        gpuModel: item.gpu,
+        outputs: demo.answers.outputs,
+      },
+    },
+  }))
+  bundle.orderPlans?.push({
+    planId: demo.ids.planId,
+    query: 'GPU inference job demo',
+    projectPath: demo.projectPath,
+    workUid: demo.ids.workUid,
+    requesterPubkey: 'gpu-demo-buyer-owner',
+    status: selected ? 'selected' : 'pending_selection',
+    agentId: 'external-mcp-gpu-demo-agent',
+    selectedOptionId,
+    taskId: hasTask ? demo.ids.taskId : undefined,
+    approvalId: hasTask ? demo.ids.approvalId : undefined,
+    paymentId: hasPayment ? demo.ids.paymentId : undefined,
+    providerJobId: hasRun ? `${demo.ids.base}-provider-job` : undefined,
+    normalizedQuery: { type: gpuDemoTaskType(demo), minVramGb: seller.vramGb, minGpuCount: 1, query: demo.answers.gpuProfile, region: seller.region },
+    nextAction: gpuDemoNextAction(demo),
+    createdAt: demo.startedAt,
+    updatedAt: demo.updatedAt,
+    expiresAt: 'local demo',
+    options,
+    candidates: GPU_DEMO_SELLERS.map((item) => ({
+      optionId: gpuDemoOptionId(item, demo),
+      resourceId: item.resourceId,
+      providerPubkey: item.providerPubkey,
+      status: selected && item.id === demo.selectedSellerId ? 'selected' : 'quoted',
+      message: item.reason,
+      quoteId: `${demo.ids.base}-quote-${item.id}`,
+      priceAmount: item.price,
+      currency: 'USDC',
+      expiresAt: 'local demo',
+      updatedAt: demo.updatedAt,
+    })),
+    events: gpuDemoPlanEvents(demo),
+    orderState: gpuDemoOrderState(demo),
+  })
+  if (hasTask) {
+    const taskStatus = gpuDemoTaskStatus(stage)
+    bundle.approvals?.push({
+      approvalId: demo.ids.approvalId,
+      taskId: demo.ids.taskId,
+      planId: demo.ids.planId,
+      action: 'Authorize GPU job manifest and simulated payment',
+      agentId: 'external-mcp-gpu-demo-agent',
+      providerPubkey: seller.providerPubkey,
+      amount: { value: price, currency: 'USDC' },
+      quote: { priceAmount: price, currency: 'USDC', estimatedSeconds: etaMinutes(seller.eta) * 60, notes: seller.reason },
+      fileScope: [{ name: 'gpu-eval-inputs.zip', sizeBytes: 2140000, contentType: 'application/zip' }],
+      status: gpuDemoAtLeast('paid') ? 'approved' : 'pending',
+      paymentRequired: true,
+      riskSummary: 'Local demo only: no cloud match, no real chain payment, no real Docker or GPU execution.',
+      createdAt: demo.updatedAt,
+      expiresAt: 'local demo',
+    })
+    bundle.payments?.push({
+      paymentId: demo.ids.paymentId,
+      approvalId: demo.ids.approvalId,
+      taskId: demo.ids.taskId,
+      providerPubkey: seller.providerPubkey,
+      amount: price,
+      currency: 'USDC',
+      mode: 'simulated_escrow',
+      status: gpuDemoAtLeast('paid') ? 'confirmed_simulated' : 'pending_pin',
+      proofRef: gpuDemoAtLeast('paid') ? `${demo.ids.base}-local-payment-proof` : 'waiting for demo PIN',
+      createdAt: demo.updatedAt,
+      updatedAt: demo.updatedAt,
+      confirmedAt: gpuDemoAtLeast('paid') ? demo.updatedAt : undefined,
+    })
+    bundle.tasks?.push({
+      id: demo.ids.taskId,
+      orderId: demo.ids.orderId,
+      projectPath: demo.projectPath,
+      workUid: demo.ids.workUid,
+      requesterPubkey: 'gpu-demo-buyer-owner',
+      agentId: 'external-mcp-gpu-demo-agent',
+      type: gpuDemoTaskType(demo),
+      goal: demo.taskText,
+      requirements: {
+        gpu: demo.answers.gpuProfile,
+        dataset: demo.answers.dataset,
+        outputs: demo.answers.outputs,
+        acceptance: 'Artifact files exist, hashes match, logs summarize runtime, and receipt records cleanup.',
+      },
+      inputFiles: [{ name: 'gpu-eval-inputs.zip', sizeBytes: 2140000, contentType: 'application/zip', sha256: `${demo.ids.base}-input-hash` }],
+      budget: { maxAmount: Number(demo.answers.budget) || price, currency: 'USDC' },
+      expectedOutputs: ['result.md', 'metrics.json', 'logs.txt', 'receipt.json'],
+      status: taskStatus,
+      providerPubkey: seller.providerPubkey,
+      quote: {
+        id: `${demo.ids.base}-quote-${seller.id}`,
+        providerPubkey: seller.providerPubkey,
+        priceAmount: price,
+        currency: 'USDC',
+        estimatedSeconds: etaMinutes(seller.eta) * 60,
+        notes: seller.reason,
+        createdAt: demo.updatedAt,
+      },
+      approvalRequestId: demo.ids.approvalId,
+      artifacts: gpuDemoAtLeast('completed') ? [
+        { name: 'result.md', contentType: 'text/markdown', sizeBytes: 18432, sha256: `${demo.ids.base}-result-hash` },
+        { name: 'metrics.json', contentType: 'application/json', sizeBytes: 4096, sha256: `${demo.ids.base}-metrics-hash` },
+        { name: 'logs.txt', contentType: 'text/plain', sizeBytes: 12288, sha256: `${demo.ids.base}-logs-hash` },
+        { name: 'receipt.json', contentType: 'application/json', sizeBytes: 2048, sha256: `${demo.ids.base}-receipt-hash` },
+      ] : undefined,
+      artifactHashes: gpuDemoAtLeast('completed') ? {
+        'result.md': `${demo.ids.base}-result-hash`,
+        'metrics.json': `${demo.ids.base}-metrics-hash`,
+        'logs.txt': `${demo.ids.base}-logs-hash`,
+        'receipt.json': `${demo.ids.base}-receipt-hash`,
+      } : undefined,
+      createdAt: demo.updatedAt,
+      updatedAt: demo.updatedAt,
+      consentedAt: gpuDemoAtLeast('paid') ? demo.updatedAt : undefined,
+      claimedAt: gpuDemoAtLeast('running') ? demo.updatedAt : undefined,
+      completedAt: gpuDemoAtLeast('completed') ? demo.updatedAt : undefined,
+    })
+  }
+  if (hasRun) {
+    bundle.workRuns?.push({
+      schemaVersion: 'gpu-demo.v1',
+      runId: demo.ids.runId,
+      workUid: demo.ids.workUid,
+      projectPath: demo.projectPath,
+      controller: 'seller-gpu-demo-agent',
+      status: gpuDemoRunStatus(stage),
+      currentStep: gpuDemoCurrentStep(stage),
+      nextAction: gpuDemoNextAction(demo),
+      intent: demo.taskText,
+      summary: 'Local simulated GPU provider execution for the first MCP demo.',
+      entities: {
+        orderPlanId: demo.ids.planId,
+        taskId: demo.ids.taskId,
+        approvalId: demo.ids.approvalId,
+        paymentId: demo.ids.paymentId,
+        providerJobId: `${demo.ids.base}-provider-job`,
+        workerId: `${demo.ids.base}-worker`,
+      },
+      activeWorker: gpuDemoAtLeast('completed') ? undefined : {
+        workerId: `${demo.ids.base}-worker`,
+        type: 'docker',
+        status: gpuDemoRunStatus(stage),
+        providerPubkey: seller.providerPubkey,
+        jobId: `${demo.ids.base}-provider-job`,
+        updatedAt: demo.updatedAt,
+      },
+      createdAt: demo.updatedAt,
+      updatedAt: demo.updatedAt,
+      completedAt: gpuDemoAtLeast('completed') ? demo.updatedAt : undefined,
+    })
+    bundle.workRunEvents = { [demo.ids.runId]: gpuDemoWorkRunEvents(demo) }
+  }
+  return bundle
+}
+
+function etaMinutes(value: string) {
+  const parsed = Number.parseInt(value, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 45
+}
+
+function gpuDemoNextAction(demo: GpuDemoState) {
+  switch (demo.stage) {
+    case 'ready':
+      return 'Copy the MCP prompt and send it to the external agent.'
+    case 'thinking':
+      return 'External agent is thinking through the task and preparing questions.'
+    case 'questions':
+      return 'Answer the buyer-agent questions.'
+    case 'manifest_review':
+      return 'Review the task checklist before sending it to matching.'
+    case 'matching':
+      return 'Local demo matching is preparing three seller options.'
+    case 'seller_options':
+      return 'Choose one seller option.'
+    case 'seller_confirming':
+      return 'Wait for seller confirmation.'
+    case 'seller_accepted':
+    case 'pin':
+      return 'Enter demo payment PIN.'
+    case 'paid':
+    case 'queued':
+      return 'Wait for provider job pickup.'
+    case 'pulling_image':
+      return 'Worker is preparing the CUDA image.'
+    case 'running':
+      return 'GPU job is running.'
+    case 'uploading_artifacts':
+      return 'Seller is packaging artifacts.'
+    case 'completed':
+      return 'Review result files and receipt.'
+    default:
+      return 'Start the GPU Job Demo.'
+  }
+}
+
+function applyGpuDemoRecordsToState() {
+  removeGpuDemoRecordsFromState()
+  const demo = state.gpuDemo
+  if (!demo?.active) return
+  const bundle = gpuDemoTransactionBundle(demo)
+  state.orderPlans = [...state.orderPlans, ...(bundle.orderPlans || [])]
+  state.approvals = [...state.approvals, ...(bundle.approvals || [])]
+  state.tasks = [...state.tasks, ...(bundle.tasks || [])]
+  state.payments = [...state.payments, ...(bundle.payments || [])]
+  state.workRuns = [...state.workRuns, ...(bundle.workRuns || [])]
+  state.workRunEvents = {
+    ...state.workRunEvents,
+    ...(bundle.workRunEvents || {}),
+  }
+  syncGpuDemoChatThread()
+}
+
+function syncGpuDemoChatThread() {
+  const demo = state.gpuDemo
+  if (!demo?.chatId) return
+  const thread = state.chatThreads.find((item) => item.id === demo.chatId)
+  if (!thread) return
+  thread.projectPath = demo.projectPath
+  thread.status = demo.stage
+  thread.orderId = gpuDemoAtLeast('seller_options') ? demo.ids.orderId : undefined
+  thread.taskIds = gpuDemoAtLeast('seller_accepted') ? [demo.ids.taskId] : []
+  thread.providerPubkey = demo.selectedSellerId ? selectedGpuDemoSeller(demo).providerPubkey : thread.providerPubkey
+  thread.updatedAt = Date.now()
+  state.selectedChatId = thread.id
+  state.selectedWorkThreadId = workThreadIdForChat(thread)
 }
 
 type MvpDemoStage = 'intent' | 'plan' | 'offer' | 'authorize' | 'execute' | 'verify' | 'settlement'
@@ -3074,11 +3761,16 @@ function stopTransactionDetailResize(event?: PointerEvent) {
 function renderChromeControls() {
   applySidebarWidth()
   applyTransactionDetailWidth()
-  fields.appShell.classList.toggle('sidebar-collapsed', state.sidebarCollapsed)
-  fields.sidebarButton.innerHTML = state.sidebarCollapsed ? toolbarIcons.sidebarCollapsed : toolbarIcons.sidebarExpanded
-  fields.sidebarButton.setAttribute('aria-pressed', String(state.sidebarCollapsed))
-  fields.sidebarButton.setAttribute('aria-label', state.sidebarCollapsed ? t('chrome.showSidebar') : t('chrome.hideSidebar'))
-  fields.sidebarButton.setAttribute('title', state.sidebarCollapsed ? t('chrome.showSidebar') : t('chrome.hideSidebar'))
+  const sidebarCollapsed = state.sidebarCollapsed
+  const sidebarCollapsedValue = String(sidebarCollapsed)
+  fields.appShell.classList.toggle('sidebar-collapsed', sidebarCollapsed)
+  if (fields.sidebarButton.dataset.sidebarCollapsed !== sidebarCollapsedValue) {
+    fields.sidebarButton.innerHTML = sidebarCollapsed ? toolbarIcons.sidebarCollapsed : toolbarIcons.sidebarExpanded
+    fields.sidebarButton.dataset.sidebarCollapsed = sidebarCollapsedValue
+  }
+  fields.sidebarButton.setAttribute('aria-pressed', sidebarCollapsedValue)
+  fields.sidebarButton.setAttribute('aria-label', sidebarCollapsed ? t('chrome.showSidebar') : t('chrome.hideSidebar'))
+  fields.sidebarButton.setAttribute('title', sidebarCollapsed ? t('chrome.showSidebar') : t('chrome.hideSidebar'))
   fields.sidebarButton.disabled = false
   fields.cartButton.classList.toggle('active', state.cartOpen)
   fields.cartButton.setAttribute('aria-pressed', String(state.cartOpen))
@@ -4178,6 +4870,10 @@ async function publishAgentCard(role: AgentCardRole, root: ParentNode = fields.d
 }
 
 async function startPwaLink() {
+  if (MVP_DEMO_REMOTE_LINK) {
+    setDemoPwaLinkStatus()
+    return
+  }
   state.pwaLinkMessage = 'Creating PWA link QR...'
   renderPwaLinkStatus()
   try {
@@ -4205,6 +4901,10 @@ async function startPwaLink() {
 }
 
 async function checkPwaLink() {
+  if (MVP_DEMO_REMOTE_LINK) {
+    setDemoPwaLinkStatus()
+    return
+  }
   if (!state.pwaLink?.deviceCode) {
     await startPwaLink()
     return
@@ -4253,6 +4953,13 @@ function pwaLinkErrorMessage(error: unknown) {
     return `${message}. Start Exora Cloud or set cloud_url to a reachable Exora Cloud endpoint, then create a new QR.`
   }
   return `Could not create PWA QR: ${message}`
+}
+
+function setDemoPwaLinkStatus() {
+  clearPwaLinkPoll()
+  state.pwaLink = demoPwaLinkStatus()
+  state.pwaLinkMessage = MVP_DEMO_PWA_MESSAGE
+  renderPwaLinkStatus()
 }
 
 function findAgentCardForm(role: AgentCardRole, root: ParentNode = fields.decisionContent, origin?: Element | null) {
@@ -4537,6 +5244,7 @@ async function refreshWorkspaceNow(options: { quiet?: boolean } = {}) {
     state.workRuns = offline ? previousSnapshot.workRuns : snapshot.workRuns || []
     state.workRunEvents = snapshot.workRunEvents || previousSnapshot.workRunEvents || {}
     applyDemoTransactionsToState()
+    applyGpuDemoRecordsToState()
     const connectionFolders = projectFoldersFromConnections(state.mcpConnections)
     const activityFolders = projectFoldersFromActivity(state.orderPlans, state.tasks)
     const activePath = snapshot.activeProjectFolderPath || state.activeProjectFolderPath
@@ -7553,8 +8261,9 @@ function renderTransactionProgressForSelection(selected: ReturnType<typeof selec
 function renderDecisionPanel() {
   renderViewTabs()
   const selected = selectedObjectForActiveView()
+  const gpuDemoPanel = activeGpuDemoPanel()
 
-  const showingChat = (state.activeView === 'chat' || state.activeView === 'work') && !state.pinStep
+  const showingChat = (state.activeView === 'chat' || state.activeView === 'work') && !state.pinStep && !gpuDemoPanel
   const showingSettings = state.activeView === 'settings' && !state.pinStep
   const hideMainHeading = showingChat || (state.activeView === 'market' && !state.pinStep)
   if (!showingChat) renderTransactionDetailSidebar()
@@ -7587,6 +8296,17 @@ function renderDecisionPanel() {
     fields.decisionStep.textContent = 'Enter PIN'
     fields.decisionContent.innerHTML = renderPinStep(state.pinStep)
     attachPinHandlers()
+    localize(fields.actionView)
+    return
+  }
+
+  if (gpuDemoPanel) {
+    fields.mainKicker.textContent = 'Local Demo'
+    fields.decisionTitle.textContent = gpuDemoPanelTitle()
+    fields.decisionStep.textContent = state.gpuDemo?.stage || 'demo'
+    fields.decisionContent.innerHTML = renderGpuDemoPanel()
+    attachGpuDemoHandlers()
+    renderContextStrip()
     localize(fields.actionView)
     return
   }
@@ -7800,6 +8520,266 @@ function renderPaymentDecision(payment: PaymentRecord) {
       </dl>
     </section>
   `
+}
+
+function activeGpuDemoPanel() {
+  const demo = state.gpuDemo
+  return Boolean(demo?.active && !['idle', 'ready'].includes(demo.stage))
+}
+
+function gpuDemoPanelTitle() {
+  const demo = state.gpuDemo
+  if (!demo) return 'GPU Job Demo'
+  switch (demo.stage) {
+    case 'thinking':
+      return 'Agent Thinking'
+    case 'questions':
+      return 'Agent Questions'
+    case 'manifest_review':
+      return 'Task Checklist'
+    case 'matching':
+      return 'Matching Sellers'
+    case 'seller_options':
+      return 'Choose Seller'
+    case 'seller_confirming':
+      return 'Seller Confirmation'
+    case 'seller_accepted':
+    case 'pin':
+      return 'Payment PIN'
+    case 'completed':
+      return 'Result Files'
+    default:
+      return 'GPU Job Execution'
+  }
+}
+
+function renderGpuDemoPanel() {
+  const demo = state.gpuDemo
+  if (!demo?.active) return ''
+  if (demo.stage === 'thinking') return renderGpuDemoThinking(demo)
+  if (demo.stage === 'questions') return renderGpuDemoQuestions(demo)
+  if (demo.stage === 'manifest_review') return renderGpuDemoManifestReview(demo)
+  if (demo.stage === 'matching') return renderGpuDemoMatching(demo)
+  if (demo.stage === 'seller_options') return renderGpuDemoSellerOptions(demo)
+  if (demo.stage === 'seller_confirming') return renderGpuDemoSellerConfirming(demo)
+  if (demo.stage === 'seller_accepted' || demo.stage === 'pin') return renderGpuDemoSellerAccepted(demo)
+  return renderGpuDemoExecution(demo)
+}
+
+function renderGpuDemoShell(demo: GpuDemoState, body: string, actions = '') {
+  return `
+    <section class="decision-card gpu-demo-panel" data-gpu-demo-stage="${escapeAttr(demo.stage)}">
+      <div class="gpu-demo-head">
+        <div class="decision-summary">
+          <span>GPU Job Demo</span>
+          <strong>${escapeHTML(gpuDemoPanelTitle())}</strong>
+          <small>${escapeHTML(gpuDemoNextAction(demo))}</small>
+        </div>
+        <button class="secondary compact-action" type="button" data-gpu-demo-action="reset">Reset GPU Demo</button>
+      </div>
+      ${renderGpuDemoStageStrip(demo)}
+      ${body}
+      ${actions ? `<div class="decision-actions gpu-demo-actions">${actions}</div>` : ''}
+    </section>
+  `
+}
+
+function renderGpuDemoStageStrip(demo: GpuDemoState) {
+  const steps: Array<{ id: GpuDemoStage; label: string }> = [
+    { id: 'ready', label: 'Prompt' },
+    { id: 'questions', label: 'Questions' },
+    { id: 'manifest_review', label: 'Checklist' },
+    { id: 'seller_options', label: 'Sellers' },
+    { id: 'pin', label: 'PIN' },
+    { id: 'running', label: 'Run' },
+    { id: 'completed', label: 'Results' },
+  ]
+  const activeIndex = gpuDemoStageIndex(demo.stage)
+  return `
+    <div class="gpu-demo-stage-strip">
+      ${steps.map((step) => {
+        const status = activeIndex > gpuDemoStageIndex(step.id) ? 'complete' : activeIndex === gpuDemoStageIndex(step.id) || (step.id === 'running' && ['paid', 'queued', 'pulling_image', 'running', 'uploading_artifacts'].includes(demo.stage)) ? 'active' : 'pending'
+        return `<span class="${status}"><i></i>${escapeHTML(step.label)}</span>`
+      }).join('')}
+    </div>
+  `
+}
+
+function renderGpuDemoThinking(demo: GpuDemoState) {
+  return renderGpuDemoShell(demo, `
+    <div class="gpu-demo-wait">
+      <div class="gpu-demo-spinner" aria-hidden="true"></div>
+      <div>
+        <strong>External agent is reading the MCP prompt.</strong>
+        <p>It is classifying the GPU job, checking missing requirements, and preparing a small set of owner questions.</p>
+      </div>
+    </div>
+  `)
+}
+
+function renderGpuDemoQuestions(demo: GpuDemoState) {
+  const answers = demo.answers
+  return renderGpuDemoShell(demo, `
+    <form class="gpu-demo-question-form" data-gpu-demo-question-form>
+      <label>
+        <span>GPU requirement</span>
+        <select name="gpuProfile">
+          ${['A6000 48GB or better', 'H100 80GB preferred', 'RTX 4090 acceptable'].map((item) => `<option value="${escapeAttr(item)}"${answers.gpuProfile === item ? ' selected' : ''}>${escapeHTML(item)}</option>`).join('')}
+        </select>
+      </label>
+      <label>
+        <span>Max budget (USDC)</span>
+        <input name="budget" type="number" min="1" step="0.5" value="${escapeAttr(answers.budget)}" />
+      </label>
+      <label>
+        <span>Input batch</span>
+        <textarea name="dataset" rows="2">${escapeHTML(answers.dataset)}</textarea>
+      </label>
+      <label>
+        <span>Expected outputs</span>
+        <textarea name="outputs" rows="2">${escapeHTML(answers.outputs)}</textarea>
+      </label>
+      <div class="decision-actions gpu-demo-actions">
+        <button type="submit">Answer Questions</button>
+      </div>
+    </form>
+  `)
+}
+
+function renderGpuDemoManifestReview(demo: GpuDemoState) {
+  const items = [
+    ['Goal', demo.taskText],
+    ['GPU', demo.answers.gpuProfile],
+    ['Budget', `${demo.answers.budget || '15'} USDC max`],
+    ['Inputs', demo.answers.dataset],
+    ['Outputs', demo.answers.outputs],
+    ['Acceptance', 'Files exist, hashes match, logs summarize runtime, receipt confirms cleanup.'],
+    ['Permission boundary', 'No cloud, no real payment, no real Docker/GPU execution in this demo.'],
+  ]
+  return renderGpuDemoShell(demo, `
+    <div class="gpu-demo-manifest">
+      <p>This is the task checklist that the buyer agent would send to matching and seller agents.</p>
+      <dl class="detail-grid gpu-demo-review-grid">
+        ${items.map(([label, value]) => `<div><dt>${escapeHTML(label)}</dt><dd>${escapeHTML(value)}</dd></div>`).join('')}
+      </dl>
+    </div>
+  `, '<button type="button" data-gpu-demo-action="send-manifest">Send To Local Matching</button>')
+}
+
+function renderGpuDemoMatching(demo: GpuDemoState) {
+  return renderGpuDemoShell(demo, `
+    <div class="gpu-demo-wait">
+      <div class="gpu-demo-spinner" aria-hidden="true"></div>
+      <div>
+        <strong>Matching three local demo sellers.</strong>
+        <p>The Electron demo is simulating remote marketplace matching and seller valuation locally.</p>
+      </div>
+    </div>
+  `)
+}
+
+function renderGpuDemoSellerOptions(demo: GpuDemoState) {
+  return renderGpuDemoShell(demo, `
+    <div class="gpu-demo-seller-grid">
+      ${GPU_DEMO_SELLERS.map((seller) => renderGpuDemoSellerCard(demo, seller)).join('')}
+    </div>
+  `)
+}
+
+function renderGpuDemoSellerCard(demo: GpuDemoState, seller: GpuDemoSeller) {
+  const overBudget = seller.price > (Number(demo.answers.budget) || 0)
+  return `
+    <article class="gpu-demo-seller-card ${overBudget ? 'warn' : ''}">
+      <div class="gpu-demo-seller-head">
+        <strong>${escapeHTML(seller.name)}</strong>
+        <span>score ${seller.score}</span>
+      </div>
+      <p>${escapeHTML(seller.reason)}</p>
+      <dl>
+        <div><dt>GPU</dt><dd>${escapeHTML(seller.gpu)} / ${seller.vramGb}GB</dd></div>
+        <div><dt>Price</dt><dd>${trimDisplayNumber(seller.price)} USDC</dd></div>
+        <div><dt>ETA</dt><dd>${escapeHTML(seller.eta)}</dd></div>
+        <div><dt>Success</dt><dd>${escapeHTML(seller.success)}</dd></div>
+      </dl>
+      <small>${escapeHTML(seller.risk)}</small>
+      <button type="button" data-gpu-demo-action="select-seller" data-seller-id="${escapeAttr(seller.id)}">${overBudget ? 'Choose Over Budget' : 'Choose Seller'}</button>
+    </article>
+  `
+}
+
+function renderGpuDemoSellerConfirming(demo: GpuDemoState) {
+  const seller = selectedGpuDemoSeller(demo)
+  return renderGpuDemoShell(demo, `
+    <div class="gpu-demo-wait">
+      <div class="gpu-demo-spinner" aria-hidden="true"></div>
+      <div>
+        <strong>Waiting for ${escapeHTML(seller.name)}.</strong>
+        <p>The seller is confirming queue availability, input boundary, and quote terms before the PIN step opens.</p>
+      </div>
+    </div>
+  `)
+}
+
+function renderGpuDemoSellerAccepted(demo: GpuDemoState) {
+  const seller = selectedGpuDemoSeller(demo)
+  return renderGpuDemoShell(demo, `
+    <div class="gpu-demo-accepted">
+      <strong>${escapeHTML(seller.name)} accepted the job.</strong>
+      <p>Electron will ask for a local demo PIN. This records a simulated escrow proof only and does not touch the real payment PIN or chain payment.</p>
+    </div>
+  `, '<button type="button" data-gpu-demo-action="open-pin">Open PIN</button>')
+}
+
+function renderGpuDemoExecution(demo: GpuDemoState) {
+  const seller = selectedGpuDemoSeller(demo)
+  const steps: Array<{ id: GpuDemoStage; label: string; detail: string }> = [
+    { id: 'paid', label: 'Payment proof', detail: 'Simulated escrow proof confirmed locally.' },
+    { id: 'queued', label: 'Queued', detail: 'Provider job accepted and queued.' },
+    { id: 'pulling_image', label: 'Pulling image', detail: 'Preparing CUDA image and cached model files.' },
+    { id: 'running', label: 'Running', detail: 'Inference batch running with checkpointed outputs.' },
+    { id: 'uploading_artifacts', label: 'Uploading', detail: 'Packaging results, logs, metrics, receipt, and hashes.' },
+    { id: 'completed', label: 'Completed', detail: 'Result bundle is ready for buyer verification.' },
+  ]
+  const files = ['result.md', 'metrics.json', 'logs.txt', 'receipt.json']
+  return renderGpuDemoShell(demo, `
+    <div class="gpu-demo-execution-summary">
+      <strong>${escapeHTML(seller.name)}</strong>
+      <span>${trimDisplayNumber(seller.price)} USDC / ${escapeHTML(seller.eta)} / ${escapeHTML(seller.gpu)}</span>
+    </div>
+    <div class="gpu-demo-progress-list">
+      ${steps.map((step) => {
+        const status = gpuDemoStageIndex(demo.stage) > gpuDemoStageIndex(step.id) || demo.stage === step.id ? 'complete' : 'pending'
+        const current = demo.stage === step.id || (step.id === 'paid' && demo.stage === 'queued')
+        return `
+          <div class="${status}${current ? ' current' : ''}">
+            <span aria-hidden="true"></span>
+            <div><strong>${escapeHTML(step.label)}</strong><small>${escapeHTML(step.detail)}</small></div>
+          </div>
+        `
+      }).join('')}
+    </div>
+    ${demo.stage === 'completed' ? `
+      <div class="gpu-demo-files">
+        ${files.map((file) => `<article><strong>${escapeHTML(file)}</strong><span>${escapeHTML(`${demo.ids.base}-${file.replace(/[^a-z0-9]/gi, '-').toLowerCase()}-hash`)}</span></article>`).join('')}
+      </div>
+    ` : ''}
+  `)
+}
+
+function attachGpuDemoHandlers(container: ParentNode = fields.decisionContent) {
+  container.querySelectorAll<HTMLButtonElement>('[data-gpu-demo-action]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const action = button.dataset.gpuDemoAction
+      if (action === 'reset') resetGpuJobDemo()
+      if (action === 'send-manifest') startGpuDemoMatching()
+      if (action === 'select-seller') chooseGpuDemoSeller(button.dataset.sellerId || '')
+      if (action === 'open-pin') openGpuDemoPin()
+    })
+  })
+  container.querySelector<HTMLFormElement>('[data-gpu-demo-question-form]')?.addEventListener('submit', (event) => {
+    event.preventDefault()
+    submitGpuDemoQuestions(event.currentTarget as HTMLFormElement)
+  })
 }
 
 function renderAgentCardEditor(role: AgentCardRole) {
@@ -9154,6 +10134,11 @@ function updatePinGrid(selector: string, value: string) {
 }
 
 async function chooseOrderOption(plan: OrderPlan, option: OrderDraftOption) {
+  if (isGpuDemoOrderPlan(plan)) {
+    const seller = gpuDemoSellerFromOption(option)
+    if (seller) chooseGpuDemoSeller(seller.id)
+    return
+  }
   const projectPath = projectPathForPlan(plan)
   setProjectFolderContext(projectPath)
   state.expandedProjectFolderPaths.add(projectPathKey(projectPath))
@@ -9207,6 +10192,10 @@ async function submitPinStep() {
 
   setBusy(true)
   try {
+    if (step.action.kind === 'gpu_demo_payment') {
+      completeGpuDemoPayment(step.pin)
+      return
+    }
     if (step.setup) {
       await invoke('set_payment_pin', { input: { pin: step.pin } })
     }
@@ -10995,9 +11984,10 @@ async function run(action: () => Promise<unknown>, success?: string) {
 
 function renderLocalAgentPromptControls() {
   const ready = Boolean(state.appStatus?.mcpCommand && state.appStatus.discoveryPath)
+  const demoReady = Boolean(state.gpuDemo?.active)
   app.querySelectorAll<HTMLButtonElement>('[data-action="copy-local-agent-prompt"]').forEach((button) => {
-    button.disabled = state.busy || !ready
-    button.setAttribute('title', uiText(ready ? 'Copy local agent MCP prompt' : 'Starting local Dock'))
+    button.disabled = state.busy || (!ready && !demoReady)
+    button.setAttribute('title', uiText(demoReady ? 'Copy GPU demo MCP prompt' : ready ? 'Copy local agent MCP prompt' : 'Starting local Dock'))
   })
 }
 
@@ -11106,6 +12096,10 @@ function enterBuyerMCPHandoff(task: string, work: WorkMCPContext) {
 }
 
 async function copyLocalAgentPrompt(source: 'mcp-card' | 'composer' = 'mcp-card') {
+  if (source === 'mcp-card' && state.gpuDemo?.active) {
+    await copyGpuDemoPrompt()
+    return
+  }
   const task = localAgentPromptTask(source)
   if (!state.appStatus?.mcpCommand || !state.appStatus.discoveryPath) {
     showToast(t('toast.refreshRuntimeBeforePrompt'))
@@ -11616,6 +12610,356 @@ function startNewConversation(folder: ProjectFolder = defaultWorkProjectFolder()
   window.setTimeout(() => agentQuery.focus(), 0)
 }
 
+function startGpuJobDemo() {
+  resetGpuJobDemo({ quiet: true })
+  const demo = createGpuDemoState()
+  state.gpuDemo = demo
+  state.workOrderSide = 'buyer'
+  state.marketOrderSide = 'buyer'
+  state.sellerWorkspaceMode = 'transactions'
+  setProjectFolders([{ name: demo.projectName, path: demo.projectPath }, ...state.projectFolders], demo.projectPath)
+  state.expandedProjectFolderPaths.add(projectPathKey(demo.projectPath))
+  fields.localAgentTask.value = demo.taskText
+  agentQuery.value = ''
+  setActiveView('chat')
+  triggerBuyerFirstStepTransition()
+  ensureGpuDemoThread()
+  applyGpuDemoRecordsToState()
+  renderAll()
+  window.setTimeout(() => app.querySelector<HTMLButtonElement>('[data-action="copy-local-agent-prompt"][data-copy-source="mcp-card"], [data-action="copy-local-agent-prompt"]:not([data-copy-source])')?.focus(), 0)
+  showToast('GPU Job Demo ready. Copy the MCP prompt to start.')
+}
+
+function resetGpuJobDemo(options: { quiet?: boolean } = {}) {
+  clearGpuDemoTimers()
+  const demo = state.gpuDemo
+  if (demo?.chatId) state.chatThreads = state.chatThreads.filter((thread) => thread.id !== demo.chatId)
+  if (demo?.ids.base) {
+    state.chatThreads = state.chatThreads.filter((thread) => thread.orderId !== demo.ids.orderId && !thread.taskIds?.includes(demo.ids.taskId))
+  }
+  removeGpuDemoRecordsFromState()
+  state.gpuDemo = undefined
+  if (state.pinStep?.action.kind === 'gpu_demo_payment') state.pinStep = undefined
+  if (state.selectedId && isGpuDemoIdentifier(state.selectedId)) state.selectedId = undefined
+  if (state.selectedWorkThreadId && isGpuDemoIdentifier(state.selectedWorkThreadId)) state.selectedWorkThreadId = undefined
+  state.newConversationDraft = true
+  fields.localAgentTask.value = GPU_DEMO_TASK
+  agentQuery.value = ''
+  setActiveView('chat')
+  scheduleSaveAppSettings()
+  renderAll()
+  if (!options.quiet) showToast('GPU Job Demo reset.')
+}
+
+async function copyGpuDemoPrompt() {
+  if (!state.gpuDemo?.active) startGpuJobDemo()
+  const demo = state.gpuDemo
+  if (!demo) return
+  const task = localAgentTaskFromInput(fields.localAgentTask.value) || demo.taskText || GPU_DEMO_TASK
+  demo.taskText = task
+  demo.updatedAt = new Date().toISOString()
+  fields.localAgentTask.value = task
+  const prompt = composeGpuDemoPrompt(demo)
+  await navigator.clipboard.writeText(prompt)
+  ensureGpuDemoThread()
+  pushMessage({
+    role: 'system',
+    text: `GPU demo MCP prompt copied for Work UID ${shortID(demo.ids.workUid)}. Waiting for the external local agent to inspect the task.`,
+    meta: 'MCP Handoff',
+  })
+  pushMessage({
+    role: 'assistant',
+    actor: 'buyer_agent',
+    text: 'I received the GPU job MCP handoff. I will classify the request, identify missing constraints, then ask the owner only the questions needed to build a seller-facing task checklist.',
+    meta: 'External Agent',
+  })
+  setGpuDemoStage('thinking')
+  scheduleGpuDemo(() => {
+    const current = state.gpuDemo
+    if (!current || current.ids.base !== demo.ids.base || current.stage !== 'thinking') return
+    pushMessage({
+      role: 'assistant',
+      actor: 'buyer_agent',
+      text: 'I need four details before matching sellers: GPU profile, max budget, input batch description, and output files.',
+      meta: 'Agent Questions',
+    })
+    setGpuDemoStage('questions')
+  }, 1100)
+  showToast('GPU demo MCP prompt copied.')
+}
+
+function composeGpuDemoPrompt(demo: GpuDemoState) {
+  const discoveryPath = state.appStatus?.discoveryPath || 'Local MVP demo discovery manifest (Electron-only)'
+  const mcpCommand = state.appStatus?.mcpCommand || 'exora-dockd mcp <local-demo-config>'
+  return [
+    'External agent instructions for Exora Dock GPU Job Demo:',
+    '',
+    'You are demonstrating a pure-local Exora Dock buyer flow. Use this prompt as if you were an external agent connected through MCP, but do not call Exora Cloud, do not approve payments, and do not start a real Docker or GPU job.',
+    '',
+    'Connect to the local Dock control plane:',
+    `1. Discovery manifest: ${discoveryPath}`,
+    `2. MCP command: ${mcpCommand}`,
+    '3. Start from the buyer work flow: understand the task, ask owner questions, build a seller-facing checklist, wait for owner review, then match sellers.',
+    '',
+    `Work UID: ${demo.ids.workUid}`,
+    `AgenStaff folder: ${demo.projectPath}`,
+    'Demo boundaries:',
+    '- Seller matching is fixed local demo data.',
+    '- Seller confirmation is simulated locally.',
+    '- PIN entry records only a simulated payment proof.',
+    '- GPU execution is a scripted local progress sequence.',
+    '- Return artifact names and hashes only; do not access real private files.',
+    '',
+    'Required demo story:',
+    '1. Think about the task and ask 2-4 concise owner questions.',
+    '2. Convert the answers into a task checklist for other agents.',
+    '3. Present three sellers and wait for owner selection.',
+    '4. Wait for seller confirmation, then ask Dock for owner PIN/payment.',
+    '5. Report queued, pulling image, running, uploading artifacts, completed.',
+    '',
+    'User task:',
+    demo.taskText,
+  ].join('\n')
+}
+
+function ensureGpuDemoThread() {
+  const demo = state.gpuDemo
+  if (!demo) return ensureChatThread()
+  let thread = demo.chatId ? state.chatThreads.find((item) => item.id === demo.chatId) : undefined
+  if (!thread) {
+    thread = createChatThread({
+      title: 'GPU job MCP demo',
+      status: demo.stage,
+      projectPath: demo.projectPath,
+      orderId: gpuDemoAtLeast('seller_options') ? demo.ids.orderId : undefined,
+      taskIds: gpuDemoAtLeast('seller_accepted') ? [demo.ids.taskId] : [],
+      participants: ['buyer_human', 'buyer_agent', 'seller_agent'],
+    })
+    demo.chatId = thread.id
+  }
+  thread.title = 'GPU job MCP demo'
+  thread.status = demo.stage
+  thread.projectPath = demo.projectPath
+  thread.orderId = gpuDemoAtLeast('seller_options') ? demo.ids.orderId : undefined
+  thread.taskIds = gpuDemoAtLeast('seller_accepted') ? [demo.ids.taskId] : []
+  thread.providerPubkey = demo.selectedSellerId ? selectedGpuDemoSeller(demo).providerPubkey : thread.providerPubkey
+  thread.updatedAt = Date.now()
+  state.selectedChatId = thread.id
+  state.selectedWorkThreadId = workThreadIdForChat(thread)
+  state.newConversationDraft = false
+  scheduleSaveChatThread(thread)
+  return thread
+}
+
+function setGpuDemoStage(stage: GpuDemoStage) {
+  const demo = state.gpuDemo
+  if (!demo) return
+  demo.stage = stage
+  demo.updatedAt = new Date().toISOString()
+  ensureGpuDemoThread()
+  applyGpuDemoRecordsToState()
+  renderAll()
+}
+
+function submitGpuDemoQuestions(form: HTMLFormElement) {
+  const demo = state.gpuDemo
+  if (!demo) return
+  const data = new FormData(form)
+  const gpuProfile = String(data.get('gpuProfile') || '').trim() || GPU_DEMO_DEFAULT_ANSWERS.gpuProfile
+  const budget = String(data.get('budget') || '').trim() || GPU_DEMO_DEFAULT_ANSWERS.budget
+  const dataset = String(data.get('dataset') || '').trim() || GPU_DEMO_DEFAULT_ANSWERS.dataset
+  const outputs = String(data.get('outputs') || '').trim() || GPU_DEMO_DEFAULT_ANSWERS.outputs
+  demo.answers = { gpuProfile, budget, dataset, outputs }
+  demo.updatedAt = new Date().toISOString()
+  ensureGpuDemoThread()
+  pushMessage({
+    role: 'user',
+    actor: 'buyer_human',
+    text: `Answers: GPU ${gpuProfile}; budget ${budget} USDC; input ${dataset}; outputs ${outputs}.`,
+    meta: 'Owner Answers',
+  })
+  pushMessage({
+    role: 'assistant',
+    actor: 'buyer_agent',
+    text: 'I converted those answers into a seller-facing task checklist. Review it before I send the local demo request to matching.',
+    meta: 'Task Checklist',
+  })
+  setGpuDemoStage('manifest_review')
+}
+
+function startGpuDemoMatching() {
+  const demo = state.gpuDemo
+  if (!demo) return
+  ensureGpuDemoThread()
+  pushMessage({
+    role: 'assistant',
+    actor: 'buyer_agent',
+    text: 'Sending the checklist to local demo matching. I will return three seller agents with fixed quotes, ETA, VRAM, success rate, and fit reason.',
+    meta: 'Matching',
+  })
+  setGpuDemoStage('matching')
+  scheduleGpuDemo(() => {
+    const current = state.gpuDemo
+    if (!current || current.ids.base !== demo.ids.base || current.stage !== 'matching') return
+    setGpuDemoStage('seller_options')
+    state.selectedId = selectionId('plan', current.ids.planId)
+    state.selectedWorkThreadId = workThreadIdForPlan(state.orderPlans.find((plan) => plan.planId === current.ids.planId) || gpuDemoTransactionBundle(current).orderPlans?.[0]!)
+    pushMessage({
+      role: 'assistant',
+      actor: 'buyer_agent',
+      text: 'Three seller agents matched. Choose one in the seller options panel.',
+      meta: 'Seller Options',
+      result: gpuDemoMarketSearchResult(current),
+    })
+    renderAll()
+  }, 1000)
+}
+
+function gpuDemoMarketSearchResult(demo: GpuDemoState): MarketSearchResult {
+  return {
+    normalizedQuery: {
+      type: gpuDemoTaskType(demo),
+      minGpuCount: 1,
+      minVramGb: selectedGpuDemoSeller(demo).vramGb,
+      query: demo.answers.gpuProfile,
+    },
+    candidates: GPU_DEMO_SELLERS.map((seller): SellerCandidate => ({
+      providerPubkey: seller.providerPubkey,
+      score: seller.score,
+      reasons: [seller.reason, seller.risk],
+      resource: {
+        id: seller.resourceId,
+        name: seller.name,
+        type: 'gpu_worker',
+        summary: `${seller.gpu}, ${seller.vramGb}GB VRAM, ${seller.region}, ETA ${seller.eta}`,
+        pricePerUnit: seller.price,
+        billingUnit: 'job',
+        reputation: seller.score,
+        spec: { vramGb: seller.vramGb, gpuCount: 1, gpuModel: seller.gpu, region: seller.region, runtime: seller.eta },
+      },
+    })),
+    orderDraftOptions: GPU_DEMO_SELLERS.map((seller): OrderDraftOption => ({
+      optionId: gpuDemoOptionId(seller, demo),
+      resourceId: seller.resourceId,
+      providerPubkey: seller.providerPubkey,
+      score: seller.score,
+      reason: seller.reason,
+      expiresAt: 'local demo',
+      priceSnapshot: { pricePerUnit: seller.price, billingUnit: 'job', currency: 'USDC', availability: seller.eta },
+      draft: {
+        goal: demo.taskText,
+        requirements: { gpu: seller.gpu, vramGb: seller.vramGb, outputs: demo.answers.outputs },
+      },
+    })),
+    selectionRequest: { planId: demo.ids.planId, status: 'pending_selection', expiresAt: 'local demo', nextAction: 'Choose one seller option.' },
+    summary: 'Local demo matching returned three fixed GPU seller agents.',
+    nextAction: 'Choose a seller, then wait for seller confirmation.',
+  }
+}
+
+function chooseGpuDemoSeller(sellerId: string) {
+  const demo = state.gpuDemo
+  const seller = GPU_DEMO_SELLERS.find((item) => item.id === sellerId)
+  if (!demo || !seller) return
+  demo.selectedSellerId = seller.id
+  demo.updatedAt = new Date().toISOString()
+  ensureGpuDemoThread()
+  pushMessage({
+    role: 'user',
+    actor: 'buyer_human',
+    text: `Choose seller: ${seller.name} at ${trimDisplayNumber(seller.price)} USDC, ETA ${seller.eta}.`,
+    meta: 'Seller Selection',
+  })
+  pushMessage({
+    role: 'assistant',
+    actor: 'seller_agent',
+    providerPubkey: seller.providerPubkey,
+    text: `${seller.name} is checking queue availability and accepting terms.`,
+    meta: 'Seller Confirmation',
+  })
+  setGpuDemoStage('seller_confirming')
+  state.selectedId = selectionId('plan', demo.ids.planId)
+  state.selectedWorkThreadId = workThreadIdForPlan(state.orderPlans.find((plan) => plan.planId === demo.ids.planId) || gpuDemoTransactionBundle(demo).orderPlans?.[0]!)
+  scheduleGpuDemo(() => {
+    const current = state.gpuDemo
+    if (!current || current.ids.base !== demo.ids.base || current.stage !== 'seller_confirming') return
+    setGpuDemoStage('seller_accepted')
+    pushMessage({
+      role: 'assistant',
+      actor: 'seller_agent',
+      providerPubkey: seller.providerPubkey,
+      text: `${seller.name} accepted the job. Dock needs owner PIN to record the simulated payment proof.`,
+      meta: 'Seller Accepted',
+    })
+    scheduleGpuDemo(() => {
+      const latest = state.gpuDemo
+      if (!latest || latest.ids.base !== demo.ids.base || latest.stage !== 'seller_accepted') return
+      openGpuDemoPin()
+    }, 800)
+  }, 1400)
+  renderAll()
+}
+
+function openGpuDemoPin() {
+  const demo = state.gpuDemo
+  if (!demo) return
+  setGpuDemoStage('pin')
+  state.pinStep = { action: { kind: 'gpu_demo_payment' }, setup: false, pin: '', confirm: '' }
+  renderAll()
+}
+
+function completeGpuDemoPayment(pin: string) {
+  void pin
+  const demo = state.gpuDemo
+  if (!demo) return
+  state.pinStep = undefined
+  ensureGpuDemoThread()
+  pushMessage({
+    role: 'system',
+    text: 'Demo PIN accepted. A simulated escrow payment proof was written locally; no real payment was sent.',
+    meta: 'Payment',
+  })
+  setGpuDemoStage('paid')
+  pushMessage({
+    role: 'assistant',
+    actor: 'seller_agent',
+    providerPubkey: selectedGpuDemoSeller(demo).providerPubkey,
+    text: 'Payment proof confirmed. I am starting the scripted GPU execution flow.',
+    meta: 'Execution',
+  })
+  runGpuDemoExecutionScript()
+}
+
+function runGpuDemoExecutionScript() {
+  const demo = state.gpuDemo
+  if (!demo) return
+  const base = demo.ids.base
+  const advance = (stage: GpuDemoStage, delayMs: number, text: string) => {
+    scheduleGpuDemo(() => {
+      const current = state.gpuDemo
+      if (!current || current.ids.base !== base || gpuDemoStageIndex(current.stage) >= gpuDemoStageIndex(stage)) return
+      setGpuDemoStage(stage)
+      pushMessage({
+        role: 'assistant',
+        actor: 'seller_agent',
+        providerPubkey: selectedGpuDemoSeller(current).providerPubkey,
+        text,
+        meta: 'GPU Job',
+      })
+      if (stage === 'completed') {
+        state.selectedId = selectionId('task', current.ids.taskId)
+        state.selectedWorkThreadId = workThreadIdForTask(state.tasks.find((task) => task.id === current.ids.taskId) || { id: current.ids.taskId, orderId: current.ids.orderId, status: 'completed' })
+        renderAll()
+      }
+    }, delayMs)
+  }
+  advance('queued', 700, 'Job queued on the selected demo seller.')
+  advance('pulling_image', 1800, 'Pulling the CUDA image and preparing cached model files.')
+  advance('running', 3200, 'GPU inference is running over the evaluation batch.')
+  advance('uploading_artifacts', 4700, 'Packaging result.md, metrics.json, logs.txt, and receipt.json.')
+  advance('completed', 6200, 'Completed. Result files, metrics, logs, receipt, and hashes are ready for buyer verification.')
+}
+
 function activeChatThread() {
   return state.chatThreads.find((thread) => thread.id === state.selectedChatId)
 }
@@ -11722,6 +13066,7 @@ function parseSelection(value?: string): { kind: SelectedKind; id: string } | un
 }
 
 function pinActionText(action: PinAction) {
+  if (action.kind === 'gpu_demo_payment') return 'Confirm simulated GPU job payment'
   if (action.kind === 'select_plan') return `Choose seller option ${shortID(action.optionId)}`
   if (action.kind === 'approve') return `Approve request ${shortID(action.approvalId)}`
   return 'Set local payment PIN'
@@ -11839,17 +13184,24 @@ function renderArchiveRecord(record: ArchivedWorkRecord) {
 
 function renderPwaLinkStatus() {
   const link = state.pwaLink
+  const demoLinked = MVP_DEMO_REMOTE_LINK && link?.clientKind === 'electron-demo'
   fields.pwaLinkState.textContent = uiText(link?.linked ? 'linked' : link?.status || 'not started')
   fields.pwaUserCode.textContent = link?.userCode || uiText('not generated')
-  fields.pwaCloudURL.textContent = link?.cloudUrl || uiText('not configured')
-  fields.pwaExpires.textContent = link?.expiresAt ? compactTimestamp(link.expiresAt) : uiText('not started')
-  fields.pwaTokenPath.textContent = link?.tokenPath || uiText('local after scan')
+  fields.pwaCloudURL.textContent = link?.cloudUrl ? uiText(link.cloudUrl) : uiText('not configured')
+  fields.pwaExpires.textContent = link?.expiresAt ? (demoLinked ? uiText(link.expiresAt) : compactTimestamp(link.expiresAt)) : uiText('not started')
+  fields.pwaTokenPath.textContent = link?.tokenPath ? uiText(link.tokenPath) : uiText('local after scan')
   fields.pwaLinkNote.textContent = uiText(state.pwaLinkMessage || link?.message || 'Start a QR session, then scan it from the Exora PWA Remote Console.')
   if (link?.qrSvg) {
     fields.pwaQR.innerHTML = link.qrSvg
+  } else if (demoLinked) {
+    fields.pwaQR.innerHTML = `<span>${escapeHTML(uiText('MVP'))}</span>`
   } else {
     fields.pwaQR.innerHTML = `<span>${escapeHTML(uiText('QR'))}</span>`
   }
+  const startButton = app.querySelector<HTMLButtonElement>('[data-action="pwa-link-start"]')
+  const checkButton = app.querySelector<HTMLButtonElement>('[data-action="pwa-link-check"]')
+  if (startButton) startButton.textContent = uiText(MVP_DEMO_REMOTE_LINK ? 'Reset Demo Link' : 'New QR')
+  if (checkButton) checkButton.textContent = uiText(MVP_DEMO_REMOTE_LINK ? 'Demo Connected' : 'Check Link')
 }
 
 function renderWalletStatus() {
@@ -12225,6 +13577,10 @@ document.addEventListener('keydown', (event) => {
 fields.newChatButton.addEventListener('click', () => {
   closeProjectFolderMenu()
   closeTaskContextMenu()
+  if (state.workOrderSide === 'buyer') {
+    startGpuJobDemo()
+    return
+  }
   startNewConversation()
 })
 
@@ -12477,6 +13833,10 @@ app.querySelectorAll<HTMLButtonElement>('[data-action="open-api-settings"]').for
 app.querySelectorAll<HTMLButtonElement>('[data-action="open-pwa-link"]').forEach((button) => {
   button.addEventListener('click', () => {
     openSettings('pwa')
+    if (MVP_DEMO_REMOTE_LINK) {
+      setDemoPwaLinkStatus()
+      return
+    }
     if (!state.pwaLink?.deviceCode || state.pwaLink.linked) {
       run(() => startPwaLink()).catch(() => undefined)
     }
@@ -12488,6 +13848,14 @@ app.querySelectorAll<HTMLButtonElement>('[data-action="copy-local-agent-prompt"]
     const source = button.dataset.copySource === 'composer' ? 'composer' : 'mcp-card'
     copyLocalAgentPrompt(source).catch((error) => showToast(humanizeError(error)))
   })
+})
+
+app.querySelectorAll<HTMLButtonElement>('[data-action="start-gpu-demo"]').forEach((button) => {
+  button.addEventListener('click', () => startGpuJobDemo())
+})
+
+app.querySelectorAll<HTMLButtonElement>('[data-action="reset-gpu-demo"]').forEach((button) => {
+  button.addEventListener('click', () => resetGpuJobDemo())
 })
 
 fields.externalWorkTakeoverButton.addEventListener('click', () => {
