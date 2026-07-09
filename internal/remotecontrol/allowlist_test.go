@@ -42,6 +42,7 @@ func TestAllowedBlocksSensitiveRemoteDownloads(t *testing.T) {
 		{"POST", "/v1/order-plans/from-negotiations"},
 		{"GET", "/v1/payment-pin/status"},
 		{"GET", "/v1/payments?approvalId=appr_1"},
+		{"POST", "/v1/payments/pay_1/pay-wallet"},
 		{"GET", "/v1/order-plans?status=pending_selection"},
 		{"GET", "/v1/order-plans/opln_1"},
 		{"POST", "/v1/order-plans/opln_1/select"},

@@ -35,6 +35,7 @@ type TokenFile struct {
 
 type DeviceLinkRequest struct {
 	DockID           string   `json:"dockId"`
+	ClientKind       string   `json:"clientKind,omitempty"`
 	DisplayName      string   `json:"displayName"`
 	Mode             string   `json:"mode"`
 	PublicBaseURL    string   `json:"publicBaseUrl"`
@@ -54,6 +55,7 @@ type DeviceTokenResult struct {
 	Status     string `json:"status"`
 	DockID     string `json:"dockId"`
 	AccountID  string `json:"accountId"`
+	ClientKind string `json:"clientKind,omitempty"`
 	CloudToken string `json:"cloudToken"`
 	ExpiresAt  string `json:"expiresAt"`
 }
@@ -146,6 +148,9 @@ func Link(ctx context.Context, cloudURL string, tokenPath string, req DeviceLink
 	cloudURL = strings.TrimRight(strings.TrimSpace(cloudURL), "/")
 	if cloudURL == "" {
 		return DeviceLinkResult{}, DeviceTokenResult{}, fmt.Errorf("cloud_url required")
+	}
+	if strings.TrimSpace(req.ClientKind) == "" {
+		req.ClientKind = "cli"
 	}
 	commandPrivateKey := ""
 	commandPublicKey := strings.TrimSpace(req.CommandPublicKey)

@@ -373,6 +373,7 @@ func runCloudCommand(args []string) error {
 	}
 	link, token, err := cloudlink.Link(context.Background(), cloudURL, cfg.CloudTokenPath, cloudlink.DeviceLinkRequest{
 		DockID:        dockID,
+		ClientKind:    "cli",
 		DisplayName:   "Exora Dock",
 		Mode:          cfg.Mode,
 		PublicBaseURL: discovery.BaseURL(cfg.ListenAddr),

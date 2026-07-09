@@ -32,6 +32,8 @@ const APP_URL_POLICY = createAppURLPolicy({
 })
 const STARTUP_LANGUAGE = readStartupLanguageSync()
 const MASKED_API_KEY_VALUE = '************'
+const ELECTRON_CLIENT_KIND = 'electron'
+const ELECTRON_REMOTE_CAPABILITIES = ['remote.console', 'approvals.queue', 'mcp.stdio', 'electron.shell']
 
 app.commandLine.appendSwitch('lang', chromiumLocaleForLanguage(STARTUP_LANGUAGE))
 
@@ -371,11 +373,12 @@ async function pwa_link_start(payload) {
   await savePendingCommandKey(cfg.tokenPath, commandKey)
   const result = await cloudPostJSON(`${cfg.cloudUrl}/v1/device-links`, {
     dockId: cfg.dockId,
+    clientKind: ELECTRON_CLIENT_KIND,
     displayName: 'Exora Dock',
     mode: cfg.mode,
     publicBaseUrl: BASE_URL,
     version: '0.1.0',
-    capabilities: ['remote.console', 'approvals.queue', 'mcp.stdio'],
+    capabilities: ELECTRON_REMOTE_CAPABILITIES,
     commandPublicKey: commandKey.publicKey,
   }, 10000)
   if (!result.ok) {
@@ -384,6 +387,7 @@ async function pwa_link_start(payload) {
   return sanitizePwaLink({
     status: result.body.status || 'pending',
     ...result.body,
+    clientKind: ELECTRON_CLIENT_KIND,
     cloudUrl: cfg.cloudUrl,
     dockId: result.body.dockId || cfg.dockId,
     tokenPath: cfg.tokenPath,
@@ -409,6 +413,7 @@ async function pwa_link_status(payload) {
       userCode: input.userCode,
       verificationUrl: input.verificationUrl,
       expiresAt: body.expiresAt || input.expiresAt,
+      clientKind: ELECTRON_CLIENT_KIND,
       cloudUrl: cfg.cloudUrl,
       dockId: body.dockId || input.dockId || cfg.dockId,
       tokenPath: cfg.tokenPath,
@@ -422,6 +427,7 @@ async function pwa_link_status(payload) {
       userCode: input.userCode,
       verificationUrl: input.verificationUrl,
       expiresAt: body.expiresAt || input.expiresAt,
+      clientKind: ELECTRON_CLIENT_KIND,
       cloudUrl: cfg.cloudUrl,
       dockId: input.dockId || cfg.dockId,
       tokenPath: cfg.tokenPath,
@@ -440,17 +446,19 @@ async function pwa_link_status(payload) {
     dockId,
     cloudUrl: cfg.cloudUrl,
     cloudToken,
+    clientKind: ELECTRON_CLIENT_KIND,
     commandPrivateKey: commandKey.privateKey,
     commandPublicKey: commandKey.publicKey,
     linkedAt: new Date().toISOString(),
   })
   await cloudPostJSON(`${cfg.cloudUrl}/v1/docks/${encodeURIComponent(dockId)}/heartbeat`, {
     dockId,
+    clientKind: ELECTRON_CLIENT_KIND,
     displayName: 'Exora Dock',
     mode: cfg.mode,
     publicBaseUrl: BASE_URL,
     version: '0.1.0',
-    capabilities: ['remote.console', 'approvals.queue', 'mcp.stdio'],
+    capabilities: ELECTRON_REMOTE_CAPABILITIES,
     commandPublicKey: commandKey.publicKey,
   }, 10000, cloudToken)
   await deletePendingCommandKey(cfg.tokenPath)
@@ -473,6 +481,7 @@ async function pwa_link_status(payload) {
     userCode: input.userCode,
     verificationUrl: input.verificationUrl,
     expiresAt: body.expiresAt || input.expiresAt,
+    clientKind: ELECTRON_CLIENT_KIND,
     cloudUrl: cfg.cloudUrl,
     dockId,
     accountId: body.accountId,
@@ -2933,8 +2942,11 @@ function pwaLinkQRPayload(link, cfg) {
     try {
       const url = new URL(verificationUrl, cfg.cloudUrl)
       url.searchParams.set('userCode', userCode)
+      url.searchParams.set('code', userCode)
+      url.searchParams.set('dockCode', userCode)
       url.searchParams.set('dockId', cfg.dockId)
       url.searchParams.set('cloudUrl', cfg.cloudUrl)
+      url.searchParams.set('clientKind', ELECTRON_CLIENT_KIND)
       return url.toString()
     } catch {
       // Fall through to structured payload.
@@ -2946,6 +2958,7 @@ function pwaLinkQRPayload(link, cfg) {
     verificationUrl,
     cloudUrl: cfg.cloudUrl,
     dockId: cfg.dockId,
+    clientKind: ELECTRON_CLIENT_KIND,
     expiresAt: link?.expiresAt || '',
   })
 }
