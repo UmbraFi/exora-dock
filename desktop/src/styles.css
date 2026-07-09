@@ -308,6 +308,7 @@ h3 {
   border: 1px solid #dde5e1;
   border-radius: var(--app-radius);
   box-shadow: 0 12px 30px rgb(23 33 30 / 0.06);
+  contain: layout paint style;
   display: none;
   gap: 6px;
   grid-column: 3;
@@ -356,24 +357,24 @@ h3 {
   position: absolute;
   right: var(--window-outer-edge);
   top: var(--window-outer-edge);
-  transform: translateY(-2px);
+  transform: translate3d(0, -2px, 0);
   transition:
     opacity var(--chrome-motion-duration) var(--chrome-motion-ease),
-    right var(--chrome-motion-duration) var(--chrome-motion-ease),
-    top var(--chrome-motion-duration) var(--chrome-motion-ease),
     transform var(--chrome-motion-duration) var(--chrome-motion-ease),
     visibility var(--chrome-motion-duration) var(--chrome-motion-ease);
   visibility: hidden;
-  will-change: opacity, right, top, transform;
+  will-change: opacity, transform;
   z-index: 90;
 }
 
 .app-shell.transaction-detail-open > .transaction-detail-head {
   opacity: 1;
   pointer-events: auto;
-  right: var(--window-side-control-edge);
-  top: var(--window-side-control-edge);
-  transform: translateY(0);
+  transform: translate3d(
+    calc(var(--window-outer-edge) - var(--window-side-control-edge)),
+    calc(var(--window-side-control-edge) - var(--window-outer-edge)),
+    0
+  );
   visibility: visible;
 }
 
@@ -626,17 +627,20 @@ h3 {
   pointer-events: auto;
   position: absolute;
   top: var(--window-side-control-edge);
-  transition: left 180ms ease, top 180ms ease, transform 180ms ease;
-  transform: translateY(0);
+  transition: transform var(--chrome-motion-duration) var(--chrome-motion-ease);
+  transform: translate3d(0, 0, 0);
   user-select: none;
   -webkit-app-region: no-drag;
+  will-change: transform;
   z-index: 90;
 }
 
 .app-shell.sidebar-collapsed .sidebar-chrome {
-  left: var(--window-outer-edge);
-  top: var(--window-outer-edge);
-  transform: translateY(0);
+  transform: translate3d(
+    calc(var(--window-outer-edge) - var(--window-side-control-edge)),
+    calc(var(--window-outer-edge) - var(--window-side-control-edge)),
+    0
+  );
 }
 
 .task-sidebar .view-switch {

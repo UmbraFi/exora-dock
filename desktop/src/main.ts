@@ -5786,7 +5786,7 @@ function renderTransactionDetailSidebar() {
     lastTransactionDetailRenderKey = ''
     return
   }
-  if (!visible) return
+  // Keep detail content warm while the rail is closed, so opening only toggles chrome classes.
   const side = thread.side || state.workOrderSide
   const chatThread = thread.chatId ? state.chatThreads.find((item) => item.id === thread.chatId) : undefined
   const messages = chatThread?.messages || []
@@ -12390,12 +12390,32 @@ fields.backButton.addEventListener('click', () => navigateWorkspaceHistory(-1))
 let manualWindowDragActive = false
 let manualWindowDragMoveScheduled = false
 
+const WINDOW_DRAG_CONTROL_SELECTOR = [
+  'button',
+  'input',
+  'select',
+  'textarea',
+  'a',
+  '[role="button"]',
+  '[role="menuitem"]',
+  '[role="separator"]',
+  '[contenteditable]',
+  '[tabindex]:not([tabindex="-1"])',
+  '.no-drag',
+].join(', ')
+
+function isWindowDragTarget(event: MouseEvent) {
+  const target = event.target
+  if (!(target instanceof Element)) return false
+  if (target.closest(WINDOW_DRAG_CONTROL_SELECTOR)) return false
+  const isMarkedDragRegion = Boolean(target.closest('[data-window-drag-handle], [data-drag-region]'))
+  const isTopWindowRegion = event.clientY >= 0 && event.clientY <= TOP_WINDOW_DRAG_HEIGHT
+  return isMarkedDragRegion || isTopWindowRegion
+}
+
 app.addEventListener('mousedown', (event) => {
   if (event.button !== 0) return
-  const target = event.target
-  if (!(target instanceof Element)) return
-  if (!target.closest('[data-window-drag-handle]')) return
-  if (target.closest('button, input, select, textarea, a, [role="button"], .no-drag')) return
+  if (!isWindowDragTarget(event)) return
   event.preventDefault()
   manualWindowDragActive = true
   invoke<boolean>('window_begin_manual_drag')
@@ -12436,12 +12456,7 @@ window.addEventListener('mouseup', endManualWindowDrag)
 window.addEventListener('blur', endManualWindowDrag)
 
 app.addEventListener('dblclick', (event) => {
-  const target = event.target
-  if (!(target instanceof Element)) return
-  if (target.closest('button, input, select, textarea, a, [role="button"], .no-drag')) return
-  const isDragRegion = Boolean(target.closest('[data-drag-region]'))
-  const isTopDragStrip = event.clientY <= TOP_WINDOW_DRAG_HEIGHT
-  if (!isDragRegion && !isTopDragStrip) return
+  if (!isWindowDragTarget(event)) return
   invoke('window_toggle_maximize').catch((error) => showToast(humanizeError(error)))
 })
 
