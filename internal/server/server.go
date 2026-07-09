@@ -126,6 +126,7 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 
 		// Built-in requester agent endpoints
 		r.Post("/agent/search-sellers", h.SearchSellers)
+		r.Get("/market/rail-cards", h.MarketRailCards)
 		r.Post("/agent/buyer-work", h.CoordinateBuyerWork)
 		r.Post("/agent/runs", h.StartAgentRun)
 		r.Get("/agent/runs", h.ListAgentRuns)
@@ -290,6 +291,9 @@ func requiredScope(r *http.Request) localauth.Scope {
 		return localauth.ScopeNone
 	}
 	if path == "/v1/agent/search-sellers" && method == http.MethodPost {
+		return localauth.ScopeAgent
+	}
+	if path == "/v1/market/rail-cards" && method == http.MethodGet {
 		return localauth.ScopeAgent
 	}
 	if path == "/v1/agent/buyer-work" && method == http.MethodPost {

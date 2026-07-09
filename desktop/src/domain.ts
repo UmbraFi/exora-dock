@@ -336,6 +336,49 @@ export type MarketSearchResult = {
   nextAction?: string
 }
 
+export type MarketRailBuyerSettings = {
+  displayName?: string
+  budget?: string
+  riskBoundary?: string
+  authorizationStrategy?: string
+  identityDisclosure?: string
+  fileDisclosure?: string
+  dataRetention?: string
+  escrowPreference?: string
+  preferences?: string[]
+  acceptedTaskTypes?: string[]
+}
+
+export type MarketRailMetric = {
+  label: string
+  value: string
+  hint?: string
+}
+
+export type MarketRailSourceRef = {
+  label: string
+  path: string
+}
+
+export type MarketRailCard = {
+  id: string
+  stage: string
+  status: string
+  title: string
+  provider?: string
+  summary: string
+  metrics?: MarketRailMetric[]
+  chips?: string[]
+  risk?: string
+  nextAction?: string
+  sourceRefs?: MarketRailSourceRef[]
+}
+
+export type MarketRailResponse = {
+  buyerSettings: MarketRailBuyerSettings
+  cards: MarketRailCard[]
+}
+
 export function agentSourceLabel(agentId?: string) {
   if (agentId === 'exora-desktop-agent') return 'Built-in Agent'
   if (agentId && agentId.trim()) return `MCP / ${agentId}`

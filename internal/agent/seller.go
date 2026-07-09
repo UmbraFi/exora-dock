@@ -46,22 +46,22 @@ type SellerAgentConfig struct {
 }
 
 type SellerAgentStatus struct {
-	Enabled              bool   `json:"enabled"`
-	Configured           bool   `json:"configured"`
-	Discoverable         bool   `json:"discoverable"`
-	ResourceListingCount int    `json:"resourceListingCount"`
-	Discoverability      string `json:"discoverability"`
-	LastRunAt            string `json:"lastRunAt,omitempty"`
-	LastError            string `json:"lastError,omitempty"`
-	QuotedCount          int    `json:"quotedCount"`
-	RejectedCount        int    `json:"rejectedCount"`
-	ManualReviewCount    int    `json:"manualReviewCount"`
-	NegotiationCount     int    `json:"negotiationCount"`
-	CompletedCount       int    `json:"completedCount"`
-	PricingPolicyID      string `json:"pricingPolicyId,omitempty"`
-	PricingPolicyLoaded  bool   `json:"pricingPolicyLoaded"`
+	Enabled               bool   `json:"enabled"`
+	Configured            bool   `json:"configured"`
+	Discoverable          bool   `json:"discoverable"`
+	ResourceListingCount  int    `json:"resourceListingCount"`
+	Discoverability       string `json:"discoverability"`
+	LastRunAt             string `json:"lastRunAt,omitempty"`
+	LastError             string `json:"lastError,omitempty"`
+	QuotedCount           int    `json:"quotedCount"`
+	RejectedCount         int    `json:"rejectedCount"`
+	ManualReviewCount     int    `json:"manualReviewCount"`
+	NegotiationCount      int    `json:"negotiationCount"`
+	CompletedCount        int    `json:"completedCount"`
+	PricingPolicyID       string `json:"pricingPolicyId,omitempty"`
+	PricingPolicyLoaded   bool   `json:"pricingPolicyLoaded"`
 	LastValuationDecision string `json:"lastValuationDecision,omitempty"`
-	LastValuationHash    string `json:"lastValuationHash,omitempty"`
+	LastValuationHash     string `json:"lastValuationHash,omitempty"`
 	LastExecutionPlanHash string `json:"lastExecutionPlanHash,omitempty"`
 }
 
@@ -94,47 +94,47 @@ type ProviderStateSnapshot struct {
 }
 
 type SellerValuation struct {
-	SchemaVersion      string  `json:"schema_version"`
-	Decision           string  `json:"decision"`
-	PriceAmount        float64 `json:"price_amount,omitempty"`
-	Currency           string  `json:"currency,omitempty"`
-	EstimatedSeconds   int     `json:"estimated_seconds,omitempty"`
-	PolicyID           string  `json:"pricing_policy_id,omitempty"`
-	ValuationHash      string  `json:"valuation_hash,omitempty"`
-	QuoteBindingHash   string  `json:"quote_binding_hash,omitempty"`
-	CapabilitySummary  string  `json:"capability_summary,omitempty"`
-	RiskSummary        string  `json:"risk_summary,omitempty"`
-	Reason             string  `json:"reason,omitempty"`
+	SchemaVersion     string  `json:"schema_version"`
+	Decision          string  `json:"decision"`
+	PriceAmount       float64 `json:"price_amount,omitempty"`
+	Currency          string  `json:"currency,omitempty"`
+	EstimatedSeconds  int     `json:"estimated_seconds,omitempty"`
+	PolicyID          string  `json:"pricing_policy_id,omitempty"`
+	ValuationHash     string  `json:"valuation_hash,omitempty"`
+	QuoteBindingHash  string  `json:"quote_binding_hash,omitempty"`
+	CapabilitySummary string  `json:"capability_summary,omitempty"`
+	RiskSummary       string  `json:"risk_summary,omitempty"`
+	Reason            string  `json:"reason,omitempty"`
 }
 
 type SellerExecutionPlan struct {
-	SchemaVersion       string   `json:"schema_version"`
-	PlanID              string   `json:"plan_id"`
-	TaskID              string   `json:"task_id"`
-	Steps               []string `json:"steps"`
-	Inputs              []string `json:"inputs,omitempty"`
-	Outputs             []string `json:"outputs,omitempty"`
-	FileScope           []string `json:"file_scope,omitempty"`
-	NetworkAccess       string   `json:"network_access"`
-	ManagedAPIs         []string `json:"managed_apis,omitempty"`
-	ExternalWrites      string   `json:"external_writes"`
-	SensitiveActions    []string `json:"sensitive_actions,omitempty"`
-	RiskLevel           string   `json:"risk_level"`
-	AutoExecutable      bool     `json:"auto_executable"`
-	ExecutionPlanHash   string   `json:"execution_plan_hash"`
-	CreatedAt           string   `json:"created_at"`
+	SchemaVersion     string   `json:"schema_version"`
+	PlanID            string   `json:"plan_id"`
+	TaskID            string   `json:"task_id"`
+	Steps             []string `json:"steps"`
+	Inputs            []string `json:"inputs,omitempty"`
+	Outputs           []string `json:"outputs,omitempty"`
+	FileScope         []string `json:"file_scope,omitempty"`
+	NetworkAccess     string   `json:"network_access"`
+	ManagedAPIs       []string `json:"managed_apis,omitempty"`
+	ExternalWrites    string   `json:"external_writes"`
+	SensitiveActions  []string `json:"sensitive_actions,omitempty"`
+	RiskLevel         string   `json:"risk_level"`
+	AutoExecutable    bool     `json:"auto_executable"`
+	ExecutionPlanHash string   `json:"execution_plan_hash"`
+	CreatedAt         string   `json:"created_at"`
 }
 
 type SellerAgent struct {
-	cfg          SellerAgentConfig
-	tasks        *task.Store
-	resources    *resource.Store
-	negotiations *negotiation.Store
-	executor     *task.Executor
-	httpClient   *http.Client
-	llm          *OpenAICompatibleClient
-	mu           sync.Mutex
-	status       SellerAgentStatus
+	cfg           SellerAgentConfig
+	tasks         *task.Store
+	resources     *resource.Store
+	negotiations  *negotiation.Store
+	executor      *task.Executor
+	httpClient    *http.Client
+	llm           *OpenAICompatibleClient
+	mu            sync.Mutex
+	status        SellerAgentStatus
 	pricingPolicy SellerPricingPolicy
 	policyLoaded  bool
 }

@@ -41,6 +41,7 @@ import (
 	"github.com/exora-dock/exora-dock/internal/product"
 	"github.com/exora-dock/exora-dock/internal/registry"
 	"github.com/exora-dock/exora-dock/internal/resource"
+	"github.com/exora-dock/exora-dock/internal/samplemarket"
 	"github.com/exora-dock/exora-dock/internal/server"
 	"github.com/exora-dock/exora-dock/internal/task"
 	"github.com/exora-dock/exora-dock/internal/wallet"
@@ -219,6 +220,13 @@ func main() {
 	sellerProvider := strings.TrimSpace(cfg.SellerAgent.ProviderPubkey)
 	if sellerProvider == "" {
 		sellerProvider = selfPubkey
+	}
+	sampleDockID := strings.TrimSpace(cfg.DockID)
+	if sampleDockID == "" {
+		sampleDockID = selfPubkey
+	}
+	if err := samplemarket.Seed(resourceStore, agentCardStore, sampleDockID, sellerProvider); err != nil {
+		log.Printf("[sample-market] seed skipped: %v", err)
 	}
 	sellerAgent := agent.NewSellerAgent(agent.SellerAgentConfig{
 		Enabled:                    cfg.SellerAgent.Enabled,

@@ -68,10 +68,10 @@ type coordinateBuyerWorkRequest struct {
 	MaxResults       int                `json:"maxResults,omitempty"`
 	MaxOptions       int                `json:"maxOptions,omitempty"`
 	FallbackToQuotes bool               `json:"fallbackToQuotes,omitempty"`
-	PrePlanConfirmed bool              `json:"prePlanConfirmed,omitempty"`
-	ApprovalID       string            `json:"approvalId,omitempty"`
-	PlanID           string            `json:"planId,omitempty"`
-	ManifestHash     string            `json:"manifestHash,omitempty"`
+	PrePlanConfirmed bool               `json:"prePlanConfirmed,omitempty"`
+	ApprovalID       string             `json:"approvalId,omitempty"`
+	PlanID           string             `json:"planId,omitempty"`
+	ManifestHash     string             `json:"manifestHash,omitempty"`
 }
 
 func (h *Handler) CoordinateBuyerWork(w http.ResponseWriter, r *http.Request) {
@@ -177,6 +177,10 @@ func (h *Handler) CoordinateBuyerWork(w http.ResponseWriter, r *http.Request) {
 		a = decorateApproval(a, requestBaseURL(r))
 		planID = firstNonEmpty(req.PlanID, a.PlanID, a.SubjectID)
 		manifestHash = firstNonEmpty(req.ManifestHash, a.ManifestHash)
+		req.ProjectPath = firstNonEmpty(req.ProjectPath, stringFromAny(a.Metadata["projectPath"]))
+		req.WorkUID = firstNonEmpty(req.WorkUID, stringFromAny(a.Metadata["workUid"]))
+		workCtx.ProjectPath = firstNonEmpty(workCtx.ProjectPath, req.ProjectPath)
+		workCtx.WorkUID = firstNonEmpty(workCtx.WorkUID, req.WorkUID)
 		if files, ok := a.Metadata["planFiles"].(map[string]any); ok {
 			for key, value := range files {
 				if text := stringFromAny(value); text != "" {
@@ -277,21 +281,21 @@ func (h *Handler) CoordinateBuyerWork(w http.ResponseWriter, r *http.Request) {
 	}
 	ids, quoted, rejected := negotiationStats(negotiationPayload)
 	result := map[string]any{
-		"mode":            "plan_first",
-		"query":           intent,
-		"plan_id":         planID,
-		"planId":          planID,
-		"manifest_hash":   manifestHash,
-		"manifestHash":    manifestHash,
-		"projectPath":     req.ProjectPath,
-		"workUid":         req.WorkUID,
-		"agentCardSearch": agentCardSearch,
-		"negotiations":    negotiationPayload["negotiations"],
-		"negotiationIds":  ids,
-		"quoteCount":      quoted,
-		"rejectionCount":  rejected,
-		"summary":         stringFromAny(negotiationPayload["summary"]),
-		"nextAction":      stringFromAny(negotiationPayload["nextAction"]),
+		"mode":                 "plan_first",
+		"query":                intent,
+		"plan_id":              planID,
+		"planId":               planID,
+		"manifest_hash":        manifestHash,
+		"manifestHash":         manifestHash,
+		"projectPath":          req.ProjectPath,
+		"workUid":              req.WorkUID,
+		"agentCardSearch":      agentCardSearch,
+		"negotiations":         negotiationPayload["negotiations"],
+		"negotiationIds":       ids,
+		"quoteCount":           quoted,
+		"rejectionCount":       rejected,
+		"summary":              stringFromAny(negotiationPayload["summary"]),
+		"nextAction":           stringFromAny(negotiationPayload["nextAction"]),
 		"intentClassification": classification,
 	}
 	if len(planFiles) > 0 {
