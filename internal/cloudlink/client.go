@@ -3,6 +3,12 @@ package cloudlink
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/ecdh"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,19 +25,22 @@ import (
 )
 
 type TokenFile struct {
-	DockID     string `json:"dockId"`
-	CloudURL   string `json:"cloudUrl"`
-	CloudToken string `json:"cloudToken"`
-	LinkedAt   string `json:"linkedAt"`
+	DockID            string `json:"dockId"`
+	CloudURL          string `json:"cloudUrl"`
+	CloudToken        string `json:"cloudToken"`
+	CommandPrivateKey string `json:"commandPrivateKey,omitempty"`
+	CommandPublicKey  string `json:"commandPublicKey,omitempty"`
+	LinkedAt          string `json:"linkedAt"`
 }
 
 type DeviceLinkRequest struct {
-	DockID        string   `json:"dockId"`
-	DisplayName   string   `json:"displayName"`
-	Mode          string   `json:"mode"`
-	PublicBaseURL string   `json:"publicBaseUrl"`
-	Version       string   `json:"version"`
-	Capabilities  []string `json:"capabilities"`
+	DockID           string   `json:"dockId"`
+	DisplayName      string   `json:"displayName"`
+	Mode             string   `json:"mode"`
+	PublicBaseURL    string   `json:"publicBaseUrl"`
+	Version          string   `json:"version"`
+	Capabilities     []string `json:"capabilities"`
+	CommandPublicKey string   `json:"commandPublicKey"`
 }
 
 type DeviceLinkResult struct {
@@ -61,10 +70,14 @@ type AccountWallet struct {
 }
 
 type RemoteCommand struct {
-	ID     string         `json:"commandId"`
-	Method string         `json:"method"`
-	Path   string         `json:"path"`
-	Body   map[string]any `json:"body,omitempty"`
+	ID            string         `json:"commandId"`
+	Method        string         `json:"method"`
+	Path          string         `json:"path"`
+	Body          map[string]any `json:"body,omitempty"`
+	Sensitive     bool           `json:"sensitive,omitempty"`
+	EncryptedBody map[string]any `json:"encryptedBody,omitempty"`
+	Encryption    map[string]any `json:"encryption,omitempty"`
+	RedactedBody  map[string]any `json:"redactedBody,omitempty"`
 }
 
 func PutAccountWallet(ctx context.Context, cloudURL string, tokenPath string, dockID string, backup wallet.EncryptedBackup, client *http.Client) (AccountWallet, error) {
@@ -134,6 +147,17 @@ func Link(ctx context.Context, cloudURL string, tokenPath string, req DeviceLink
 	if cloudURL == "" {
 		return DeviceLinkResult{}, DeviceTokenResult{}, fmt.Errorf("cloud_url required")
 	}
+	commandPrivateKey := ""
+	commandPublicKey := strings.TrimSpace(req.CommandPublicKey)
+	if commandPublicKey == "" {
+		privateKey, publicKey, err := generateCommandKeypair()
+		if err != nil {
+			return DeviceLinkResult{}, DeviceTokenResult{}, err
+		}
+		commandPrivateKey = privateKey
+		commandPublicKey = publicKey
+		req.CommandPublicKey = publicKey
+	}
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
@@ -150,10 +174,12 @@ func Link(ctx context.Context, cloudURL string, tokenPath string, req DeviceLink
 		status, err := postJSONStatus(ctx, client, cloudURL+"/v1/device-links/token", "", map[string]string{"deviceCode": link.DeviceCode}, &token)
 		if err == nil && status == http.StatusOK && token.CloudToken != "" {
 			if err := SaveToken(tokenPath, TokenFile{
-				DockID:     token.DockID,
-				CloudURL:   cloudURL,
-				CloudToken: token.CloudToken,
-				LinkedAt:   time.Now().UTC().Format(time.RFC3339),
+				DockID:            token.DockID,
+				CloudURL:          cloudURL,
+				CloudToken:        token.CloudToken,
+				CommandPrivateKey: commandPrivateKey,
+				CommandPublicKey:  commandPublicKey,
+				LinkedAt:          time.Now().UTC().Format(time.RFC3339),
 			}); err != nil {
 				return link, token, err
 			}
@@ -246,6 +272,14 @@ func (p Poller) pollOnce(ctx context.Context, client *http.Client) (bool, error)
 	if status < 200 || status >= 300 {
 		return false, fmt.Errorf("next command returned %d", status)
 	}
+	if err := p.decryptCommand(&wrapped.Command); err != nil {
+		resultEndpoint := cloudURL + "/v1/docks/" + url.PathEscape(dockID) + "/commands/" + url.PathEscape(wrapped.Command.ID) + "/result"
+		return true, postJSON(ctx, client, resultEndpoint, bearer, map[string]any{
+			"status": http.StatusBadRequest,
+			"body":   map[string]any{"error": err.Error()},
+			"error":  err.Error(),
+		}, nil)
+	}
 	resultStatus, body, execErr := p.executeLocal(ctx, client, wrapped.Command)
 	resultBody := body
 	errText := ""
@@ -310,6 +344,124 @@ func (p Poller) executeLocal(ctx context.Context, client *http.Client, cmd Remot
 		return resp.StatusCode, body, fmt.Errorf("local dock returned %s", resp.Status)
 	}
 	return resp.StatusCode, body, nil
+}
+
+func (p Poller) decryptCommand(cmd *RemoteCommand) error {
+	if cmd == nil || len(cmd.EncryptedBody) == 0 {
+		return nil
+	}
+	file, err := LoadToken(p.TokenPath)
+	if err != nil {
+		return err
+	}
+	plaintext, err := decryptCommandEnvelope(file.CommandPrivateKey, cmd.EncryptedBody, cmd.Encryption)
+	if err != nil {
+		return err
+	}
+	var body map[string]any
+	if err := json.Unmarshal(plaintext, &body); err != nil {
+		return fmt.Errorf("decrypt command body: %w", err)
+	}
+	cmd.Body = body
+	return nil
+}
+
+func decryptCommandEnvelope(privateKeyB64 string, encryptedBody map[string]any, encryption map[string]any) ([]byte, error) {
+	if strings.TrimSpace(privateKeyB64) == "" {
+		return nil, fmt.Errorf("command private key missing")
+	}
+	if !strings.EqualFold(strings.TrimSpace(stringField(encryption, "alg")), "ECDH-P256+A256GCM") {
+		return nil, fmt.Errorf("unsupported command encryption")
+	}
+	privateBytes, err := decodeBase64URL(privateKeyB64)
+	if err != nil {
+		return nil, fmt.Errorf("decode command private key: %w", err)
+	}
+	ephemeralBytes, err := decodeBase64URL(firstNonEmpty(stringField(encryption, "ephemeralPublicKey"), stringField(encryption, "epk")))
+	if err != nil {
+		return nil, fmt.Errorf("decode command ephemeral key: %w", err)
+	}
+	iv, err := decodeBase64URL(stringField(encryption, "iv"))
+	if err != nil {
+		return nil, fmt.Errorf("decode command iv: %w", err)
+	}
+	ciphertext, err := decodeBase64URL(stringField(encryptedBody, "ciphertext"))
+	if err != nil {
+		return nil, fmt.Errorf("decode command ciphertext: %w", err)
+	}
+	curve := ecdh.P256()
+	privateKey, err := curve.NewPrivateKey(privateBytes)
+	if err != nil {
+		return nil, err
+	}
+	ephemeralKey, err := curve.NewPublicKey(ephemeralBytes)
+	if err != nil {
+		return nil, err
+	}
+	shared, err := privateKey.ECDH(ephemeralKey)
+	if err != nil {
+		return nil, err
+	}
+	key := sha256.Sum256(shared)
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	aad := []byte(firstNonEmpty(stringField(encryption, "aad"), "exora-remote-command-v1"))
+	return gcm.Open(nil, iv, ciphertext, aad)
+}
+
+func generateCommandKeypair() (privateKeyB64 string, publicKeyB64 string, err error) {
+	privateKey, err := ecdh.P256().GenerateKey(rand.Reader)
+	if err != nil {
+		return "", "", err
+	}
+	return encodeBase64URL(privateKey.Bytes()), encodeBase64URL(privateKey.PublicKey().Bytes()), nil
+}
+
+func encodeBase64URL(value []byte) string {
+	return base64.RawURLEncoding.EncodeToString(value)
+}
+
+func decodeBase64URL(value string) ([]byte, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, fmt.Errorf("empty base64 value")
+	}
+	if out, err := base64.RawURLEncoding.DecodeString(value); err == nil {
+		return out, nil
+	}
+	return base64.StdEncoding.DecodeString(value)
+}
+
+func stringField(value map[string]any, key string) string {
+	if value == nil {
+		return ""
+	}
+	raw, ok := value[key]
+	if !ok {
+		return ""
+	}
+	switch v := raw.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	default:
+		data, _ := json.Marshal(v)
+		return strings.Trim(strings.TrimSpace(string(data)), `"`)
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func (p Poller) bearer() string {

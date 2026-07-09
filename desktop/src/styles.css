@@ -1,6 +1,11 @@
 :root {
   --app-edge: 10px;
-  --app-edge-bottom: 2px;
+  --app-edge-bottom: var(--app-edge);
+  --window-inner-edge: var(--app-edge);
+  --window-outer-edge: calc(var(--app-edge) - 1px);
+  --window-side-control-edge: calc(var(--window-inner-edge) + 7px);
+  --chrome-motion-duration: 180ms;
+  --chrome-motion-ease: ease;
   --app-radius: 8px;
   --collapsed-sidebar-width: 124px;
   --sidebar-width: 277px;
@@ -208,15 +213,17 @@ h3 {
     linear-gradient(180deg, #fbfcfb 0%, #eef1ee 100%);
   border-radius: var(--app-radius);
   display: grid;
-  gap: var(--app-edge);
+  gap: var(--window-inner-edge);
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   height: 100%;
   min-height: 720px;
   min-width: 1080px;
   overflow: hidden;
-  padding: var(--app-edge) var(--app-edge) var(--app-edge-bottom);
+  padding: var(--window-inner-edge) var(--window-inner-edge) var(--app-edge-bottom);
   position: relative;
-  transition: gap 180ms ease, grid-template-columns 180ms ease;
+  transition:
+    gap var(--chrome-motion-duration) var(--chrome-motion-ease),
+    grid-template-columns var(--chrome-motion-duration) var(--chrome-motion-ease);
 }
 
 .app-shell.sidebar-collapsed {
@@ -237,7 +244,7 @@ h3 {
 }
 
 .app-shell.sidebar-collapsed.transaction-detail-dockable.transaction-detail-open {
-  gap: var(--app-edge);
+  gap: var(--window-inner-edge);
   grid-template-columns: var(--collapsed-sidebar-width) minmax(0, 1fr) var(--transaction-detail-width);
 }
 
@@ -254,6 +261,7 @@ h3 {
 }
 
 .task-sidebar,
+.transaction-detail-sidebar,
 .main-workspace {
   min-height: 0;
   min-width: 0;
@@ -276,7 +284,7 @@ h3 {
   grid-column: 1;
   grid-row: 1;
   gap: 6px;
-  margin-bottom: calc(var(--app-edge) - var(--app-edge-bottom));
+  margin-bottom: 0;
   opacity: 1;
   overflow: visible;
   padding: var(--sidebar-pad);
@@ -284,39 +292,45 @@ h3 {
   position: relative;
   transform: translateX(0);
   transition:
-    border-color 180ms ease,
-    box-shadow 180ms ease,
-    opacity 180ms ease,
-    transform 180ms ease,
-    visibility 180ms ease;
+    border-color var(--chrome-motion-duration) var(--chrome-motion-ease),
+    box-shadow var(--chrome-motion-duration) var(--chrome-motion-ease),
+    opacity var(--chrome-motion-duration) var(--chrome-motion-ease),
+    transform var(--chrome-motion-duration) var(--chrome-motion-ease),
+    visibility var(--chrome-motion-duration) var(--chrome-motion-ease);
   visibility: visible;
   will-change: opacity, transform;
   z-index: 35;
 }
 
 .transaction-detail-sidebar {
+  --sidebar-pad: 12px;
   background: #f8faf8;
   border: 1px solid #dde5e1;
   border-radius: var(--app-radius);
   box-shadow: 0 12px 30px rgb(23 33 30 / 0.06);
   display: none;
+  gap: 6px;
   grid-column: 3;
   grid-row: 1;
-  grid-template-rows: minmax(0, 1fr);
-  margin-bottom: calc(var(--app-edge) - var(--app-edge-bottom));
+  grid-template-areas:
+    "detail-head"
+    "detail-content";
+  grid-template-rows: 30px minmax(0, 1fr);
+  margin-bottom: 0;
   min-height: 0;
   min-width: 0;
   opacity: 0;
   overflow: visible;
-  padding: 43px 12px 12px;
+  padding: var(--sidebar-pad);
   pointer-events: none;
   position: relative;
   transform: translateX(12px);
   transition:
-    opacity 180ms ease,
-    transform 180ms ease,
-    visibility 180ms ease;
+    opacity var(--chrome-motion-duration) var(--chrome-motion-ease),
+    transform var(--chrome-motion-duration) var(--chrome-motion-ease),
+    visibility var(--chrome-motion-duration) var(--chrome-motion-ease);
   visibility: hidden;
+  will-change: opacity, transform;
   z-index: 34;
 }
 
@@ -335,38 +349,77 @@ h3 {
   align-items: center;
   display: flex;
   justify-content: flex-end;
-  position: absolute;
-  right: 8px;
-  top: 7px;
-  z-index: 3;
-}
-
-.transaction-detail-controls {
-  align-items: center;
-  display: flex;
-  gap: 7px;
-  justify-content: flex-end;
-}
-
-.transaction-detail-popout-controls {
-  align-items: center;
-  display: flex;
-  gap: 7px;
-  justify-content: flex-end;
+  min-height: 28px;
+  min-width: 0;
   opacity: 0;
   pointer-events: none;
   position: absolute;
-  right: calc(var(--app-edge) + 8px);
-  top: calc(var(--app-edge) - 1px);
+  right: var(--window-outer-edge);
+  top: var(--window-outer-edge);
   transform: translateY(-2px);
   transition:
-    opacity 160ms ease,
-    transform 160ms ease,
-    visibility 160ms ease;
-  user-select: none;
+    opacity var(--chrome-motion-duration) var(--chrome-motion-ease),
+    right var(--chrome-motion-duration) var(--chrome-motion-ease),
+    top var(--chrome-motion-duration) var(--chrome-motion-ease),
+    transform var(--chrome-motion-duration) var(--chrome-motion-ease),
+    visibility var(--chrome-motion-duration) var(--chrome-motion-ease);
   visibility: hidden;
+  will-change: opacity, right, top, transform;
+  z-index: 90;
+}
+
+.app-shell.transaction-detail-open > .transaction-detail-head {
+  opacity: 1;
+  pointer-events: auto;
+  right: var(--window-side-control-edge);
+  top: var(--window-side-control-edge);
+  transform: translateY(0);
+  visibility: visible;
+}
+
+.window-control-rail {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+  height: 28px;
+  justify-content: flex-end;
+  user-select: none;
+  width: 141px;
   -webkit-app-region: no-drag;
+}
+
+.global-window-controls,
+.transaction-detail-popout-controls {
+  position: absolute;
+  right: var(--window-outer-edge);
+  top: var(--window-outer-edge);
+  transition:
+    opacity var(--chrome-motion-duration) var(--chrome-motion-ease),
+    transform var(--chrome-motion-duration) var(--chrome-motion-ease),
+    visibility var(--chrome-motion-duration) var(--chrome-motion-ease);
   z-index: 88;
+}
+
+.global-window-controls {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+  visibility: visible;
+}
+
+.transaction-detail-popout-controls {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-2px);
+  visibility: hidden;
+}
+
+.app-shell.transaction-detail-open > .global-window-controls,
+.app-shell.transaction-detail-popout-available > .global-window-controls {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-2px);
+  visibility: hidden;
 }
 
 .app-shell.transaction-detail-popout-available .transaction-detail-popout-controls {
@@ -374,11 +427,6 @@ h3 {
   pointer-events: auto;
   transform: translateY(0);
   visibility: visible;
-}
-
-.app-shell.transaction-detail-open .main-workspace > .main-header .window-controls,
-.app-shell.transaction-detail-popout-available .main-workspace > .main-header .window-controls {
-  display: none;
 }
 
 .transaction-detail-panel-toggle,
@@ -406,6 +454,18 @@ h3 {
   outline: 0;
 }
 
+.transaction-detail-panel-popout:disabled,
+.transaction-detail-panel-popout[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.38;
+}
+
+.transaction-detail-panel-popout:disabled:hover,
+.transaction-detail-panel-popout[aria-disabled="true"]:hover {
+  background: transparent;
+  color: #53635e;
+}
+
 .transaction-detail-panel-toggle svg.app-icon,
 .transaction-detail-panel-popout svg.app-icon {
   display: block;
@@ -421,11 +481,12 @@ h3 {
 }
 
 .transaction-detail-content {
+  grid-area: detail-content;
   height: 100%;
-  margin: 0 -12px -12px 0;
+  margin: 0 calc(var(--sidebar-pad) * -1) 0 0;
   min-height: 0;
   overflow: auto;
-  padding: 0 12px 12px 0;
+  padding: 0 var(--sidebar-pad) 0 0;
   position: relative;
 }
 
@@ -439,7 +500,7 @@ h3 {
   color: #7b8a84;
   display: grid;
   gap: 9px;
-  inset: 0 12px 12px 0;
+  inset: 0 var(--sidebar-pad) 0 0;
   justify-items: center;
   place-content: center;
   position: absolute;
@@ -481,8 +542,8 @@ h3 {
 }
 
 .transaction-detail-stage-head span {
-  color: #17836f;
-  font-size: 10px;
+  color: #61716c;
+  font-size: 12px;
   font-weight: 760;
   text-transform: uppercase;
 }
@@ -545,9 +606,9 @@ h3 {
 .sidebar-drag-strip {
   height: 42px;
   /* Electron drag regions can intercept clicks even below higher z-index controls. */
-  left: calc(var(--app-edge) + 198px);
+  left: calc(var(--window-inner-edge) + 198px);
   position: absolute;
-  top: var(--app-edge);
+  top: var(--window-inner-edge);
   width: calc(var(--sidebar-width) - 206px);
   z-index: 5;
   -webkit-app-region: drag;
@@ -560,12 +621,12 @@ h3 {
 .sidebar-chrome {
   align-items: center;
   display: flex;
-  min-height: 30px;
-  left: calc(var(--app-edge) + 8px);
+  min-height: 28px;
+  left: var(--window-side-control-edge);
   pointer-events: auto;
   position: absolute;
-  top: calc(var(--app-edge) + 7px);
-  transition: top 180ms ease, transform 180ms ease;
+  top: var(--window-side-control-edge);
+  transition: left 180ms ease, top 180ms ease, transform 180ms ease;
   transform: translateY(0);
   user-select: none;
   -webkit-app-region: no-drag;
@@ -573,7 +634,9 @@ h3 {
 }
 
 .app-shell.sidebar-collapsed .sidebar-chrome {
-  top: calc(var(--app-edge) - 1px);
+  left: var(--window-outer-edge);
+  top: var(--window-outer-edge);
+  transform: translateY(0);
 }
 
 .task-sidebar .view-switch {
@@ -2227,20 +2290,26 @@ h3 {
   transition: background-color 240ms ease;
 }
 
-.main-workspace > .main-header .window-controls {
+.main-window-drag-strip {
+  /* Real element over the progress rail's top band; pseudo-elements are unreliable for this hit area. */
+  height: 38px;
+  left: 0;
   position: absolute;
-  right: 8px;
+  right: calc(var(--app-edge) + 161px);
   top: 0;
+  z-index: 8;
+  -webkit-app-region: no-drag;
 }
 
 .main-workspace::before {
   content: "";
   height: 72px;
   left: 0;
+  pointer-events: none;
   position: absolute;
   right: 0;
   top: 0;
-  -webkit-app-region: drag;
+  -webkit-app-region: no-drag;
 }
 
 .app-shell.sidebar-collapsed .main-workspace::before {
@@ -2253,6 +2322,7 @@ h3 {
   margin: 0 auto;
   max-width: var(--workspace-content-max);
   min-height: 46px;
+  position: relative;
   width: 100%;
   user-select: none;
 }
@@ -4997,6 +5067,34 @@ h3 {
   width: 12px;
 }
 
+[data-platform="mac"] .window-control-rail .transaction-detail-panel-popout {
+  background: transparent;
+  border-radius: 8px;
+  color: #53635e;
+  height: 28px;
+  min-height: 28px;
+  opacity: 1;
+  width: 30px;
+}
+
+[data-platform="mac"] .window-control-rail .transaction-detail-panel-popout:disabled,
+[data-platform="mac"] .window-control-rail .transaction-detail-panel-popout[aria-disabled="true"] {
+  opacity: 0.38;
+}
+
+[data-platform="mac"] .window-control-rail .transaction-detail-panel-popout:hover,
+[data-platform="mac"] .window-control-rail .transaction-detail-panel-popout:focus-visible {
+  background: #e4ebe8;
+  color: #17211e;
+  filter: none;
+}
+
+[data-platform="mac"] .window-control-rail .transaction-detail-panel-popout:disabled:hover,
+[data-platform="mac"] .window-control-rail .transaction-detail-panel-popout[aria-disabled="true"]:hover {
+  background: transparent;
+  color: #53635e;
+}
+
 [data-platform="mac"] .window-controls button[data-window-action="close"] {
   background: #ff5f57;
 }
@@ -5022,6 +5120,12 @@ h3 {
 
 [data-platform="mac"] .window-controls:hover svg {
   opacity: 1;
+}
+
+[data-platform="mac"] .window-control-rail .transaction-detail-panel-popout svg {
+  height: 16px;
+  opacity: 1;
+  width: 16px;
 }
 
 [data-platform="mac"] .window-controls path {
@@ -5101,6 +5205,22 @@ button *,
 .workspace-toolbar button *,
 .window-controls button,
 .window-controls button * {
+  -webkit-app-region: no-drag;
+}
+
+/* This rail overlaps the frameless titlebar; keep the invisible hit area draggable,
+   while the visible stage affordances remain clickable. */
+.transaction-flow-frame,
+.transaction-progress-panel,
+.transaction-progress-strip,
+.transaction-progress-steps,
+.transaction-progress-step,
+.transaction-stage-button {
+  -webkit-app-region: drag;
+}
+
+.transaction-stage-button .transaction-stage-dot,
+.transaction-stage-button strong {
   -webkit-app-region: no-drag;
 }
 
@@ -7523,19 +7643,34 @@ dd {
   border: 1px solid #d7e0dd;
   border-radius: 999px;
   background: rgb(255 255 255 / 0.94);
-  bottom: 16px;
-  box-shadow: 0 10px 30px rgb(23 33 30 / 0.12);
+  box-shadow: 0 14px 34px rgb(23 33 30 / 0.16);
   color: #45544f;
   font-size: 12px;
   left: 50%;
   max-width: min(680px, calc(100vw - 36px));
+  opacity: 0;
   overflow: hidden;
   padding: 8px 12px;
+  pointer-events: none;
   position: fixed;
   text-overflow: ellipsis;
-  transform: translateX(-50%);
+  top: 16px;
+  transform: translate(-50%, -12px);
+  transition: opacity 160ms ease, transform 160ms ease;
   white-space: nowrap;
-  z-index: 30;
+  z-index: 80;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+:root[data-theme="dark"] .toast {
+  background: rgb(24 34 31 / 0.96);
+  border-color: rgb(102 126 118 / 0.5);
+  box-shadow: 0 14px 34px rgb(0 0 0 / 0.32);
+  color: #d8e5df;
 }
 
 .settings-detail {
@@ -10008,7 +10143,9 @@ label span {
   .transaction-stage-detail,
   .transaction-stage-detail-expanded,
   .transaction-stage-detail-toggle .app-icon,
+  .transaction-detail-head,
   .transaction-detail-sidebar,
+  .global-window-controls,
   .transaction-detail-popout-controls {
     transition: none;
   }
@@ -10030,7 +10167,7 @@ label span {
 
   .app-shell {
     --app-edge: 8px;
-    --app-edge-bottom: 2px;
+    --app-edge-bottom: var(--app-edge);
     --collapsed-sidebar-width: 0px;
     grid-template-columns: 1fr;
     overflow: auto;
@@ -10064,8 +10201,8 @@ label span {
     left: auto;
     max-width: min(360px, calc(100vw - 20px));
     position: absolute;
-    right: var(--app-edge);
-    top: var(--app-edge);
+    right: var(--window-inner-edge);
+    top: var(--window-inner-edge);
     width: min(360px, calc(100vw - 20px));
     z-index: 86;
   }

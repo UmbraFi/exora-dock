@@ -17,10 +17,14 @@ func Allowed(method string, path string) bool {
 	if strings.Contains(path, "/credentials") ||
 		strings.Contains(path, "/wallet/create") ||
 		strings.Contains(path, "/payment-pin/set") ||
+		strings.Contains(path, "/artifacts/") ||
 		strings.Contains(path, "/ipfs/") {
 		return false
 	}
 	if strings.HasPrefix(path, "/v1/wallet") {
+		return method == http.MethodGet
+	}
+	if path == "/v1/console/snapshot" {
 		return method == http.MethodGet
 	}
 	if path == "/v1/dispute-evidence" {
@@ -31,6 +35,9 @@ func Allowed(method string, path string) bool {
 	}
 	if path == "/v1/market/rail-cards" {
 		return method == http.MethodGet
+	}
+	if agentCardAllowed(method, path) || settingsAllowed(method, path) || workRunAllowed(method, path) {
+		return true
 	}
 	if negotiationAllowed(method, path) {
 		return true
@@ -86,6 +93,54 @@ func agentRunAllowed(method string, path string) bool {
 		return method == http.MethodGet
 	}
 	return len(parts) == 5 && (parts[4] == "resume" || parts[4] == "stop") && method == http.MethodPost
+}
+
+func workRunAllowed(method string, path string) bool {
+	if path == "/v1/work-runs" {
+		return method == http.MethodGet || method == http.MethodPost
+	}
+	if !strings.HasPrefix(path, "/v1/work-runs/") {
+		return false
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 3 {
+		return method == http.MethodGet
+	}
+	return len(parts) == 4 && (parts[3] == "resume" || parts[3] == "stop" || parts[3] == "events") &&
+		((parts[3] == "events" && method == http.MethodGet) || (parts[3] != "events" && method == http.MethodPost))
+}
+
+func agentCardAllowed(method string, path string) bool {
+	if path == "/v1/agent-cards/mine" || path == "/v1/agent-cards/search" {
+		return method == http.MethodGet
+	}
+	if path == "/v1/agent-cards/diagnostics" || path == "/v1/agent-cards/draft" {
+		return method == http.MethodPost
+	}
+	if !strings.HasPrefix(path, "/v1/agent-cards/") {
+		return false
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 3 {
+		return method == http.MethodPut
+	}
+	return len(parts) == 4 && parts[3] == "publish" && method == http.MethodPost
+}
+
+func settingsAllowed(method string, path string) bool {
+	if path == "/v1/settings/buyer-agent" || path == "/v1/settings/seller-agent" {
+		return method == http.MethodGet || method == http.MethodPut
+	}
+	if path == "/v1/settings/llm-profiles" {
+		return method == http.MethodGet || method == http.MethodPost || method == http.MethodPut || method == http.MethodDelete
+	}
+	if path == "/v1/settings/llm-profiles/test" {
+		return method == http.MethodPost
+	}
+	if path == "/v1/settings/llm-profiles/models" {
+		return method == http.MethodGet
+	}
+	return false
 }
 
 func cleanPath(path string) string {
@@ -148,7 +203,7 @@ func orderPlanAllowed(method string, path string) bool {
 	if len(parts) == 3 {
 		return method == http.MethodGet
 	}
-	return len(parts) == 4 && (parts[3] == "select" || parts[3] == "cancel") && method == http.MethodPost
+	return len(parts) == 4 && (parts[3] == "select" || parts[3] == "submit-provider-job" || parts[3] == "cancel") && method == http.MethodPost
 }
 
 func paymentAllowed(method string, path string) bool {

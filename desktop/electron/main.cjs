@@ -1,10 +1,17 @@
-const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, safeStorage, screen, shell } = require('electron')
 const { spawn, execFile } = require('node:child_process')
 const crypto = require('node:crypto')
 const fs = require('node:fs')
 const fsp = require('node:fs/promises')
 const path = require('node:path')
 const YAML = require('yaml')
+const { registerIpcHandlers } = require('./ipc.cjs')
+const {
+  createAppURLPolicy,
+  installNavigationGuards,
+  isTrustedIpcSender,
+} = require('./security.cjs')
+const { createWorkspaceSnapshot } = require('./workspace.cjs')
 
 const APP_ID = 'io.exora.dock'
 const BASE_URL = 'http://127.0.0.1:8080'
@@ -18,12 +25,30 @@ const DEV_URL = process.env.EXORA_DOCK_DESKTOP_DEV_URL || 'http://127.0.0.1:1420
 const WINDOW_ICON = process.platform === 'win32'
   ? path.join(__dirname, 'assets', 'icon.ico')
   : path.join(__dirname, 'assets', 'icon.png')
+const APP_URL_POLICY = createAppURLPolicy({
+  isPackaged: app.isPackaged,
+  devUrl: DEV_URL,
+  distDir: path.join(__dirname, '..', 'dist'),
+})
 const STARTUP_LANGUAGE = readStartupLanguageSync()
 const MASKED_API_KEY_VALUE = '************'
 
 app.commandLine.appendSwitch('lang', chromiumLocaleForLanguage(STARTUP_LANGUAGE))
 
 let mainWindow
+let manualWindowDrag
+const workspaceSnapshotService = createWorkspaceSnapshot({
+  dockPaths,
+  ensureLocalLayout,
+  projectFoldersStatus,
+  activeWorkMCPLeases,
+  healthOk,
+  localOwnerToken,
+  httpJson,
+  addConnectionProjectFolders,
+  addActivityProjectFolders,
+  errorMessage,
+})
 
 if (process.platform === 'win32') {
   app.setAppUserModelId(APP_ID)
@@ -56,6 +81,7 @@ function createWindow() {
     },
   })
 
+  installNavigationGuards(mainWindow, { policy: APP_URL_POLICY, shell })
   mainWindow.once('ready-to-show', () => mainWindow.show())
   if (app.isPackaged) {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
@@ -80,86 +106,106 @@ app.on('window-all-closed', () => {
 })
 
 function registerIpc() {
-  const handlers = {
-    window_minimize,
-    window_toggle_maximize,
-    window_close,
-    app_status,
-    start_dock,
-    stop_dock,
-    restart_dock,
-    open_health,
-    open_manifest,
-    open_logs,
-    copy_mcp_command,
-    copy_agent_prompt,
-    copy_opencode_config,
-    copy_rest_base_url,
-    create_work_mcp_uid,
-    release_work_mcp_lease,
-    stop_work_run,
-    llm_profiles,
-    save_llm_profile,
-    delete_llm_profile,
-    apply_llm_profile,
-    desktop_persistence_load,
-    save_app_settings,
-    locale_status,
-    set_locale,
-    save_chat_thread,
-    archive_chat_threads,
-    save_transactions,
-    pwa_link_start,
-    pwa_link_status,
-    seller_settings,
-    save_seller_settings,
-    test_llm_connection,
-    list_llm_models,
-    agent_cards_mine,
-    agent_card_diagnostics,
-    agent_card_draft,
-    save_agent_card,
-    publish_agent_card,
-    seller_market_status,
-    market_rail_cards,
-    agent_card_search,
-    agent_search_sellers,
-    list_approvals,
-    decide_approval,
-    list_order_plans,
-    workspace_snapshot,
-    list_tasks,
-    get_task,
-    list_payments,
-    get_payment,
-    select_order_plan,
-    cancel_order_plan,
-    payment_pin_status,
-    set_payment_pin,
-    project_folder_status,
-    choose_project_folder,
-    open_project_folder,
-    rename_project_folder,
-    archive_project_chats,
-    remove_project_folder,
-    wallet_status,
-    wallet_create,
-    wallet_unlock,
-    wallet_restore,
-    wallet_withdraw,
-    security_status,
-    daemon_status,
-    start_daemon,
-    stop_daemon,
-    open_console,
-  }
-
-  ipcMain.handle('exora:invoke', async (_event, command, payload = {}) => {
-    if (typeof command !== 'string' || !Object.prototype.hasOwnProperty.call(handlers, command)) {
-      throw new Error(`unknown desktop command: ${String(command)}`)
-    }
-    return handlers[command](payload)
+  registerIpcHandlers(ipcMain, createIpcHandlerGroups(), {
+    validateSender: (event) => isTrustedIpcSender(event, APP_URL_POLICY),
   })
+}
+
+function createIpcHandlerGroups() {
+  return {
+    window: {
+      window_minimize,
+      window_toggle_maximize,
+      window_close,
+      window_begin_manual_drag,
+      window_manual_drag_move,
+      window_end_manual_drag,
+    },
+    dockRuntime: {
+      app_status,
+      start_dock,
+      stop_dock,
+      restart_dock,
+      daemon_status,
+      start_daemon,
+      stop_daemon,
+      open_console,
+      open_health,
+      open_manifest,
+      open_logs,
+      copy_mcp_command,
+      copy_agent_prompt,
+      copy_opencode_config,
+      copy_rest_base_url,
+    },
+    localWork: {
+      workspace_snapshot,
+      create_work_mcp_uid,
+      release_work_mcp_lease,
+      stop_work_run,
+      project_folder_status,
+      choose_project_folder,
+      open_project_folder,
+      rename_project_folder,
+      archive_project_chats,
+      remove_project_folder,
+    },
+    persistence: {
+      desktop_persistence_load,
+      save_app_settings,
+      locale_status,
+      set_locale,
+      save_chat_thread,
+      archive_chat_threads,
+      save_transactions,
+    },
+    pwaLink: {
+      pwa_link_start,
+      pwa_link_status,
+    },
+    llmAndSeller: {
+      seller_settings,
+      save_seller_settings,
+      llm_profiles,
+      save_llm_profile,
+      delete_llm_profile,
+      apply_llm_profile,
+      test_llm_connection,
+      list_llm_models,
+    },
+    agentCardsAndMarket: {
+      agent_cards_mine,
+      agent_card_diagnostics,
+      agent_card_draft,
+      save_agent_card,
+      publish_agent_card,
+      seller_market_status,
+      market_rail_cards,
+      agent_card_search,
+      agent_search_sellers,
+    },
+    ownerLedger: {
+      list_approvals,
+      decide_approval,
+      list_order_plans,
+      list_tasks,
+      get_task,
+      list_payments,
+      get_payment,
+      select_order_plan,
+      cancel_order_plan,
+      payment_pin_status,
+      set_payment_pin,
+    },
+    walletAndSecurity: {
+      wallet_status,
+      wallet_create,
+      wallet_unlock,
+      wallet_restore,
+      wallet_withdraw,
+      security_status,
+    },
+  }
 }
 
 async function window_minimize() {
@@ -174,6 +220,36 @@ async function window_toggle_maximize() {
 
 async function window_close() {
   mainWindow?.close()
+}
+
+async function window_begin_manual_drag() {
+  if (!mainWindow || mainWindow.isDestroyed()) return false
+  if (mainWindow.isMaximized()) return false
+  manualWindowDrag = {
+    cursor: screen.getCursorScreenPoint(),
+    bounds: mainWindow.getBounds(),
+  }
+  return true
+}
+
+async function window_manual_drag_move() {
+  moveManualWindowDrag()
+  return true
+}
+
+async function window_end_manual_drag() {
+  manualWindowDrag = undefined
+  return true
+}
+
+function moveManualWindowDrag() {
+  if (!manualWindowDrag || !mainWindow || mainWindow.isDestroyed()) return
+  const cursor = screen.getCursorScreenPoint()
+  mainWindow.setPosition(
+    Math.round(manualWindowDrag.bounds.x + cursor.x - manualWindowDrag.cursor.x),
+    Math.round(manualWindowDrag.bounds.y + cursor.y - manualWindowDrag.cursor.y),
+    false,
+  )
 }
 
 async function app_status() {
@@ -291,6 +367,8 @@ async function pwa_link_start(payload) {
   const paths = await dockPaths()
   await ensureLocalLayout(paths)
   const cfg = await cloudLinkConfig(paths, payload?.input ?? {})
+  const commandKey = createCommandKeyPair()
+  await savePendingCommandKey(cfg.tokenPath, commandKey)
   const result = await cloudPostJSON(`${cfg.cloudUrl}/v1/device-links`, {
     dockId: cfg.dockId,
     displayName: 'Exora Dock',
@@ -298,6 +376,7 @@ async function pwa_link_start(payload) {
     publicBaseUrl: BASE_URL,
     version: '0.1.0',
     capabilities: ['remote.console', 'approvals.queue', 'mcp.stdio'],
+    commandPublicKey: commandKey.publicKey,
   }, 10000)
   if (!result.ok) {
     throw new Error(`cloud device link returned ${result.status}: ${result.error}`)
@@ -356,12 +435,25 @@ async function pwa_link_status(payload) {
   if (!cloudToken) throw new Error('cloud token missing from approved device link')
 
   const dockId = String(body.dockId || input.dockId || cfg.dockId).trim()
+  const commandKey = await loadPendingCommandKey(cfg.tokenPath).catch(() => createCommandKeyPair())
   await saveCloudTokenFile(cfg.tokenPath, {
     dockId,
     cloudUrl: cfg.cloudUrl,
     cloudToken,
+    commandPrivateKey: commandKey.privateKey,
+    commandPublicKey: commandKey.publicKey,
     linkedAt: new Date().toISOString(),
   })
+  await cloudPostJSON(`${cfg.cloudUrl}/v1/docks/${encodeURIComponent(dockId)}/heartbeat`, {
+    dockId,
+    displayName: 'Exora Dock',
+    mode: cfg.mode,
+    publicBaseUrl: BASE_URL,
+    version: '0.1.0',
+    capabilities: ['remote.console', 'approvals.queue', 'mcp.stdio'],
+    commandPublicKey: commandKey.publicKey,
+  }, 10000, cloudToken)
+  await deletePendingCommandKey(cfg.tokenPath)
   await ensureCloudLinkConfig(paths, cfg.cloudUrl, cfg.tokenPath, dockId)
 
   let restart = { daemonRestarted: false, message: 'PWA linked. Remote Console can now control this Dock.' }
@@ -925,26 +1017,7 @@ async function list_order_plans() {
 }
 
 async function workspace_snapshot() {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  const folderStatus = await projectFoldersStatus(paths)
-  const workMcpLeases = await activeWorkMCPLeases(paths)
-  if (!(await healthOk())) {
-    return { online: false, orderPlans: [], approvals: [], tasks: [], payments: [], mcpConnections: [], workMcpLeases, workRuns: [], ...folderStatus, errors: ['local daemon is offline'] }
-  }
-  const token = await localOwnerToken(paths)
-  const errors = []
-  const orderPlans = await snapshotArray(httpJson('GET', '/v1/order-plans?status=pending_selection', undefined, token), 'orderPlans', errors)
-  const approvals = await snapshotArray(httpJson('GET', '/v1/approvals?status=pending', undefined, token), 'approvals', errors)
-  const tasks = await snapshotArray(httpJson('GET', '/v1/tasks', undefined, token), 'tasks', errors)
-  const payments = await snapshotArray(httpJson('GET', '/v1/payments', undefined, token), 'payments', errors)
-  const mcpConnections = await snapshotArray(httpJson('GET', '/v1/mcp/connections', undefined, token), 'mcpConnections', errors)
-  const workRuns = await snapshotArray(httpJson('GET', '/v1/work-runs', undefined, token), 'workRuns', errors)
-  const workRunEvents = await snapshotWorkRunEvents(workRuns, token, errors)
-  await addConnectionProjectFolders(paths, mcpConnections)
-  await addActivityProjectFolders(paths, orderPlans, tasks)
-  const updatedFolderStatus = await projectFoldersStatus(paths)
-  return { online: true, orderPlans, approvals, tasks, payments, mcpConnections, workMcpLeases, workRuns, workRunEvents, ...updatedFolderStatus, errors }
+  return workspaceSnapshotService.snapshot()
 }
 
 async function create_work_mcp_uid(payload = {}) {
@@ -2827,10 +2900,13 @@ function normalizeCloudURL(value) {
   return trimmed || 'http://127.0.0.1:8090'
 }
 
-async function cloudPostJSON(url, body, timeoutMs) {
+async function cloudPostJSON(url, body, timeoutMs, token = '') {
   const response = await fetchWithTimeout(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     body: JSON.stringify(body),
   }, timeoutMs)
   const text = await response.text()
@@ -2877,7 +2953,48 @@ function pwaLinkQRPayload(link, cfg) {
 function sanitizePwaLink(value) {
   const next = { ...objectOr(value) }
   delete next.cloudToken
+  delete next.commandPrivateKey
   return next
+}
+
+function createCommandKeyPair() {
+  const ecdh = crypto.createECDH('prime256v1')
+  ecdh.generateKeys()
+  return {
+    privateKey: base64URL(ecdh.getPrivateKey()),
+    publicKey: base64URL(ecdh.getPublicKey()),
+  }
+}
+
+function base64URL(buffer) {
+  return Buffer.from(buffer)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '')
+}
+
+function pendingCommandKeyPath(tokenPath) {
+  return `${tokenPath}.command-key.json`
+}
+
+async function savePendingCommandKey(tokenPath, commandKey) {
+  const keyPath = pendingCommandKeyPath(tokenPath)
+  await fsp.mkdir(path.dirname(keyPath), { recursive: true })
+  await fsp.writeFile(keyPath, `${JSON.stringify(commandKey, null, 2)}\n`, { mode: 0o600 })
+}
+
+async function loadPendingCommandKey(tokenPath) {
+  const raw = await fsp.readFile(pendingCommandKeyPath(tokenPath), 'utf8')
+  const parsed = objectOr(JSON.parse(raw))
+  const privateKey = String(parsed.privateKey || '').trim()
+  const publicKey = String(parsed.publicKey || '').trim()
+  if (!privateKey || !publicKey) throw new Error('pending command key missing')
+  return { privateKey, publicKey }
+}
+
+async function deletePendingCommandKey(tokenPath) {
+  await fsp.rm(pendingCommandKeyPath(tokenPath), { force: true })
 }
 
 async function saveCloudTokenFile(tokenPath, value) {
@@ -3048,35 +3165,6 @@ function classifyLlmError(error) {
   if (lower.includes('404')) return 'wrong_endpoint_or_model'
   if (lower.includes('/responses')) return 'provider_does_not_support_responses'
   return 'failed'
-}
-
-async function snapshotArray(promise, key, errors) {
-  try {
-    const value = await promise
-    return Array.isArray(value?.[key]) ? value[key] : []
-  } catch (error) {
-    errors.push(`${key}: ${errorMessage(error)}`)
-    return []
-  }
-}
-
-async function snapshotWorkRunEvents(workRuns, token, errors) {
-  const selectedRuns = [...(Array.isArray(workRuns) ? workRuns : [])]
-    .sort((a, b) => Date.parse(b?.updatedAt || b?.createdAt || '') - Date.parse(a?.updatedAt || a?.createdAt || ''))
-    .filter((run, index) => index < 20 || ['queued', 'running', 'waiting_owner_choice', 'waiting_owner_approval', 'waiting_worker', 'stop_requested'].includes(String(run?.status || '')))
-    .slice(0, 30)
-  const entries = await Promise.all(selectedRuns.map(async (run) => {
-    const runId = String(run?.runId || '').trim()
-    if (!runId) return undefined
-    try {
-      const value = await httpJson('GET', `/v1/work-runs/${encodeURIComponent(runId)}/events`, undefined, token, { timeoutMs: 1800, retryOnOffline: false })
-      return [runId, Array.isArray(value?.events) ? value.events.slice(-20) : []]
-    } catch (error) {
-      errors.push(`workRunEvents:${runId}: ${errorMessage(error)}`)
-      return [runId, []]
-    }
-  }))
-  return Object.fromEntries(entries.filter(Boolean))
 }
 
 async function fetchWithTimeout(url, options, timeoutMs) {
