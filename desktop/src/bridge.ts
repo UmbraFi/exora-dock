@@ -4,6 +4,7 @@ type ExoraBridge = {
     chromiumLocale?: string
   }
   invoke<T = unknown>(command: string, payload?: Record<string, unknown>): Promise<T>
+  onLocalAgentEvent?(callback: (payload: unknown) => void): () => void
 }
 
 declare global {

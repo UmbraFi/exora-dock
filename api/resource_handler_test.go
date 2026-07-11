@@ -13,6 +13,7 @@ import (
 	"github.com/exora-dock/exora-dock/internal/chat"
 	"github.com/exora-dock/exora-dock/internal/delegation"
 	"github.com/exora-dock/exora-dock/internal/dht"
+	"github.com/exora-dock/exora-dock/internal/discovery"
 	"github.com/exora-dock/exora-dock/internal/lease"
 	"github.com/exora-dock/exora-dock/internal/resource"
 	"github.com/go-chi/chi/v5"
@@ -30,7 +31,8 @@ func TestResourceDelegationLeaseFlow(t *testing.T) {
 	leases := lease.NewStore(c)
 	reviewAgent := agent.NewReviewAgent("", "", "", nil)
 
-	handler := NewHandler(c, nil, nil, chat.NewHub(), dht.NewRing(), nil, nil, reviewAgent, nil, nil, resources, delegations, leases, "local-dev-miner")
+	manifest := discovery.BuildLegacy(":8080", "local-dev-miner")
+	handler := NewHandler(c, nil, nil, chat.NewHub(), dht.NewRing(), nil, nil, reviewAgent, nil, nil, resources, delegations, leases, "local-dev-miner", RuntimeStores{Discovery: &manifest})
 	router := chi.NewRouter()
 	router.Get("/.well-known/exora-dock.json", handler.DiscoveryManifest)
 	router.Post("/resources", handler.CreateResource)

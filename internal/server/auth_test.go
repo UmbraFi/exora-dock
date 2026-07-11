@@ -54,12 +54,13 @@ func TestAuthScopesProtectApprovalDecision(t *testing.T) {
 		t.Fatal(err)
 	}
 	router := New(c, nil, nil, chat.NewHub(), dht.NewRing(), nil, nil, nil, nil, nil, resources, nil, nil, "local-dev-miner", RuntimeStores{
-		Tasks:      tasks,
-		Approvals:  approvals,
-		OrderPlans: orderPlans,
-		PaymentPIN: pins,
-		Payments:   payment.NewStore(c),
-		Auth:       authStore,
+		Tasks:        tasks,
+		Approvals:    approvals,
+		OrderPlans:   orderPlans,
+		PaymentPIN:   pins,
+		Payments:     payment.NewStore(c),
+		Auth:         authStore,
+		LegacyMarket: true,
 	})
 
 	createTask := authReq(http.MethodPost, "/v1/tasks", `{"requesterPubkey":"user-1","agentId":"agent-1","type":"compute.inference","goal":"run gpu job"}`, authStore.AgentToken())
@@ -166,8 +167,8 @@ func TestAuthScopesProtectApprovalDecision(t *testing.T) {
 	ownerRun := authReq(http.MethodPost, "/v1/agent/runs", `{"intent":"find a seller"}`, authStore.OwnerToken())
 	ownerRunRec := httptest.NewRecorder()
 	router.ServeHTTP(ownerRunRec, ownerRun)
-	if ownerRunRec.Code != http.StatusAccepted {
-		t.Fatalf("owner agent run status=%d body=%s", ownerRunRec.Code, ownerRunRec.Body.String())
+	if ownerRunRec.Code != http.StatusNotFound {
+		t.Fatalf("removed direct agent run route status=%d body=%s", ownerRunRec.Code, ownerRunRec.Body.String())
 	}
 
 	owner := authReq(http.MethodPost, "/v1/approvals/"+approvalBody.Approval.ID+"/decide", `{"approved":true,"paymentPin":"123456"}`, authStore.OwnerToken())

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,8 @@ import (
 
 	"github.com/exora-dock/exora-dock/internal/agent"
 	"github.com/exora-dock/exora-dock/internal/agentcard"
+	"github.com/exora-dock/exora-dock/internal/agentdriver"
+	"github.com/exora-dock/exora-dock/internal/agentsession"
 	"github.com/exora-dock/exora-dock/internal/approval"
 	"github.com/exora-dock/exora-dock/internal/cache"
 	"github.com/exora-dock/exora-dock/internal/chat"
@@ -32,7 +35,9 @@ import (
 	"github.com/exora-dock/exora-dock/internal/product"
 	"github.com/exora-dock/exora-dock/internal/providerprotocol"
 	"github.com/exora-dock/exora-dock/internal/resource"
+	"github.com/exora-dock/exora-dock/internal/runcapability"
 	"github.com/exora-dock/exora-dock/internal/samplemarket"
+	"github.com/exora-dock/exora-dock/internal/supervisor"
 	"github.com/exora-dock/exora-dock/internal/task"
 	"github.com/exora-dock/exora-dock/internal/wallet"
 	"github.com/exora-dock/exora-dock/internal/workrun"
@@ -51,8 +56,12 @@ type RuntimeStores struct {
 	TaskExecutor    *task.Executor
 	Discovery       *discovery.Manifest
 	AgentCards      *agentcard.Store
-	AgentRuns       *agent.RunStore
-	AgentLLMConfig  agent.LLMClientConfig
+	AutomationRuns  *supervisor.Store
+	Supervisor      *supervisor.Service
+	AgentSessions   *agentsession.Manager
+	RunCapabilities *runcapability.Manager
+	CodexProbe      func(context.Context) (agentdriver.CapabilityReport, error)
+	CodexAgent      agentdriver.LocalAgentConfig
 	CardDiagnostics agentcard.DiagnosticsConfig
 	CardPublisher   agentcard.CloudPublisher
 	WorkRuns        *workrun.Store
@@ -90,10 +99,13 @@ type Handler struct {
 	executor        *task.Executor
 	discovery       *discovery.Manifest
 	agentCards      *agentcard.Store
-	agentRuns       *agent.RunStore
-	agentRuntime    *agent.Runtime
+	automationRuns  *supervisor.Store
+	supervisor      *supervisor.Service
+	agentSessions   *agentsession.Manager
+	runCapabilities *runcapability.Manager
+	codexProbe      func(context.Context) (agentdriver.CapabilityReport, error)
+	codexAgent      agentdriver.LocalAgentConfig
 	workRuns        *workrun.Store
-	agentLLMConfig  agent.LLMClientConfig
 	cardDiagnostics agentcard.DiagnosticsConfig
 	cardPublisher   agentcard.CloudPublisher
 	escrowProgramID string
@@ -154,8 +166,12 @@ func NewHandler(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub
 		executor:        stores.TaskExecutor,
 		discovery:       stores.Discovery,
 		agentCards:      stores.AgentCards,
-		agentRuns:       stores.AgentRuns,
-		agentLLMConfig:  stores.AgentLLMConfig,
+		automationRuns:  stores.AutomationRuns,
+		supervisor:      stores.Supervisor,
+		agentSessions:   stores.AgentSessions,
+		runCapabilities: stores.RunCapabilities,
+		codexProbe:      stores.CodexProbe,
+		codexAgent:      stores.CodexAgent,
 		workRuns:        stores.WorkRuns,
 		cardDiagnostics: stores.CardDiagnostics,
 		cardPublisher:   stores.CardPublisher,
@@ -173,33 +189,30 @@ func NewHandler(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub
 	if h.usdcDecimals == 0 {
 		h.usdcDecimals = 6
 	}
-	if h.agentRuns == nil {
-		h.agentRuns = agent.NewRunStore(c)
-	}
 	if h.workRuns == nil {
 		h.workRuns = workrun.NewStore(c)
+	}
+	if h.automationRuns == nil {
+		h.automationRuns = supervisor.NewStore(c)
 	}
 	if h.negotiations == nil {
 		h.negotiations = negotiation.NewStore(c)
 	}
-	h.agentRuntime = agent.NewRuntime(agent.RuntimeConfig{
-		Store:     h.agentRuns,
-		Generator: agent.NewOpenAICompatibleClient(h.agentLLMConfig),
-		Tools:     h.agentTools(),
-		MaxTurns:  8,
-	})
 	return h
 }
 
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
+	payload := map[string]any{
 		"status":       "ok",
 		"dock":         "exora-dock",
 		"uptime":       time.Since(h.startTime).String(),
-		"miners":       len(h.ring.Miners()),
 		"online_users": h.hub.OnlineCount(),
 		"discovery":    "/.well-known/exora-dock.json",
-	})
+	}
+	if h.ring != nil && len(h.ring.Miners()) > 0 {
+		payload["legacyMiners"] = len(h.ring.Miners())
+	}
+	writeJSON(w, http.StatusOK, payload)
 }
 
 func (h *Handler) DiscoveryManifest(w http.ResponseWriter, r *http.Request) {

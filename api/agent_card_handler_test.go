@@ -27,9 +27,7 @@ func TestAgentCardDraftSaveAndPublishValidation(t *testing.T) {
 	handler := NewHandler(c, nil, nil, chat.NewHub(), dht.NewRing(), nil, nil, nil, nil, nil, nil, nil, nil, "dock-test", RuntimeStores{
 		AgentCards: cards,
 		CardDiagnostics: agentcard.DiagnosticsConfig{
-			LLMProvider:   "https://api.openai.com/v1",
-			LLMConfigured: true,
-			MCPAvailable:  true,
+			MCPAvailable: true,
 		},
 	})
 	router := chi.NewRouter()
@@ -77,9 +75,7 @@ func TestAgentCardBuyerSellerNotesPersistIndependently(t *testing.T) {
 	handler := NewHandler(c, nil, nil, chat.NewHub(), dht.NewRing(), nil, nil, nil, nil, nil, nil, nil, nil, "dock-test", RuntimeStores{
 		AgentCards: cards,
 		CardDiagnostics: agentcard.DiagnosticsConfig{
-			LLMProvider:   "https://api.openai.com/v1",
-			LLMConfigured: true,
-			MCPAvailable:  true,
+			MCPAvailable: true,
 		},
 	})
 	router := chi.NewRouter()
@@ -311,12 +307,19 @@ func validSellerAgentCard(t *testing.T) agentcard.AgentCard {
 			DiagnosticsVersion: "test",
 		},
 		Seller: agentcard.SellerManualFields{
-			DisplayName:       "GPU Provider",
-			CapabilitySummary: "48GB GPU inference runs",
-			Pricing:           "10 USDC per job",
-			Availability:      "weekdays",
-			HumanConfirmation: "owner confirms risky tasks",
-			DataBoundary:      "task scoped",
+			DisplayName:         "GPU Provider",
+			CapabilitySummary:   "48GB GPU inference runs",
+			Pricing:             "10 USDC per job",
+			Availability:        "weekdays",
+			HumanConfirmation:   "owner confirms risky tasks",
+			DataBoundary:        "task scoped",
+			SetupStatus:         "complete",
+			StructuredByAgent:   "codex",
+			StructuredAt:        now,
+			AllowedAgentActions: []string{"inspect task inputs", "prepare quote"},
+			ApprovalRequired:    []string{"credential use", "external writes"},
+			CredentialPolicy:    "Aliases only; secret values stay in owner storage.",
+			NetworkPolicy:       "Only declared task endpoints are allowed.",
 		},
 	})
 	if err != nil {

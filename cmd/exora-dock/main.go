@@ -20,6 +20,8 @@ import (
 	"github.com/dgraph-io/badger/v4"
 	"github.com/exora-dock/exora-dock/internal/agent"
 	"github.com/exora-dock/exora-dock/internal/agentcard"
+	"github.com/exora-dock/exora-dock/internal/agentdriver"
+	"github.com/exora-dock/exora-dock/internal/agentsession"
 	"github.com/exora-dock/exora-dock/internal/approval"
 	"github.com/exora-dock/exora-dock/internal/cache"
 	"github.com/exora-dock/exora-dock/internal/chat"
@@ -41,8 +43,10 @@ import (
 	"github.com/exora-dock/exora-dock/internal/product"
 	"github.com/exora-dock/exora-dock/internal/registry"
 	"github.com/exora-dock/exora-dock/internal/resource"
+	"github.com/exora-dock/exora-dock/internal/runcapability"
 	"github.com/exora-dock/exora-dock/internal/samplemarket"
 	"github.com/exora-dock/exora-dock/internal/server"
+	"github.com/exora-dock/exora-dock/internal/supervisor"
 	"github.com/exora-dock/exora-dock/internal/task"
 	"github.com/exora-dock/exora-dock/internal/wallet"
 	"golang.org/x/term"
@@ -91,12 +95,6 @@ func main() {
 		}
 		return
 	}
-	if len(os.Args) > 1 && os.Args[1] == "agent" {
-		if err := runAgentCommand(os.Args[2:]); err != nil {
-			log.Fatalf("agent: %v", err)
-		}
-		return
-	}
 	if len(os.Args) > 1 && os.Args[1] == "negotiations" {
 		if err := runNegotiationsCommand(os.Args[2:]); err != nil {
 			log.Fatalf("negotiations: %v", err)
@@ -121,6 +119,11 @@ func main() {
 	}
 	if err := os.MkdirAll(cfg.DataDir, 0700); err != nil {
 		log.Fatalf("data dir init: %v", err)
+	}
+	for _, workspaceRoot := range cfg.LocalAgents.Codex.WorkspaceRoots {
+		if err := os.MkdirAll(workspaceRoot, 0700); err != nil {
+			log.Fatalf("automation workspace root %s: %v", workspaceRoot, err)
+		}
 	}
 
 	c, err := cache.New(cfg.CacheMaxMB*1024, cfg.DataDir)
@@ -147,10 +150,11 @@ func main() {
 	// Chat store (with Badger persistence), WebSocket hub & relay
 	chatStore := chat.NewStore(chatDB)
 	hub := chat.NewHub()
-	selfPubkey := "local"
+	selfPubkey := firstNonEmptyString(cfg.DockID, "local-dock")
 
-	// Registry (optional)
-	if cfg.KeyPath != "" && cfg.ProgramID != "" {
+	// The miner registry/DHT market is a legacy compatibility surface and is
+	// never joined by the V2 production default.
+	if cfg.LegacyMarketEnabled && cfg.KeyPath != "" && cfg.ProgramID != "" {
 		reg, err := registry.New(cfg.RPC, cfg.ProgramID, cfg.KeyPath)
 		if err != nil {
 			log.Printf("[registry] skipped: %v", err)
@@ -168,13 +172,19 @@ func main() {
 		}
 	}
 
-	selfPubkey = ensureLocalMiner(ring, selfPubkey, cfg.ListenAddr)
+	if cfg.LegacyMarketEnabled {
+		selfPubkey = ensureLocalMiner(ring, selfPubkey, cfg.ListenAddr)
+	}
 
 	// IPFS client & pin store
 	ipfsClient := ipfs.NewClient(cfg.IPFSApiURL, filepath.Join(cfg.DataDir, "media"))
 	pinStore := ipfs.NewPinStore(c)
-	productStore := product.NewStore(c)
-	orderStore := orderpkg.NewStore(c)
+	var productStore *product.Store
+	var orderStore *orderpkg.Store
+	if cfg.LegacyMarketEnabled {
+		productStore = product.NewStore(c)
+		orderStore = orderpkg.NewStore(c)
+	}
 	resourceStore := resource.NewStore(c)
 	agentCardStore := agentcard.NewStore(c)
 	delegationStore := delegation.NewStore(c)
@@ -188,7 +198,12 @@ func main() {
 	paymentStore := payment.NewStore(c)
 	orderPlanStore := orderplan.NewStore(c)
 	negotiationStore := negotiation.NewStore(c)
-	agentRunStore := agent.NewRunStore(c)
+	automationRunStore := supervisor.NewStore(c)
+	interactiveAgentStore := agentsession.NewStore(c)
+	runCapabilities, err := runcapability.LoadOrCreate(cfg.RunCapabilityPath)
+	if err != nil {
+		log.Fatalf("run capability init: %v", err)
+	}
 	taskStore := task.NewStore(c, filepath.Join(cfg.DataDir, "artifacts"))
 	approvalStore := approval.NewStore(c)
 	taskExecutor := task.NewExecutor(task.ExecutorConfig{
@@ -209,13 +224,9 @@ func main() {
 		},
 	})
 
-	buyerLLMConfig := llmClientConfigFromRole(cfg.BuyerLLM)
-
-	// Review agent
-	reviewAgent := agent.NewReviewAgentWithConfig(buyerLLMConfig, ipfsClient)
-	if reviewAgent.Configured() {
-		log.Printf("[agent] review agent configured with model %s", cfg.BuyerLLM.ResearchModel)
-	}
+	// Listing review stays local and deterministic. Model execution is owned by
+	// an installed local agent driver (Codex app-server), never by Dock API keys.
+	reviewAgent := agent.NewReviewAgent(ipfsClient)
 
 	sellerProvider := strings.TrimSpace(cfg.SellerAgent.ProviderPubkey)
 	if sellerProvider == "" {
@@ -225,42 +236,16 @@ func main() {
 	if sampleDockID == "" {
 		sampleDockID = selfPubkey
 	}
-	if err := samplemarket.Seed(resourceStore, agentCardStore, sampleDockID, sellerProvider); err != nil {
-		log.Printf("[sample-market] seed skipped: %v", err)
+	if cfg.LegacyMarketEnabled {
+		if err := samplemarket.Seed(resourceStore, agentCardStore, sampleDockID, sellerProvider); err != nil {
+			log.Printf("[sample-market] seed skipped: %v", err)
+		}
 	}
-	sellerAgent := agent.NewSellerAgent(agent.SellerAgentConfig{
-		Enabled:                    cfg.SellerAgent.Enabled,
-		AutoQuote:                  cfg.SellerAgent.AutoQuote,
-		AutoAcceptLowRisk:          cfg.SellerAgent.AutoAcceptLowRisk,
-		AutoCompleteTextTasks:      cfg.SellerAgent.AutoCompleteTextTasks,
-		ProviderPubkey:             sellerProvider,
-		PollInterval:               time.Duration(cfg.SellerAgent.PollIntervalSec) * time.Second,
-		DefaultQuotePrice:          cfg.SellerAgent.DefaultQuotePrice,
-		DefaultQuoteCurrency:       cfg.SellerAgent.DefaultQuoteCurrency,
-		DefaultEstimatedSec:        cfg.SellerAgent.DefaultEstimatedSec,
-		DataDir:                    cfg.DataDir,
-		PricingPolicyPath:          filepath.Join(cfg.DataDir, "seller_pricing_policy.json"),
-		LLMBaseURL:                 cfg.SellerLLM.BaseURL,
-		LLMAPIKey:                  cfg.SellerLLM.APIKey,
-		LLMProviderPreset:          cfg.SellerLLM.ProviderPreset,
-		LLMModel:                   cfg.SellerLLM.Model,
-		LLMWireAPI:                 cfg.SellerLLM.WireAPI,
-		LLMCapabilities:            llmCapabilitiesFromConfig(cfg.SellerLLM.Capabilities),
-		LLMExtraHeaders:            cfg.SellerLLM.ExtraHeaders,
-		LLMResearchModel:           cfg.SellerLLM.ResearchModel,
-		LLMResearchReasoningEffort: cfg.SellerLLM.ResearchReasoningEffort,
-		LLMUtilityModel:            cfg.SellerLLM.UtilityModel,
-		LLMUtilityReasoningEffort:  cfg.SellerLLM.UtilityReasoningEffort,
-		LLMDisableResponseStorage:  cfg.SellerLLM.DisableResponseStorage,
-	}, taskStore, resourceStore).AttachNegotiations(negotiationStore).AttachExecutor(taskExecutor)
-	if sellerAgent.Configured() {
-		go sellerAgent.Run(ctx)
-	} else if cfg.SellerAgent.Enabled {
-		log.Printf("[seller-agent] enabled but missing LLM API configuration")
-	}
-
 	relay := chat.NewRelay(ring, chatStore, hub, selfPubkey)
 	discoveryManifest := discovery.Build(cfg.ListenAddr, selfPubkey)
+	if cfg.LegacyMarketEnabled {
+		discoveryManifest = discovery.BuildLegacy(cfg.ListenAddr, selfPubkey)
+	}
 	discoveryManifest.ConfigPath = cfgPath
 	if discoveryManifest.ExecutablePath != "" {
 		discoveryManifest.StartCommand = []string{discoveryManifest.ExecutablePath, cfgPath}
@@ -269,43 +254,76 @@ func main() {
 	}
 	discoveryManifest.DiscoveryFiles = discovery.CandidatePaths()
 
-	// Wire up offline message delivery on WebSocket connect
-	hub.OnConnect = relay.DeliverOffline
+	if cfg.LegacyMarketEnabled {
+		// Legacy peer chat and account-cache synchronization remain available
+		// only when an operator explicitly opts into the compatibility market.
+		hub.OnConnect = relay.DeliverOffline
+		hub.SetOnAck(chatStore.MarkRead)
+		go relay.RunSync(ctx)
+	}
 
-	// Wire up ACK handling: client ACK -> mark order as read
-	hub.SetOnAck(chatStore.MarkRead)
-
-	// Start relay sync
-	go relay.RunSync(ctx)
-
-	// Fetcher
-	if cfg.RPC != "" {
+	if cfg.LegacyMarketEnabled && cfg.RPC != "" {
 		f := fetcher.New(cfg.RPC, c, cfg.FetchInterv)
 		go f.Run(ctx)
 	}
 
 	// HTTP + WebSocket server
+	executable, _ := os.Executable()
+	codexFactory := newCodexDriverFactory(cfg, cfgPath, executable)
+	interactiveAgentManager := agentsession.NewManager(interactiveAgentStore, newInteractiveDriverFactory(cfgPath, executable))
+	defer interactiveAgentManager.Close()
+	automationWorkerID := fmt.Sprintf("%s:%d", firstNonEmptyString(cfg.DockID, selfPubkey), os.Getpid())
+	automationSupervisor := supervisor.NewService(automationRunStore, runCapabilities, automationWorkerID, codexFactory)
+	automationSupervisor.SetPolicy(supervisor.Policy{
+		Enabled:           cfg.LocalAgents.Codex.Enabled,
+		AllowedRoles:      cfg.LocalAgents.Codex.Roles,
+		WorkspaceRoot:     cfg.LocalAgents.Codex.Workspace,
+		WorkspaceRoots:    append([]string(nil), cfg.LocalAgents.Codex.WorkspaceRoots...),
+		AutomationMode:    cfg.LocalAgents.Codex.AutomationMode,
+		PermissionProfile: cfg.LocalAgents.Codex.PermissionProfile,
+		MaxConcurrency:    cfg.LocalAgents.Codex.MaxConcurrency,
+	})
+	defer automationSupervisor.Close()
+	codexProbe := func(probeCtx context.Context) (agentdriver.CapabilityReport, error) {
+		driver := agentdriver.NewCodex(agentdriver.CodexConfig{
+			Command:        cfg.LocalAgents.Codex.Command,
+			RequestTimeout: time.Duration(cfg.LocalAgents.Codex.RequestTimeoutSec) * time.Second,
+			ProbeTimeout:   time.Duration(cfg.LocalAgents.Codex.ProbeTimeoutSec) * time.Second,
+		})
+		defer driver.Close()
+		return driver.Probe(probeCtx)
+	}
 	srv := &http.Server{
 		Addr: cfg.ListenAddr,
 		Handler: server.New(c, chatStore, relay, hub, ring, ipfsClient, pinStore, reviewAgent, productStore, orderStore, resourceStore, delegationStore, leaseStore, selfPubkey, server.RuntimeStores{
-			Wallet:         walletStore,
-			Tasks:          taskStore,
-			Approvals:      approvalStore,
-			OrderPlans:     orderPlanStore,
-			Negotiations:   negotiationStore,
-			PaymentPIN:     paymentPINStore,
-			Payments:       paymentStore,
-			TaskExecutor:   taskExecutor,
-			Discovery:      &discoveryManifest,
-			AgentCards:     agentCardStore,
-			AgentRuns:      agentRunStore,
-			AgentLLMConfig: buyerLLMConfig,
+			Wallet:          walletStore,
+			Tasks:           taskStore,
+			Approvals:       approvalStore,
+			OrderPlans:      orderPlanStore,
+			Negotiations:    negotiationStore,
+			PaymentPIN:      paymentPINStore,
+			Payments:        paymentStore,
+			TaskExecutor:    taskExecutor,
+			Discovery:       &discoveryManifest,
+			AgentCards:      agentCardStore,
+			AutomationRuns:  automationRunStore,
+			Supervisor:      automationSupervisor,
+			AgentSessions:   interactiveAgentManager,
+			RunCapabilities: runCapabilities,
+			CodexProbe:      codexProbe,
+			CodexAgent: agentdriver.LocalAgentConfig{
+				ID: "codex", Kind: "codex", Enabled: cfg.LocalAgents.Codex.Enabled,
+				Roles:             append([]string(nil), cfg.LocalAgents.Codex.Roles...),
+				Automation:        cfg.LocalAgents.Codex.Automation,
+				AutomationMode:    cfg.LocalAgents.Codex.AutomationMode,
+				Workspace:         cfg.LocalAgents.Codex.Workspace,
+				WorkspaceRoots:    append([]string(nil), cfg.LocalAgents.Codex.WorkspaceRoots...),
+				PermissionProfile: cfg.LocalAgents.Codex.PermissionProfile,
+				MaxConcurrency:    cfg.LocalAgents.Codex.MaxConcurrency,
+			},
 			CardDiagnostics: agentcard.DiagnosticsConfig{
-				LLMProvider:        cfg.BuyerLLM.BaseURL,
-				LLMConfigured:      strings.TrimSpace(cfg.BuyerLLM.APIKey) != "" || providerDoesNotRequireAPIKey(cfg.BuyerLLM.ProviderPreset, cfg.BuyerLLM.BaseURL),
-				SellerAgentEnabled: cfg.SellerAgent.Enabled,
-				CommandExecutor:    cfg.Provider.AllowCommandExecutor,
-				MCPAvailable:       discoveryManifest.ExecutablePath != "",
+				CommandExecutor: cfg.Provider.AllowCommandExecutor,
+				MCPAvailable:    discoveryManifest.ExecutablePath != "",
 			},
 			CardPublisher: agentcard.CloudPublisher{
 				CloudURL:  cfg.CloudURL,
@@ -322,6 +340,7 @@ func main() {
 			ConfigPath:      cfgPath,
 			Auth:            authStore,
 			AllowedOrigins:  cfg.CORSAllowedOrigins,
+			LegacyMarket:    cfg.LegacyMarketEnabled,
 		}),
 	}
 
@@ -329,10 +348,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("server listen: %v", err)
 	}
-	if paths, err := discovery.Write(discoveryManifest); err != nil {
-		log.Printf("[discovery] manifest unavailable: %v", err)
-	} else {
-		log.Printf("[discovery] manifest written: %s", strings.Join(paths, ", "))
+	if strings.TrimSpace(os.Getenv("EXORA_DISABLE_DISCOVERY")) == "" {
+		if paths, err := discovery.Write(discoveryManifest); err != nil {
+			log.Printf("[discovery] manifest unavailable: %v", err)
+		} else {
+			log.Printf("[discovery] manifest written: %s", strings.Join(paths, ", "))
+		}
 	}
 
 	go func() {
@@ -341,7 +362,7 @@ func main() {
 			log.Fatalf("server: %v", err)
 		}
 	}()
-	startCloudPoller(ctx, cfg, selfPubkey, authStore)
+	startWakePoller(ctx, cfg, selfPubkey, automationSupervisor)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -369,7 +390,7 @@ func runCloudCommand(args []string) error {
 	}
 	dockID := strings.TrimSpace(cfg.DockID)
 	if dockID == "" {
-		dockID = "local-dev-miner"
+		dockID = "local-dock"
 	}
 	link, token, err := cloudlink.Link(context.Background(), cloudURL, cfg.CloudTokenPath, cloudlink.DeviceLinkRequest{
 		DockID:        dockID,
@@ -378,7 +399,7 @@ func runCloudCommand(args []string) error {
 		Mode:          cfg.Mode,
 		PublicBaseURL: discovery.BaseURL(cfg.ListenAddr),
 		Version:       "0.1.0",
-		Capabilities:  []string{"remote.console", "approvals.queue", "mcp.stdio"},
+		Capabilities:  []string{"automation.wake.v2", "automation.codex", "agent.cards", "mcp.run-capability"},
 	}, 10*time.Minute, nil)
 	if err != nil {
 		_ = printJSON(map[string]any{
@@ -398,49 +419,6 @@ func runCloudCommand(args []string) error {
 		"userCode":        link.UserCode,
 		"verificationUrl": link.VerificationURL,
 	})
-}
-
-func providerDoesNotRequireAPIKey(preset, baseURL string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(preset))
-	normalized = strings.ReplaceAll(normalized, "-", "_")
-	base := strings.ToLower(strings.TrimSpace(baseURL))
-	if strings.Contains(base, "127.0.0.1") || strings.Contains(base, "localhost") || strings.Contains(base, "[::1]") {
-		return true
-	}
-	switch normalized {
-	case "litellm", "ollama", "lm_studio", "vllm", "localai", "llama_cpp", "textgen", "koboldcpp", "custom_openai_compatible":
-		return true
-	default:
-		return false
-	}
-}
-
-func llmClientConfigFromRole(role config.RoleLLMConfig) agent.LLMClientConfig {
-	return agent.LLMClientConfig{
-		BaseURL:                 role.BaseURL,
-		APIKey:                  role.APIKey,
-		ProviderPreset:          role.ProviderPreset,
-		WireAPI:                 role.WireAPI,
-		Capabilities:            llmCapabilitiesFromConfig(role.Capabilities),
-		ExtraHeaders:            role.ExtraHeaders,
-		DisableResponseStorage:  role.DisableResponseStorage,
-		ResearchModel:           role.ResearchModel,
-		ResearchReasoningEffort: role.ResearchReasoningEffort,
-		UtilityModel:            role.UtilityModel,
-		UtilityReasoningEffort:  role.UtilityReasoningEffort,
-	}
-}
-
-func llmCapabilitiesFromConfig(caps config.LLMCapabilities) agent.LLMCapabilities {
-	return agent.LLMCapabilities{
-		SupportsResponses:          caps.SupportsResponses,
-		SupportsChatCompletions:    caps.SupportsChatCompletions,
-		SupportsSystemMessage:      caps.SupportsSystemMessage,
-		SupportsJSONResponseFormat: caps.SupportsJSONResponseFormat,
-		SupportsStreaming:          caps.SupportsStreaming,
-		SupportsTools:              caps.SupportsTools,
-		SupportsReasoningEffort:    caps.SupportsReasoningEffort,
-	}
 }
 
 func runWalletCommand(args []string) error {
@@ -508,16 +486,49 @@ func runMCPCommand(args []string) error {
 	if clientName == "" {
 		clientName = "Local Agent"
 	}
+	mcpToken, err := loadMCPToken(cfg)
+	if err != nil {
+		return err
+	}
 	server := mcp.NewServer(mcp.Options{
 		ConfigPath:     cfgPath,
 		BaseURL:        discovery.BaseURL(cfg.ListenAddr),
 		StartCommand:   startCommand,
-		AgentToken:     loadAgentToken(cfg),
+		AgentToken:     mcpToken,
 		ClientCWD:      cwd,
 		ConnectionRole: role,
 		ClientName:     clientName,
+		LegacyMarket:   cfg.LegacyMarketEnabled,
+		AgentSessionID: strings.TrimSpace(os.Getenv("EXORA_AGENT_SESSION_ID")),
+		WorkUID:        strings.TrimSpace(os.Getenv("EXORA_AGENT_WORK_UID")),
+		ProjectPath:    strings.TrimSpace(os.Getenv("EXORA_AGENT_PROJECT_PATH")),
+		TransactionID:  strings.TrimSpace(os.Getenv("EXORA_AGENT_TRANSACTION_ID")),
 	})
 	return server.Serve(context.Background(), os.Stdin, os.Stdout)
+}
+
+func loadMCPToken(cfg *config.Config) (string, error) {
+	if path := strings.TrimSpace(os.Getenv("EXORA_RUN_CAPABILITY_PATH")); path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("read run capability: %w", err)
+		}
+		if len(data) > 16<<10 {
+			return "", fmt.Errorf("run capability file is too large")
+		}
+		token := strings.TrimSpace(string(data))
+		if !runcapability.IsToken(token) {
+			return "", fmt.Errorf("run capability file is invalid")
+		}
+		return token, nil
+	}
+	if token := strings.TrimSpace(os.Getenv("EXORA_RUN_CAPABILITY")); token != "" {
+		if !runcapability.IsToken(token) {
+			return "", fmt.Errorf("run capability is invalid")
+		}
+		return token, nil
+	}
+	return loadAgentToken(cfg), nil
 }
 
 func runAuthCommand(args []string) error {
@@ -618,39 +629,6 @@ func runOrderPlansCommand(args []string) error {
 		return requestDaemonJSON(http.MethodPost, "/v1/order-plans/"+url.PathEscape(args[1])+"/cancel", body, "owner")
 	default:
 		return fmt.Errorf("unknown order-plans command: %s", args[0])
-	}
-}
-
-func runAgentCommand(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: exora-dock agent run|list|status|resume|stop")
-	}
-	switch args[0] {
-	case "run":
-		if len(args) < 2 || strings.TrimSpace(strings.Join(args[1:], " ")) == "" {
-			return fmt.Errorf("usage: exora-dock agent run \"<intent>\"")
-		}
-		intent := strings.TrimSpace(strings.Join(args[1:], " "))
-		return requestDaemonJSON(http.MethodPost, "/v1/agent/runs", map[string]any{"intent": intent}, "owner")
-	case "list":
-		return requestDaemonJSON(http.MethodGet, "/v1/agent/runs", nil, "owner")
-	case "status":
-		if len(args) < 2 {
-			return fmt.Errorf("usage: exora-dock agent status <run-id>")
-		}
-		return requestDaemonJSON(http.MethodGet, "/v1/agent/runs/"+url.PathEscape(args[1]), nil, "owner")
-	case "resume":
-		if len(args) < 2 {
-			return fmt.Errorf("usage: exora-dock agent resume <run-id>")
-		}
-		return requestDaemonJSON(http.MethodPost, "/v1/agent/runs/"+url.PathEscape(args[1])+"/resume", map[string]any{}, "owner")
-	case "stop":
-		if len(args) < 2 {
-			return fmt.Errorf("usage: exora-dock agent stop <run-id>")
-		}
-		return requestDaemonJSON(http.MethodPost, "/v1/agent/runs/"+url.PathEscape(args[1])+"/stop", map[string]any{}, "owner")
-	default:
-		return fmt.Errorf("unknown agent command: %s", args[0])
 	}
 }
 
@@ -918,13 +896,156 @@ func ensureLocalMiner(ring *dht.Ring, selfPubkey string, listenAddr string) stri
 	return selfPubkey
 }
 
-func startCloudPoller(ctx context.Context, cfg *config.Config, selfPubkey string, authStore *localauth.Store) {
-	if cfg == nil || strings.TrimSpace(cfg.CloudURL) == "" || authStore == nil {
+func newCodexDriverFactory(cfg *config.Config, cfgPath, executable string) supervisor.DriverFactory {
+	return func(run supervisor.AutomationRun, capabilityToken string) agentdriver.Driver {
+		if cfg == nil || strings.TrimSpace(executable) == "" || strings.TrimSpace(capabilityToken) == "" {
+			return nil
+		}
+		if strings.EqualFold(strings.TrimSpace(run.AutomationMode), "manual") {
+			return nil
+		}
+		secretDir := filepath.Join(cfg.DataDir, "run-capabilities")
+		if err := os.MkdirAll(secretDir, 0700); err != nil {
+			log.Printf("[automation] capability directory: %v", err)
+			return nil
+		}
+		file, err := os.CreateTemp(secretDir, "run-*.token")
+		if err != nil {
+			log.Printf("[automation] capability file: %v", err)
+			return nil
+		}
+		capabilityPath := file.Name()
+		_ = file.Chmod(0600)
+		if _, err := file.WriteString(strings.TrimSpace(capabilityToken) + "\n"); err != nil {
+			_ = file.Close()
+			_ = os.Remove(capabilityPath)
+			return nil
+		}
+		if err := file.Close(); err != nil {
+			_ = os.Remove(capabilityPath)
+			return nil
+		}
+
+		// app-server's per-thread config is a map of config paths to values. A
+		// nested mcp_servers object is accepted by JSON-RPC but silently ignored,
+		// leaving the thread without Exora tools.
+		mcpConfig := codexMCPConfig(executable, []string{"mcp", cfgPath}, run.Workspace, map[string]string{
+			"EXORA_RUN_CAPABILITY_PATH": capabilityPath,
+			"EXORA_MCP_ROLE":            run.Role,
+			"EXORA_MCP_CLIENT_NAME":     "Exora Automation " + run.RunID,
+		}, mcp.V2ToolNames())
+		modeInstructions := "Guarded mode: use request_approval for any external side effect not already and explicitly authorized by the current Cloud allowed-actions projection."
+		if strings.EqualFold(strings.TrimSpace(run.AutomationMode), "autonomous") {
+			modeInstructions = "Autonomous mode: act only within the explicit transaction grants and current Cloud allowed-actions projection; request approval whenever authority is absent or ambiguous."
+		}
+		params := map[string]any{
+			"approvalPolicy":        "never",
+			"cwd":                   run.Workspace,
+			"config":                mcpConfig,
+			"developerInstructions": "You are an Exora transaction-role automation worker. Use Exora V2 MCP as the exclusive source of transaction facts and the exclusive path for transaction actions. You may use your normal local tools inside the configured workspace to perform the authorized task itself. Every turn must end with a durable transaction action or exora.finish_run; ordinary text is not progress. When an authorized completion action such as submit_deliverable is available and the task can be completed now, perform the work instead of repeatedly calling report_progress. Do not read or reveal credentials, wallet material, payment PINs, Dock owner tokens, or files outside the configured workspace. No MCP mutation is human approval or permission to move funds. " + modeInstructions,
+		}
+		if model := strings.TrimSpace(cfg.LocalAgents.Codex.Model); model != "" {
+			params["model"] = model
+		}
+		return agentdriver.NewCodex(agentdriver.CodexConfig{
+			Command:           cfg.LocalAgents.Codex.Command,
+			RequestTimeout:    time.Duration(cfg.LocalAgents.Codex.RequestTimeoutSec) * time.Second,
+			ProbeTimeout:      time.Duration(cfg.LocalAgents.Codex.ProbeTimeoutSec) * time.Second,
+			SessionParams:     params,
+			ResumeParams:      params,
+			CleanupFiles:      []string{capabilityPath},
+			ExpectedMCPServer: "exora",
+		})
+	}
+}
+
+func newInteractiveDriverFactory(cfgPath, dockExecutable string) agentsession.DriverFactory {
+	return func(session agentsession.Session) (agentdriver.Driver, error) {
+		command := strings.TrimSpace(session.Binding.Executable)
+		if command == "" {
+			return nil, fmt.Errorf("saved %s binding has no executable; scan and reconnect the local agent", session.Driver)
+		}
+		mcpCommand := []string{dockExecutable, "mcp", cfgPath}
+		mcpEnvironment := map[string]string{
+			"EXORA_MCP_ROLE":              session.Role,
+			"EXORA_MCP_CLIENT_NAME":       "Exora Chat " + session.ID,
+			"EXORA_AGENT_SESSION_ID":      session.ID,
+			"EXORA_AGENT_CONVERSATION_ID": session.ConversationID,
+			"EXORA_AGENT_WORK_UID":        session.WorkUID,
+			"EXORA_AGENT_PROJECT_PATH":    session.Workspace,
+		}
+		if session.TransactionID != "" {
+			mcpEnvironment["EXORA_AGENT_TRANSACTION_ID"] = session.TransactionID
+		}
+		sellerCardSetup := session.Purpose == "seller_card"
+		if sellerCardSetup {
+			mcpCommand = nil
+			mcpEnvironment = nil
+		}
+		permissionProfile := strings.TrimSpace(session.PermissionProfile)
+		if permissionProfile == "" {
+			switch session.PermissionMode {
+			case "approve":
+				permissionProfile = "workspace-write"
+			case "full":
+				permissionProfile = "danger-full-access"
+			case "ask":
+				permissionProfile = "read-only"
+			}
+		}
+		switch session.Driver {
+		case "codex":
+			params := map[string]any{
+				"cwd":                   session.Workspace,
+				"developerInstructions": "You are the user's bound Exora local agent. Use Exora MCP for every transaction fact, question, approval, offer, deliverable, progress update, or state proposal. Ordinary text cannot change transaction state. Never request payment PINs, wallet private keys, Dock owner tokens, model credentials, or arbitration authority.",
+			}
+			if sellerCardSetup {
+				params["developerInstructions"] = "You are conducting a multi-turn Exora Seller Setup from seller-authored intent, pricing principles, a redacted environment snapshot, and seller answers. Stay read-only, do not inspect unrelated files, never request or accept real secret values, and return only the requested JSON envelope. Do not declare setup complete until allowed actions, approval cases, credential aliases, and network boundaries are explicit."
+			} else {
+				params["config"] = codexMCPConfig(mcpCommand[0], mcpCommand[1:], session.Workspace, mcpEnvironment, nil)
+			}
+			return agentdriver.NewCodex(agentdriver.CodexConfig{Command: command, RequestTimeout: 45 * time.Second, ProbeTimeout: 8 * time.Second, SessionParams: params, ResumeParams: params}), nil
+		case "claude-code":
+			return agentdriver.NewClaude(agentdriver.ClaudeConfig{Command: command, MCPCommand: mcpCommand, MCPEnvironment: mcpEnvironment}), nil
+		case "gemini":
+			return agentdriver.NewACP(agentdriver.ACPConfig{Kind: "gemini", Command: command, Args: []string{"--acp"}, MCPCommand: mcpCommand, MCPEnvironment: mcpEnvironment}), nil
+		case "github-copilot":
+			return agentdriver.NewACP(agentdriver.ACPConfig{Kind: "github-copilot", Command: command, Args: []string{"--acp", "--stdio"}, MCPCommand: mcpCommand, MCPEnvironment: mcpEnvironment}), nil
+		case "opencode":
+			return agentdriver.NewOpenCode(agentdriver.OpenCodeConfig{Command: command, MCPCommand: mcpCommand, MCPEnvironment: mcpEnvironment}), nil
+		default:
+			return nil, fmt.Errorf("local agent driver %q is detection-only", session.Driver)
+		}
+	}
+}
+
+func codexMCPConfig(command string, args []string, cwd string, environment map[string]string, enabledTools []string) map[string]any {
+	config := map[string]any{
+		"mcp_servers.exora.command": command,
+		"mcp_servers.exora.args":    append([]string(nil), args...),
+		"mcp_servers.exora.cwd":     cwd,
+		"mcp_servers.exora.env":     environment,
+		"mcp_servers.exora.enabled": true,
+	}
+	if len(enabledTools) > 0 {
+		config["mcp_servers.exora.enabled_tools"] = append([]string(nil), enabledTools...)
+		config["mcp_servers.exora.default_tools_approval_mode"] = "approve"
+	}
+	return config
+}
+
+func startWakePoller(ctx context.Context, cfg *config.Config, selfPubkey string, service *supervisor.Service) {
+	if cfg == nil || service == nil || !cfg.LocalAgents.Codex.Enabled || strings.EqualFold(strings.TrimSpace(cfg.LocalAgents.Codex.AutomationMode), "manual") {
 		return
 	}
 	tokenFile, err := cloudlink.LoadToken(cfg.CloudTokenPath)
 	if err != nil {
-		log.Printf("[cloud-link] disabled: %v", err)
+		log.Printf("[wake-v2] disabled: %v", err)
+		return
+	}
+	cloudURL := firstNonEmptyString(cfg.CloudURL, tokenFile.CloudURL)
+	if cloudURL == "" {
+		log.Printf("[wake-v2] disabled: cloud URL missing")
 		return
 	}
 	dockID := strings.TrimSpace(cfg.DockID)
@@ -934,13 +1055,51 @@ func startCloudPoller(ctx context.Context, cfg *config.Config, selfPubkey string
 	if dockID == "" {
 		dockID = selfPubkey
 	}
-	go cloudlink.Poller{
-		CloudURL:     cfg.CloudURL,
+	runReporter := cloudlink.RunReporter{CloudURL: cloudURL, TokenPath: cfg.CloudTokenPath}
+	service.SetRunLifecycleReporter(supervisor.RunLifecycleReporterFunc(func(reportCtx context.Context, run supervisor.AutomationRun, event supervisor.RunLifecycleEvent) error {
+		var retryAt *time.Time
+		if value := strings.TrimSpace(event.RetryAt); value != "" {
+			parsed, err := time.Parse(time.RFC3339Nano, value)
+			if err != nil {
+				return fmt.Errorf("invalid retryAt: %w", err)
+			}
+			retryAt = &parsed
+		}
+		return runReporter.Report(reportCtx, run.RunID, cloudlink.RunEvent{
+			Type: event.Type, TransactionID: run.TransactionID, Role: run.Role,
+			ExpectedStateVersion: run.ExpectedStateVersion, IdempotencyKey: event.IdempotencyKey,
+			Driver: run.Driver, VendorThreadID: firstNonEmptyString(event.VendorThreadID, run.VendorThreadID), VendorTurnID: firstNonEmptyString(event.VendorTurnID, run.VendorTurnID),
+			Outcome: event.Outcome, NextAction: event.NextAction, TargetRole: event.TargetRole, RetryAt: retryAt, Reason: event.Reason,
+		})
+	}))
+	go cloudlink.WakePoller{
+		CloudURL:     cloudURL,
 		DockID:       dockID,
+		WorkerID:     dockID,
 		TokenPath:    cfg.CloudTokenPath,
-		BaseURL:      discovery.BaseURL(cfg.ListenAddr),
-		OwnerToken:   authStore.OwnerToken(),
 		PollInterval: time.Duration(cfg.CloudPollIntervalSec) * time.Second,
+		Handler: cloudlink.WakeHandlerFunc(func(wakeCtx context.Context, job cloudlink.WakeJob) (cloudlink.WakeResult, error) {
+			allowedActions, allowedActionsSet := job.AllowedActions()
+			run, err := service.HandleWake(wakeCtx, supervisor.WakeRequest{
+				JobID: job.JobID, RunID: job.RunID, TransactionID: job.TransactionID, Role: job.Role,
+				TriggerEventID: job.TriggerEventID, ExpectedStateVersion: job.ExpectedStateVersion,
+				PermissionProfile: job.PermissionProfile, Workspace: job.Workspace, Prompt: job.Prompt,
+				AllowedActions: allowedActions, AllowedActionsSet: allowedActionsSet,
+			})
+			if err != nil {
+				return cloudlink.WakeResult{RunID: run.RunID, VendorThreadID: run.VendorThreadID, VendorTurnID: run.VendorTurnID, Status: run.Status}, err
+			}
+			return cloudlink.WakeResult{RunID: run.RunID, VendorThreadID: run.VendorThreadID, VendorTurnID: run.VendorTurnID, Status: run.Status}, nil
+		}),
 	}.Run(ctx)
-	log.Printf("[cloud-link] remote console poller enabled for dock %s", dockID)
+	log.Printf("[wake-v2] typed automation poller enabled for dock %s", dockID)
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }

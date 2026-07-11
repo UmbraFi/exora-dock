@@ -8,7 +8,7 @@ import (
 )
 
 func TestCollectDiagnosticsIncludesSystemAttributes(t *testing.T) {
-	diag := CollectDiagnostics(DiagnosticsConfig{LLMProvider: "https://api.openai.com/v1", LLMConfigured: true, MCPAvailable: true})
+	diag := CollectDiagnostics(DiagnosticsConfig{MCPAvailable: true})
 	if diag.OS == "" || diag.Arch == "" || diag.CPUCores <= 0 {
 		t.Fatalf("expected OS, arch, and CPU cores, got %+v", diag)
 	}
@@ -31,6 +31,11 @@ func TestDiagnosticsAvoidLocalStorageDetails(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
+	for _, forbidden := range []string{"llmProvider", "llmConfigured", "sellerAgentEnabled"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("diagnostics must not publish legacy model-runtime field %q: %s", forbidden, text)
+		}
+	}
 	for _, storage := range diag.Storage {
 		if strings.Contains(storage.Label, ":") || strings.Contains(storage.Label, "/") || strings.Contains(storage.Label, `\`) {
 			t.Fatalf("storage label should not expose a local path or drive: %q", storage.Label)

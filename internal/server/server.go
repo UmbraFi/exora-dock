@@ -1,12 +1,15 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
 	"github.com/exora-dock/exora-dock/api"
 	"github.com/exora-dock/exora-dock/internal/agent"
 	"github.com/exora-dock/exora-dock/internal/agentcard"
+	"github.com/exora-dock/exora-dock/internal/agentdriver"
+	"github.com/exora-dock/exora-dock/internal/agentsession"
 	"github.com/exora-dock/exora-dock/internal/approval"
 	"github.com/exora-dock/exora-dock/internal/cache"
 	"github.com/exora-dock/exora-dock/internal/chat"
@@ -23,6 +26,8 @@ import (
 	"github.com/exora-dock/exora-dock/internal/paymentpin"
 	"github.com/exora-dock/exora-dock/internal/product"
 	"github.com/exora-dock/exora-dock/internal/resource"
+	"github.com/exora-dock/exora-dock/internal/runcapability"
+	"github.com/exora-dock/exora-dock/internal/supervisor"
 	"github.com/exora-dock/exora-dock/internal/task"
 	"github.com/exora-dock/exora-dock/internal/wallet"
 	"github.com/exora-dock/exora-dock/internal/workrun"
@@ -42,8 +47,12 @@ type RuntimeStores struct {
 	TaskExecutor    *task.Executor
 	Discovery       *discovery.Manifest
 	AgentCards      *agentcard.Store
-	AgentRuns       *agent.RunStore
-	AgentLLMConfig  agent.LLMClientConfig
+	AutomationRuns  *supervisor.Store
+	Supervisor      *supervisor.Service
+	AgentSessions   *agentsession.Manager
+	RunCapabilities *runcapability.Manager
+	CodexProbe      func(context.Context) (agentdriver.CapabilityReport, error)
+	CodexAgent      agentdriver.LocalAgentConfig
 	CardDiagnostics agentcard.DiagnosticsConfig
 	CardPublisher   agentcard.CloudPublisher
 	WorkRuns        *workrun.Store
@@ -57,6 +66,7 @@ type RuntimeStores struct {
 	ConfigPath      string
 	Auth            *localauth.Store
 	AllowedOrigins  []string
+	LegacyMarket    bool
 }
 
 func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring *dht.Ring, ic *ipfs.Client, ps *ipfs.PinStore, ra *agent.ReviewAgent, products *product.Store, orders *orderpkg.Store, resources *resource.Store, delegations *delegation.Store, leases *lease.Store, selfPubkey string, runtime ...RuntimeStores) http.Handler {
@@ -75,8 +85,12 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 		TaskExecutor:    stores.TaskExecutor,
 		Discovery:       stores.Discovery,
 		AgentCards:      stores.AgentCards,
-		AgentRuns:       stores.AgentRuns,
-		AgentLLMConfig:  stores.AgentLLMConfig,
+		AutomationRuns:  stores.AutomationRuns,
+		Supervisor:      stores.Supervisor,
+		AgentSessions:   stores.AgentSessions,
+		RunCapabilities: stores.RunCapabilities,
+		CodexProbe:      stores.CodexProbe,
+		CodexAgent:      stores.CodexAgent,
 		CardDiagnostics: stores.CardDiagnostics,
 		CardPublisher:   stores.CardPublisher,
 		WorkRuns:        stores.WorkRuns,
@@ -100,7 +114,8 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 		AllowCredentials: false,
 		MaxAge:           300,
 	}))
-	r.Use(authMiddleware(stores.Auth))
+	r.Use(legacyMarketGate(stores.LegacyMarket, stores.AgentSessions))
+	r.Use(authMiddleware(stores.Auth, stores.RunCapabilities))
 
 	r.Get("/health", h.Health)
 	r.Get("/.well-known/exora-dock.json", h.DiscoveryManifest)
@@ -131,11 +146,6 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 		r.Get("/market/rail-cards", h.MarketRailCards)
 		r.Get("/console/snapshot", h.ConsoleSnapshot)
 		r.Post("/agent/buyer-work", h.CoordinateBuyerWork)
-		r.Post("/agent/runs", h.StartAgentRun)
-		r.Get("/agent/runs", h.ListAgentRuns)
-		r.Get("/agent/runs/{id}", h.GetAgentRun)
-		r.Post("/agent/runs/{id}/resume", h.ResumeAgentRun)
-		r.Post("/agent/runs/{id}/stop", h.StopAgentRun)
 		r.Post("/work-runs", h.CreateWorkRun)
 		r.Get("/work-runs", h.ListWorkRuns)
 		r.Get("/work-runs/{id}", h.GetWorkRun)
@@ -143,6 +153,35 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 		r.Post("/work-runs/{id}/stop", h.StopWorkRun)
 		r.Get("/work-runs/{id}/events", h.ListWorkRunEvents)
 		r.Get("/dispute-evidence", h.GetDisputeEvidence)
+		// V2 BYOA automation. These routes accept narrowly-scoped run
+		// capabilities; owner routes continue to use the local owner token.
+		r.Get("/local-agents", h.ListLocalAgents)
+		r.Post("/local-agents/scan", h.ScanLocalAgents)
+		r.Post("/automation-runs", h.CreateAutomationRun)
+		r.Get("/automation-runs", h.ListAutomationRuns)
+		r.Get("/automation-runs/{id}", h.GetAutomationRun)
+		r.Post("/automation-runs/{id}/claim", h.ClaimAutomationRun)
+		r.Post("/automation-runs/{id}/actions", h.RecordAutomationAction)
+		r.Post("/automation-runs/{id}/cancel", h.CancelAutomationRun)
+		r.Post("/local-agent-sessions", h.StartLocalAgentSession)
+		r.Get("/local-agent-sessions/{id}", h.GetLocalAgentSession)
+		r.Get("/local-agent-sessions/{id}/stream", h.StreamLocalAgentSession)
+		r.Post("/local-agent-sessions/{id}/messages", h.SendLocalAgentMessage)
+		r.Post("/local-agent-sessions/{id}/interrupt", h.InterruptLocalAgentSession)
+		r.Post("/local-agent-sessions/{id}/stop", h.StopLocalAgentSession)
+		r.Post("/local-agent-sessions/{id}/resume", h.ResumeLocalAgentSession)
+		r.Post("/local-agent-sessions/{id}/human-requests/{requestId}/respond", h.RespondLocalAgentHumanRequest)
+		r.Post("/local-agent-sessions/{id}/mcp-events", h.RecordLocalAgentMCPEvent)
+		r.Get("/automation/transactions/{id}", h.GetAutomationTransaction)
+		r.Get("/automation/transactions/{id}/allowed-actions", h.GetAutomationAllowedActions)
+		r.Get("/automation/agent-cards/search", h.SearchAutomationAgentCards)
+
+		// Narrow owner-only Cloud projections for the local Electron client.
+		r.Get("/cloud/transactions", h.ListCloudTransactions)
+		r.Post("/cloud/transactions", h.CreateCloudTransaction)
+		r.Get("/cloud/inbox", h.GetCloudInbox)
+		r.Get("/cloud/agent-cards", h.ListCloudAgentCards)
+		r.Post("/cloud/human-requests/{id}/respond", h.RespondCloudHumanRequest)
 		r.Post("/negotiations", h.CreateNegotiations)
 		r.Get("/negotiations", h.ListNegotiations)
 		r.Get("/negotiations/{id}", h.GetNegotiation)
@@ -159,12 +198,6 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 		r.Put("/settings/buyer-agent", h.SaveBuyerAgentSettings)
 		r.Get("/settings/seller-agent", h.GetSellerAgentSettings)
 		r.Put("/settings/seller-agent", h.SaveSellerAgentSettings)
-		r.Get("/settings/llm-profiles", h.ListLLMProfiles)
-		r.Post("/settings/llm-profiles", h.SaveLLMProfile)
-		r.Put("/settings/llm-profiles", h.SaveLLMProfile)
-		r.Delete("/settings/llm-profiles", h.DeleteLLMProfile)
-		r.Post("/settings/llm-profiles/test", h.TestLLMProfile)
-		r.Get("/settings/llm-profiles/models", h.ListLLMProfileModels)
 
 		// Remote job task endpoints
 		r.Post("/tasks", h.CreateTask)
@@ -251,6 +284,42 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 	return r
 }
 
+func legacyMarketGate(enabled bool, sessions *agentsession.Manager) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !enabled && isLegacyMarketPath(r.URL.Path) {
+				sessionID := strings.TrimSpace(r.Header.Get("X-Exora-Agent-Session"))
+				session, active := agentsession.Session{}, false
+				if sessions != nil && sessionID != "" {
+					session, active = sessions.Get(sessionID)
+					active = active && session.Status != agentsession.StatusStopped && session.Status != agentsession.StatusFailed
+				}
+				if !active || (r.URL.Path == "/v1/agent/buyer-work" && session.Role != "buyer") {
+					http.NotFound(w, r)
+					return
+				}
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func isLegacyMarketPath(path string) bool {
+	if path == "/ws" || path == "/v1/products" || path == "/v1/agent/search-sellers" || path == "/v1/agent/buyer-work" || path == "/v1/market/rail-cards" {
+		return true
+	}
+	for _, prefix := range []string{
+		"/v1/account", "/v1/product", "/v1/tx", "/v1/work-runs", "/v1/negotiations",
+		"/v1/order-plans", "/v1/resources", "/v1/delegations", "/v1/leases", "/v1/orders",
+		"/v1/chat", "/v1/review", "/v1/provider/negotiations",
+	} {
+		if path == prefix || strings.HasPrefix(path, prefix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 func allowedOrigins(configured []string) []string {
 	if len(configured) > 0 {
 		return configured
@@ -263,7 +332,11 @@ func allowedOrigins(configured []string) []string {
 	}
 }
 
-func authMiddleware(store *localauth.Store) func(http.Handler) http.Handler {
+func authMiddleware(store *localauth.Store, capabilities ...*runcapability.Manager) func(http.Handler) http.Handler {
+	var runCapabilities *runcapability.Manager
+	if len(capabilities) > 0 {
+		runCapabilities = capabilities[0]
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			required := requiredScope(r)
@@ -273,6 +346,12 @@ func authMiddleware(store *localauth.Store) func(http.Handler) http.Handler {
 			}
 			scope := store.ScopeForToken(bearerToken(r))
 			if scope == localauth.ScopeNone {
+				if runCapabilities != nil && runCapabilityPath(r.URL.Path) {
+					if _, err := runCapabilities.Verify(bearerToken(r), runcapability.Requirement{}); err == nil {
+						next.ServeHTTP(w, r)
+						return
+					}
+				}
 				http.Error(w, `{"error":"authorization token required"}`, http.StatusUnauthorized)
 				return
 			}
@@ -283,6 +362,12 @@ func authMiddleware(store *localauth.Store) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func runCapabilityPath(path string) bool {
+	return strings.HasPrefix(path, "/v1/automation-runs/") ||
+		strings.HasPrefix(path, "/v1/automation/transactions/") ||
+		path == "/v1/automation/agent-cards/search"
 }
 
 func bearerToken(r *http.Request) string {
@@ -321,6 +406,9 @@ func requiredScope(r *http.Request) localauth.Scope {
 		}
 	}
 	if path == "/v1/mcp/connections" && (method == http.MethodGet || method == http.MethodPost) {
+		return localauth.ScopeAgent
+	}
+	if strings.HasPrefix(path, "/v1/local-agent-sessions/") && strings.HasSuffix(path, "/mcp-events") && method == http.MethodPost {
 		return localauth.ScopeAgent
 	}
 	if path == "/v1/negotiations" && (method == http.MethodGet || method == http.MethodPost) {

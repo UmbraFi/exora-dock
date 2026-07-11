@@ -6,13 +6,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/exora-dock/exora-dock/internal/agent"
 	"github.com/exora-dock/exora-dock/internal/approval"
 	"github.com/exora-dock/exora-dock/internal/cache"
 	"github.com/exora-dock/exora-dock/internal/chat"
 	"github.com/exora-dock/exora-dock/internal/dht"
 	"github.com/exora-dock/exora-dock/internal/payment"
+	"github.com/exora-dock/exora-dock/internal/supervisor"
 	"github.com/exora-dock/exora-dock/internal/task"
 	"github.com/go-chi/chi/v5"
 )
@@ -28,7 +29,7 @@ func TestGetDisputeEvidenceRedactsAndAggregates(t *testing.T) {
 	tasks := task.NewStore(c, filepath.Join(dir, "artifacts"))
 	approvals := approval.NewStore(c)
 	payments := payment.NewStore(c)
-	runs := agent.NewRunStore(c)
+	runs := supervisor.NewStore(c)
 	if err := tasks.Save(task.Task{
 		ID:              "task-1",
 		OrderID:         "order-1",
@@ -88,33 +89,32 @@ func TestGetDisputeEvidenceRedactsAndAggregates(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := runs.Save(agent.AgentRun{
-		RunID:  "arun-1",
-		Status: agent.RunStatusCompleted,
-		Intent: "run job",
-		Turns: []agent.AgentTurn{{
-			TurnID:   "turn-1",
-			Role:     "tool",
-			ToolName: "request_approval",
-			ToolArgs: map[string]any{
-				"paymentPin": "123456",
-				"apiKey":     "secret-token",
-			},
-		}},
-	}); err != nil {
+	run, _, err := runs.Create(supervisor.CreateRequest{TransactionID: "tx-1", Role: "buyer", IdempotencyKey: "wake-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err = runs.Claim(supervisor.ClaimRequest{RunID: run.RunID, WorkerID: "dock", LeaseTTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, _, err = runs.RecordAction(run.RunID, supervisor.ActionRequest{
+		Type: "request_approval", ExpectedStateVersion: 0, IdempotencyKey: "action-1",
+		Payload: map[string]any{"paymentPin": "123456", "apiKey": "secret-token"},
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	handler := NewHandler(c, nil, nil, chat.NewHub(), dht.NewRing(), nil, nil, nil, nil, nil, nil, nil, nil, "dock-1", RuntimeStores{
-		Tasks:     tasks,
-		Approvals: approvals,
-		Payments:  payments,
-		AgentRuns: runs,
+		Tasks:          tasks,
+		Approvals:      approvals,
+		Payments:       payments,
+		AutomationRuns: runs,
 	})
 	router := chi.NewRouter()
 	router.Get("/dispute-evidence", handler.GetDisputeEvidence)
 
-	req := httptest.NewRequest(http.MethodGet, "/dispute-evidence?side=buyer&disputeId=disp_1&taskId=task-1&agentRunIds=arun-1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/dispute-evidence?side=buyer&disputeId=disp_1&taskId=task-1&automationRunIds="+run.RunID, nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -126,7 +126,7 @@ func TestGetDisputeEvidenceRedactsAndAggregates(t *testing.T) {
 			t.Fatalf("evidence leaked %q in %s", secret, body)
 		}
 	}
-	for _, expected := range []string{"artifactManifest", "artifact-hash", "approvals", "payments", "agentRuns", "[redacted]"} {
+	for _, expected := range []string{"artifactManifest", "artifact-hash", "approvals", "payments", "automationRuns", "[redacted]"} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("expected %q in %s", expected, body)
 		}

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, safeStorage, screen, shell } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, screen, shell, Tray } = require('electron')
 const { spawn, execFile } = require('node:child_process')
 const crypto = require('node:crypto')
 const fs = require('node:fs')
@@ -12,6 +12,13 @@ const {
   isTrustedIpcSender,
 } = require('./security.cjs')
 const { createWorkspaceSnapshot } = require('./workspace.cjs')
+const {
+  cachedLocalAgentForBinding,
+  createLocalAgentScanSnapshot,
+  localAgentDriver,
+  restoreLocalAgentScanSnapshot,
+  scanLocalAgents,
+} = require('./local-agents.cjs')
 
 const APP_ID = 'io.exora.dock'
 const BASE_URL = 'http://127.0.0.1:8080'
@@ -38,7 +45,11 @@ const ELECTRON_REMOTE_CAPABILITIES = ['remote.console', 'approvals.queue', 'mcp.
 app.commandLine.appendSwitch('lang', chromiumLocaleForLanguage(STARTUP_LANGUAGE))
 
 let mainWindow
+let tray
+let appIsQuitting = false
 let manualWindowDrag
+let localAgentScanInFlight
+const localAgentSessionStreams = new Map()
 const workspaceSnapshotService = createWorkspaceSnapshot({
   dockPaths,
   ensureLocalLayout,
@@ -84,6 +95,11 @@ function createWindow() {
   })
 
   installNavigationGuards(mainWindow, { policy: APP_URL_POLICY, shell })
+  mainWindow.on('close', (event) => {
+    if (appIsQuitting) return
+    event.preventDefault()
+    mainWindow.hide()
+  })
   mainWindow.once('ready-to-show', () => mainWindow.show())
   if (app.isPackaged) {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
@@ -98,14 +114,33 @@ app.whenReady().then(async () => {
     console.error('Failed to initialize the default project folder:', error)
   })
   createWindow()
+  createTray()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  // Exora continues supervising local Agent sessions from the tray.
 })
+
+app.on('before-quit', () => {
+  appIsQuitting = true
+  for (const controller of localAgentSessionStreams.values()) controller.abort()
+  localAgentSessionStreams.clear()
+})
+
+function createTray() {
+  if (tray) return
+  tray = new Tray(WINDOW_ICON)
+  tray.setToolTip('Exora Dock')
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Open Exora Dock', click: () => { mainWindow?.show(); mainWindow?.focus() } },
+    { type: 'separator' },
+    { label: 'Quit', click: () => { appIsQuitting = true; app.quit() } },
+  ]))
+  tray.on('double-click', () => { mainWindow?.show(); mainWindow?.focus() })
+}
 
 function registerIpc() {
   registerIpcHandlers(ipcMain, createIpcHandlerGroups(), {
@@ -152,6 +187,21 @@ function createIpcHandlerGroups() {
       archive_project_chats,
       remove_project_folder,
     },
+    localAgents: {
+      local_agent_snapshot,
+      local_agent_scan,
+      local_agent_binding,
+      bind_local_agent,
+      unbind_local_agent,
+      local_agent_session_start,
+      local_agent_session_get,
+      local_agent_session_send,
+      local_agent_session_interrupt,
+      local_agent_session_stop,
+      local_agent_session_resume,
+      local_agent_session_subscribe,
+      local_agent_session_unsubscribe,
+    },
     persistence: {
       desktop_persistence_load,
       save_app_settings,
@@ -187,6 +237,7 @@ function createIpcHandlerGroups() {
       agent_search_sellers,
     },
     ownerLedger: {
+      cloud_transactions,
       list_approvals,
       decide_approval,
       list_order_plans,
@@ -221,7 +272,7 @@ async function window_toggle_maximize() {
 }
 
 async function window_close() {
-  mainWindow?.close()
+  mainWindow?.hide()
 }
 
 async function window_begin_manual_drag() {
@@ -625,6 +676,366 @@ async function apply_llm_profile(payload = {}) {
     await start_dock()
   }
   return llmProfileStatus(paths)
+}
+
+async function local_agent_snapshot() {
+  const paths = await dockPaths()
+  await ensurePersistenceLayout(paths)
+  return localAgentSnapshotResponse(paths)
+}
+
+async function local_agent_scan() {
+  if (localAgentScanInFlight) return localAgentScanInFlight
+  const scanPromise = performLocalAgentScan()
+  localAgentScanInFlight = scanPromise
+  try {
+    return await scanPromise
+  } finally {
+    if (localAgentScanInFlight === scanPromise) localAgentScanInFlight = undefined
+  }
+}
+
+async function performLocalAgentScan() {
+  const paths = await dockPaths()
+  await ensurePersistenceLayout(paths)
+  const result = await scanLocalAgents()
+  const snapshot = createLocalAgentScanSnapshot(result)
+  await writeJsonAtomic(paths.localAgentScanPath, snapshot)
+  return localAgentSnapshotResponse(paths, snapshot)
+}
+
+async function localAgentSnapshotResponse(paths, providedSnapshot) {
+  const snapshot = providedSnapshot || await readLocalAgentScanSnapshot(paths)
+  const storedBinding = await readLocalAgentBinding(paths)
+  const agents = (snapshot?.agents || []).map((agent) => ({
+    ...agent,
+    bound: storedBinding?.driverId === agent.driverId,
+  }))
+  const selectedAgent = storedBinding
+    ? agents.find((agent) => agent.driverId === storedBinding.driverId)
+    : undefined
+  return {
+    agents,
+    binding: presentLocalAgentBinding(storedBinding, selectedAgent),
+    scannedAt: snapshot?.scannedAt || null,
+    hasSnapshot: Boolean(snapshot),
+  }
+}
+
+async function local_agent_binding() {
+  const paths = await dockPaths()
+  await ensurePersistenceLayout(paths)
+  const snapshot = await readLocalAgentScanSnapshot(paths)
+  const storedBinding = await readLocalAgentBinding(paths)
+  if (!storedBinding) {
+    return { binding: null, agent: null, checkedAt: snapshot?.scannedAt || null }
+  }
+  const agent = snapshot?.agents.find((candidate) => candidate.driverId === storedBinding.driverId)
+  return {
+    binding: presentLocalAgentBinding(storedBinding, agent),
+    agent: agent ? { ...agent, bound: true } : null,
+    checkedAt: snapshot?.scannedAt || null,
+  }
+}
+
+async function bind_local_agent(payload = {}) {
+  const input = objectOr(payload.input || payload)
+  const inputKeys = Object.keys(input)
+  if (inputKeys.some((key) => key !== 'driverId')) {
+    throw new Error('Local agent binding only accepts a built-in driver ID.')
+  }
+  const driverId = String(input.driverId || '').trim()
+  const driver = localAgentDriver(driverId)
+  if (!driver) throw new Error('Unknown local agent driver.')
+  if (!driver.bindable) throw new Error(`${driver.name} can currently be detected but not bound.`)
+
+  const paths = await dockPaths()
+  await ensurePersistenceLayout(paths)
+  const snapshot = await readLocalAgentScanSnapshot(paths)
+  if (!snapshot) throw new Error('Scan local agents before choosing a binding.')
+  const agent = cachedLocalAgentForBinding(snapshot, driverId)
+  if (!agent?.installed) throw new Error(`${driver.name} was not found on this computer.`)
+  if (agent.status === 'login_required') {
+    throw new Error(`Sign in to ${driver.name}, then scan again.`)
+  }
+  if (!localAgentCanBind(agent)) {
+    throw new Error(`${driver.name} could not be verified and was not bound.`)
+  }
+
+  const current = await readLocalAgentBinding(paths)
+  const selectedAt = new Date().toISOString()
+  const binding = {
+    bindingId: current?.driverId === driverId ? current.bindingId : `local-agent-${crypto.randomUUID()}`,
+    driverId,
+    executablePath: agent.executablePath,
+    version: agent.version || '',
+    boundAt: current?.driverId === driverId ? current.boundAt : selectedAt,
+    lastVerifiedAt: snapshot.scannedAt,
+  }
+  await writeLocalAgentBinding(paths, binding)
+  return {
+    binding: presentLocalAgentBinding(binding, agent),
+    agent: { ...agent, bound: true },
+  }
+}
+
+async function readLocalAgentScanSnapshot(paths) {
+  return restoreLocalAgentScanSnapshot(await readJsonOr(paths.localAgentScanPath, null))
+}
+
+async function unbind_local_agent() {
+  const paths = await dockPaths()
+  await ensurePersistenceLayout(paths)
+  await fsp.rm(paths.localAgentBindingPath, { force: true })
+  return { unbound: true }
+}
+
+async function local_agent_session_start(payload = {}) {
+  const input = objectOr(payload.input || payload)
+  assertLocalAgentSessionInput(input, ['conversationId', 'role', 'purpose', 'workspace', 'permissionMode', 'transactionId', 'runId', 'workUid', 'idempotencyKey'])
+  const conversationId = cleanLocalAgentIdentifier(input.conversationId, 'conversationId')
+  const role = String(input.role || '').trim().toLowerCase()
+  if (role !== 'buyer' && role !== 'seller') throw new Error('Local agent session role must be buyer or seller.')
+  const purpose = String(input.purpose || '').trim().toLowerCase()
+  if (purpose && purpose !== 'seller_card') throw new Error('Local agent session purpose is unsupported.')
+  const transactionId = String(input.transactionId || '').trim()
+  if (role === 'seller' && !transactionId && purpose !== 'seller_card') throw new Error('Select a seller transaction before connecting a local Agent.')
+
+  const paths = await dockPaths()
+  await ensurePersistenceLayout(paths)
+  await ensureDockReady()
+  const binding = await readLocalAgentBinding(paths)
+  if (!binding) throw new Error('Bind a local Agent in Settings before connecting this chat.')
+  const driver = localAgentDriver(binding.driverId)
+  if (!driver?.bindable || driver.protocolState === 'unsupported' || driver.protocolState === 'limited') {
+    throw new Error(`${driver?.name || binding.driverId} is detection-only and cannot run an Exora chat session.`)
+  }
+  if (!binding.executablePath || !path.isAbsolute(binding.executablePath) || !fs.existsSync(binding.executablePath)) {
+    throw new Error('The saved local Agent executable is unavailable. Scan and bind it again.')
+  }
+  const workspace = normalizeProjectPath(paths, input.workspace || '') || (await activeProjectFolder(paths)).path
+  const allowedFolders = await readProjectFolders(paths)
+  if (!allowedFolders.some((folder) => sameResolvedPath(folder.path, workspace))) {
+    throw new Error('The chat workspace is not one of the user-selected Exora project folders.')
+  }
+  const idempotencyKey = String(input.idempotencyKey || `connect:${conversationId}:${role}`).trim()
+  const response = await httpJson('POST', '/v1/local-agent-sessions', {
+    conversationId,
+    role,
+    purpose,
+    binding: {
+      bindingId: binding.bindingId,
+      driver: binding.driverId,
+      version: binding.version || '',
+      lastVerifiedAt: binding.lastVerifiedAt,
+    },
+    executablePath: binding.executablePath,
+    workspace,
+    permissionMode: normalizeLocalAgentPermissionMode(input.permissionMode),
+    permissionProfile: localAgentPermissionProfile(input.permissionMode),
+    transactionId,
+    runId: String(input.runId || '').trim(),
+    workUid: String(input.workUid || '').trim(),
+    idempotencyKey,
+  }, await localOwnerToken(paths), { timeoutMs: 45000 })
+  return response
+}
+
+async function local_agent_session_get(payload = {}) {
+  const input = objectOr(payload.input || payload)
+  assertLocalAgentSessionInput(input, ['sessionId'])
+  const sessionId = cleanLocalAgentIdentifier(input.sessionId, 'sessionId')
+  const paths = await dockPaths()
+  return httpJson('GET', `/v1/local-agent-sessions/${encodeURIComponent(sessionId)}`, undefined, await localOwnerToken(paths), { timeoutMs: 5000 })
+}
+
+async function local_agent_session_send(payload = {}) {
+  const input = objectOr(payload.input || payload)
+  assertLocalAgentSessionInput(input, ['sessionId', 'clientMessageId', 'text', 'idempotencyKey'])
+  const sessionId = cleanLocalAgentIdentifier(input.sessionId, 'sessionId')
+  const clientMessageId = cleanLocalAgentIdentifier(input.clientMessageId, 'clientMessageId')
+  const text = String(input.text || '').trim()
+  if (!text || text.length > 200000) throw new Error('Local Agent message must contain 1-200000 characters.')
+  const paths = await dockPaths()
+  return httpJson('POST', `/v1/local-agent-sessions/${encodeURIComponent(sessionId)}/messages`, {
+    clientMessageId,
+    text,
+    idempotencyKey: String(input.idempotencyKey || `message:${clientMessageId}`).trim(),
+  }, await localOwnerToken(paths), { timeoutMs: 45000 })
+}
+
+async function local_agent_session_interrupt(payload = {}) {
+  return localAgentSessionAction(payload, 'interrupt')
+}
+
+async function local_agent_session_stop(payload = {}) {
+  const result = await localAgentSessionAction(payload, 'stop')
+  const sessionId = String(objectOr(payload.input || payload).sessionId || '').trim()
+  stopLocalAgentSessionStream(sessionId)
+  return result
+}
+
+async function local_agent_session_resume(payload = {}) {
+  return localAgentSessionAction(payload, 'resume', 45000)
+}
+
+async function localAgentSessionAction(payload, action, timeoutMs = 10000) {
+  const input = objectOr(payload.input || payload)
+  assertLocalAgentSessionInput(input, ['sessionId'])
+  const sessionId = cleanLocalAgentIdentifier(input.sessionId, 'sessionId')
+  const paths = await dockPaths()
+  return httpJson('POST', `/v1/local-agent-sessions/${encodeURIComponent(sessionId)}/${action}`, {}, await localOwnerToken(paths), { timeoutMs })
+}
+
+async function local_agent_session_subscribe(payload = {}, event) {
+  const input = objectOr(payload.input || payload)
+  assertLocalAgentSessionInput(input, ['sessionId', 'after'])
+  const sessionId = cleanLocalAgentIdentifier(input.sessionId, 'sessionId')
+  const after = Math.max(0, Number.parseInt(String(input.after || '0'), 10) || 0)
+  stopLocalAgentSessionStream(sessionId)
+  const controller = new AbortController()
+  localAgentSessionStreams.set(sessionId, controller)
+  void forwardLocalAgentSessionStream(sessionId, after, controller, event?.sender)
+  return { subscribed: true, sessionId }
+}
+
+async function local_agent_session_unsubscribe(payload = {}) {
+  const input = objectOr(payload.input || payload)
+  assertLocalAgentSessionInput(input, ['sessionId'])
+  const sessionId = cleanLocalAgentIdentifier(input.sessionId, 'sessionId')
+  stopLocalAgentSessionStream(sessionId)
+  return { subscribed: false, sessionId }
+}
+
+async function forwardLocalAgentSessionStream(sessionId, after, controller, sender) {
+  try {
+    const paths = await dockPaths()
+    const token = await localOwnerToken(paths)
+    const response = await fetch(`${BASE_URL}/v1/local-agent-sessions/${encodeURIComponent(sessionId)}/stream?after=${after}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' },
+      signal: controller.signal,
+    })
+    if (!response.ok || !response.body) throw new Error(`local Agent event stream returned ${response.status}`)
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    while (!controller.signal.aborted) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let boundary
+      while ((boundary = buffer.indexOf('\n\n')) >= 0) {
+        const block = buffer.slice(0, boundary).replace(/\r/g, '')
+        buffer = buffer.slice(boundary + 2)
+        const data = block.split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('\n')
+        if (!data) continue
+        let parsed
+        try { parsed = JSON.parse(data) } catch { continue }
+        if (sender && !sender.isDestroyed()) sender.send('exora:local-agent-event', Object.freeze({ sessionId, event: parsed }))
+      }
+    }
+  } catch (error) {
+    if (!controller.signal.aborted && sender && !sender.isDestroyed()) {
+      sender.send('exora:local-agent-event', Object.freeze({ sessionId, error: errorMessage(error) }))
+    }
+  } finally {
+    if (localAgentSessionStreams.get(sessionId) === controller) localAgentSessionStreams.delete(sessionId)
+  }
+}
+
+function stopLocalAgentSessionStream(sessionId) {
+  const controller = localAgentSessionStreams.get(String(sessionId || '').trim())
+  if (controller) controller.abort()
+  localAgentSessionStreams.delete(String(sessionId || '').trim())
+}
+
+function assertLocalAgentSessionInput(input, allowedKeys) {
+  const allowed = new Set(allowedKeys)
+  if (Object.keys(input).some((key) => !allowed.has(key))) throw new Error('Local Agent session request contains unsupported fields.')
+}
+
+function cleanLocalAgentIdentifier(value, label) {
+  const text = String(value || '').trim()
+  if (!text || text.length > 240 || /[\u0000-\u001f\u007f]/.test(text)) throw new Error(`${label} is invalid.`)
+  return text
+}
+
+function normalizeLocalAgentPermissionMode(value) {
+  const mode = String(value || 'ask').trim().toLowerCase()
+  return ['ask', 'approve', 'full', 'custom'].includes(mode) ? mode : 'ask'
+}
+
+function localAgentPermissionProfile(value) {
+  switch (normalizeLocalAgentPermissionMode(value)) {
+    case 'approve': return 'workspace-write'
+    case 'full': return 'danger-full-access'
+    case 'custom': return ''
+    default: return 'read-only'
+  }
+}
+
+function localAgentCanBind(agent) {
+  return Boolean(
+    agent?.installed &&
+    agent.bindable &&
+    (agent.status === 'ready' || agent.status === 'available') &&
+    agent.executablePath,
+  )
+}
+
+async function readLocalAgentBinding(paths) {
+  const document = objectOr(await readJsonOr(paths.localAgentBindingPath, {}))
+  const input = objectOr(document.binding || document)
+  const driver = localAgentDriver(input.driverId)
+  if (!driver) return undefined
+  const executablePath = String(input.executablePath || '').trim()
+  return {
+    bindingId: /^local-agent-[0-9a-f-]{36}$/i.test(String(input.bindingId || ''))
+      ? String(input.bindingId)
+      : `local-agent-${crypto.randomUUID()}`,
+    driverId: driver.id,
+    executablePath: path.isAbsolute(executablePath) ? executablePath : '',
+    version: String(input.version || '').trim().slice(0, 160),
+    boundAt: validIsoOrNow(input.boundAt),
+    lastVerifiedAt: validIsoOrNow(input.lastVerifiedAt || input.boundAt),
+  }
+}
+
+async function writeLocalAgentBinding(paths, binding) {
+  await writeJsonAtomic(paths.localAgentBindingPath, {
+    version: 1,
+    binding: {
+      bindingId: binding.bindingId,
+      driverId: binding.driverId,
+      executablePath: binding.executablePath,
+      version: binding.version || '',
+      boundAt: binding.boundAt,
+      lastVerifiedAt: binding.lastVerifiedAt,
+    },
+  })
+}
+
+function presentLocalAgentBinding(binding, agent) {
+  if (!binding) return null
+  const driver = localAgentDriver(binding.driverId)
+  if (!driver) return null
+  return {
+    bindingId: binding.bindingId,
+    driverId: driver.id,
+    name: driver.name,
+    vendor: driver.vendor,
+    executablePath: agent?.executablePath || binding.executablePath,
+    version: agent?.version || binding.version || '',
+    protocol: driver.protocol,
+    protocolState: driver.protocolState,
+    protocolLabel: driver.protocolLabel,
+    capabilities: [...driver.capabilities],
+    boundAt: binding.boundAt,
+    lastVerifiedAt: binding.lastVerifiedAt,
+    status: agent?.status || 'not_installed',
+    authState: agent?.authState || 'unknown',
+    valid: localAgentCanBind(agent),
+  }
 }
 
 async function desktop_persistence_load() {
@@ -1427,6 +1838,8 @@ async function dockPaths() {
     desktopStatePath: path.join(rootDir, DESKTOP_STATE_NAME),
     persistenceDir,
     appSettingsPath: path.join(persistenceDir, 'settings', 'settings.json'),
+    localAgentBindingPath: path.join(persistenceDir, 'settings', 'local-agent-binding.json'),
+    localAgentScanPath: path.join(persistenceDir, 'settings', 'local-agent-scan.json'),
     conversationsDir: path.join(persistenceDir, 'conversations', 'tasks'),
     conversationArchivesDir: path.join(persistenceDir, 'conversations', 'archives'),
     transactionsPath: path.join(persistenceDir, 'transactions', 'transactions.json'),
@@ -1732,9 +2145,18 @@ async function readJsonOr(file, fallback) {
 
 async function writeJsonAtomic(file, value) {
   await fsp.mkdir(path.dirname(file), { recursive: true })
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-  await fsp.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
-  await fsp.rename(tmp, file)
+  const tmp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`
+  try {
+    await fsp.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+    await fsp.rename(tmp, file)
+  } finally {
+    await fsp.rm(tmp, { force: true }).catch(() => undefined)
+  }
+}
+
+async function cloud_transactions() {
+  const paths = await dockPaths()
+  return httpJson('GET', '/v1/cloud/transactions', undefined, await localOwnerToken(paths), { timeoutMs: 5000 })
 }
 
 async function readConversationRecords(paths) {

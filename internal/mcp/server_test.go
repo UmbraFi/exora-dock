@@ -27,16 +27,35 @@ func TestMCPInitializeAndToolsList(t *testing.T) {
 	if _, ok := caps["tools"]; !ok {
 		t.Fatalf("capabilities missing tools: %#v", caps)
 	}
+	if instructions, _ := result["instructions"].(string); !strings.Contains(instructions, "run capability") || strings.Contains(instructions, "run_buyer_work") {
+		t.Fatalf("default V2 instructions = %q", instructions)
+	}
 
 	listResp := responseMap(t, server.HandleJSON(context.Background(), []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)))
 	listResult := listResp["result"].(map[string]any)
 	tools := listResult["tools"].([]any)
-	if len(tools) != 26 {
-		t.Fatalf("tools len = %d, want 26", len(tools))
+	if len(tools) != len(V2ToolNames()) {
+		t.Fatalf("tools len = %d, want %d", len(tools), len(V2ToolNames()))
 	}
+	for index, raw := range tools {
+		tool := raw.(map[string]any)
+		if tool["name"] != V2ToolNames()[index] {
+			t.Fatalf("tool %d = %#v, want %s", index, tool, V2ToolNames()[index])
+		}
+	}
+	claim := responseMap(t, server.HandleJSON(context.Background(), []byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"exora.claim_run","arguments":{"runId":"run-1"}}}`)))
+	if !strings.Contains(mustJSON(t, claim["result"]), "run capability required") {
+		t.Fatalf("unbound V2 call = %#v", claim)
+	}
+}
+
+func TestMCPLegacyMarketToolsRequireExplicitOptIn(t *testing.T) {
+	server := NewServer(Options{LegacyMarket: true})
+	listed := responseMap(t, server.HandleJSON(context.Background(), []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)))
+	tools := listed["result"].(map[string]any)["tools"].([]any)
 	toolsJSON := mustJSON(t, tools)
-	if !strings.Contains(toolsJSON, "exora.search_offers") || !strings.Contains(toolsJSON, "exora.search_agent_cards") || !strings.Contains(toolsJSON, "exora.negotiate_task") || !strings.Contains(toolsJSON, "exora.run_buyer_work") || !strings.Contains(toolsJSON, "exora.resume_work_run") || !strings.Contains(toolsJSON, "exora.find_payment_evidence") {
-		t.Fatalf("tools missing expected entries: %#v", tools)
+	if len(tools) != 26 || !strings.Contains(toolsJSON, "exora.search_offers") || !strings.Contains(toolsJSON, "exora.run_buyer_work") {
+		t.Fatalf("legacy tools = %#v", tools)
 	}
 }
 
@@ -67,7 +86,7 @@ func TestMCPAgentCardToolsProxyToDaemon(t *testing.T) {
 	defer ts.Close()
 	writeDiscoveryForTest(t, ts.URL, []string{"exora-dock", "config.yaml"})
 
-	server := NewServer(Options{BaseURL: ts.URL, AgentToken: "agent-secret"})
+	server := NewServer(Options{BaseURL: ts.URL, AgentToken: "agent-secret", LegacyMarket: true})
 	mine := responseMap(t, server.HandleJSON(context.Background(), []byte(`{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"exora.get_my_agent_card","arguments":{}}}`)))
 	if !strings.Contains(mustJSON(t, mine["result"]), "local-seller") {
 		t.Fatalf("mine result = %#v", mine)
@@ -108,7 +127,7 @@ func TestMCPFindSellersProxiesNaturalLanguageSearch(t *testing.T) {
 	defer ts.Close()
 	writeDiscoveryForTest(t, ts.URL, []string{"exora-dock", "config.yaml"})
 
-	server := NewServer(Options{BaseURL: ts.URL, AgentToken: "agent-secret"})
+	server := NewServer(Options{BaseURL: ts.URL, AgentToken: "agent-secret", LegacyMarket: true})
 	body := `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"exora.find_sellers","arguments":{"query":"帮我找 20G 显存以上服务器"}}}`
 	resp := responseMap(t, server.HandleJSON(context.Background(), []byte(body)))
 	result := resp["result"].(map[string]any)
@@ -144,7 +163,7 @@ func TestMCPStartTaskFlowDefaultsRealtimeDockerSearch(t *testing.T) {
 	defer ts.Close()
 	writeDiscoveryForTest(t, ts.URL, []string{"exora-dock", "config.yaml"})
 
-	server := NewServer(Options{BaseURL: ts.URL})
+	server := NewServer(Options{BaseURL: ts.URL, LegacyMarket: true})
 	body := `{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"exora.start_task_flow","arguments":{"query":"rent server and run docker"}}}`
 	resp := responseMap(t, server.HandleJSON(context.Background(), []byte(body)))
 	result := resp["result"].(map[string]any)
@@ -191,7 +210,7 @@ func TestMCPRunBuyerWorkResolvesWorkUIDProjectFolder(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
-	server := NewServer(Options{BaseURL: ts.URL, ConfigPath: configPath})
+	server := NewServer(Options{BaseURL: ts.URL, ConfigPath: configPath, LegacyMarket: true})
 	body := `{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"exora.run_buyer_work","arguments":{"query":"run gpu docker","workUid":"work-abc","taskTemplate":{}}}}`
 	resp := responseMap(t, server.HandleJSON(context.Background(), []byte(body)))
 	result := resp["result"].(map[string]any)
@@ -239,7 +258,7 @@ func TestMCPWorkUIDExplicitProjectPathRegistersProjectFolder(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
-	server := NewServer(Options{BaseURL: ts.URL, ConfigPath: configPath})
+	server := NewServer(Options{BaseURL: ts.URL, ConfigPath: configPath, LegacyMarket: true})
 	body := `{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"exora.run_buyer_work","arguments":{"query":"run gpu docker","uid":"work-explicit","projectPath":` + strconv.Quote(projectPath) + `,"taskTemplate":{}}}}`
 	resp := responseMap(t, server.HandleJSON(context.Background(), []byte(body)))
 	result := resp["result"].(map[string]any)
@@ -268,7 +287,7 @@ func TestMCPUnknownWorkUIDWithoutProjectPathReturnsToolError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := NewServer(Options{ConfigPath: configPath})
+	server := NewServer(Options{ConfigPath: configPath, LegacyMarket: true})
 	body := `{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"exora.run_buyer_work","arguments":{"query":"run gpu docker","workUid":"work-missing","taskTemplate":{}}}}`
 	resp := responseMap(t, server.HandleJSON(context.Background(), []byte(body)))
 	result := resp["result"].(map[string]any)
@@ -326,7 +345,7 @@ func TestMCPWorkContextPropagatesAcrossBuyerTools(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
-	server := NewServer(Options{BaseURL: ts.URL, ConfigPath: configPath})
+	server := NewServer(Options{BaseURL: ts.URL, ConfigPath: configPath, LegacyMarket: true})
 	calls := []struct {
 		name string
 		args string
@@ -373,7 +392,7 @@ func TestMCPSearchOffersProxiesToDaemon(t *testing.T) {
 	defer ts.Close()
 	writeDiscoveryForTest(t, ts.URL, []string{"exora-dock", "config.yaml"})
 
-	server := NewServer(Options{BaseURL: ts.URL, AgentToken: "agent-secret"})
+	server := NewServer(Options{BaseURL: ts.URL, AgentToken: "agent-secret", LegacyMarket: true})
 	body := `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"exora.search_offers","arguments":{"type":"gpu","minVramGb":40}}}`
 	resp := responseMap(t, server.HandleJSON(context.Background(), []byte(body)))
 	result := resp["result"].(map[string]any)
@@ -391,6 +410,7 @@ func TestMCPDaemonUnavailableReturnsToolError(t *testing.T) {
 		BaseURL:      "http://127.0.0.1:1",
 		StartCommand: []string{"exora-dock", "config.yaml"},
 		HTTPClient:   &http.Client{Timeout: 100 * time.Millisecond},
+		LegacyMarket: true,
 	})
 	body := `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"exora.search_offers","arguments":{"type":"gpu"}}}`
 	resp := responseMap(t, server.HandleJSON(context.Background(), []byte(body)))

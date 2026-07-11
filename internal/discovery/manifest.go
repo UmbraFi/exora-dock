@@ -54,10 +54,18 @@ type Endpoint struct {
 }
 
 func Build(listenAddr string, dockID string) Manifest {
-	return BuildWithBaseURL(BaseURL(listenAddr), dockID)
+	return buildWithBaseURL(BaseURL(listenAddr), dockID, false)
+}
+
+func BuildLegacy(listenAddr string, dockID string) Manifest {
+	return buildWithBaseURL(BaseURL(listenAddr), dockID, true)
 }
 
 func BuildWithBaseURL(baseURL string, dockID string) Manifest {
+	return buildWithBaseURL(baseURL, dockID, false)
+}
+
+func buildWithBaseURL(baseURL string, dockID string, legacyMarket bool) Manifest {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
 		baseURL = "http://127.0.0.1:8080"
@@ -68,7 +76,7 @@ func BuildWithBaseURL(baseURL string, dockID string) Manifest {
 	}
 	mcp := mcpCommand(executable)
 
-	return Manifest{
+	manifest := Manifest{
 		Schema:          SchemaURL,
 		ProtocolVersion: ProtocolVersion,
 		Name:            "Exora Dock",
@@ -81,7 +89,7 @@ func BuildWithBaseURL(baseURL string, dockID string) Manifest {
 		ExecutablePath:  executable,
 		StartCommand:    startCommand(executable),
 		MCPCommand:      mcp,
-		AgentPrompt:     AgentPrompt(),
+		AgentPrompt:     agentPrompt(legacyMarket),
 		OpenCodeConfig:  OpenCodeConfig(mcp),
 		RESTFallback:    RESTFallback(baseURL),
 		Capabilities: []Capability{
@@ -98,12 +106,16 @@ func BuildWithBaseURL(baseURL string, dockID string) Manifest {
 				Description: "Start and resume end-to-end server-to-Docker flows with realtime provider quote requests, user approval, Docker execution, and artifacts.",
 			},
 			{
-				Name:        "agent.runtime",
-				Description: "Run resumable Exora buyer/seller/verifier agents for Agent Card search, task flow coordination, approvals, order plans, and artifacts.",
+				Name:        "automation.codex",
+				Description: "Supervise buyer, seller, and verifier AutomationRuns through a locally installed Codex app-server and narrowly scoped run capabilities.",
+			},
+			{
+				Name:        "automation.wake.v2",
+				Description: "Claim typed Cloud WakeJobs without accepting arbitrary remote methods, paths, or owner credentials.",
 			},
 			{
 				Name:        "agent_cards.search",
-				Description: "Read local Agent Cards and search published Exora Agent Cards before falling back to resource offers.",
+				Description: "Read local Agent Cards and search published Exora Agent Cards without exposing Dock credentials.",
 			},
 			{
 				Name:        "provider.docker",
@@ -177,17 +189,17 @@ func BuildWithBaseURL(baseURL string, dockID string) Manifest {
 				URL:         baseURL + "/v1/agent/search-sellers",
 				Description: "Start a task flow by posting requireRealtimeQuotes=true, createSelectionRequest=true, and a taskTemplate with Docker settings under requirements.docker.",
 			},
-			"agent_runs.create": {
-				Method:      "POST",
-				Path:        "/v1/agent/runs",
-				URL:         baseURL + "/v1/agent/runs",
-				Description: "Start a resumable owner-scoped Exora Agent run from a natural-language intent.",
-			},
-			"agent_runs.list": {
+			"automation_runs.list": {
 				Method:      "GET",
-				Path:        "/v1/agent/runs",
-				URL:         baseURL + "/v1/agent/runs",
-				Description: "List resumable Exora Agent runs.",
+				Path:        "/v1/automation-runs",
+				URL:         baseURL + "/v1/automation-runs",
+				Description: "List durable Codex AutomationRuns. Owner authorization is required.",
+			},
+			"local_agents.list": {
+				Method:      "GET",
+				Path:        "/v1/local-agents",
+				URL:         baseURL + "/v1/local-agents",
+				Description: "Inspect safe local Codex installation, authentication, roles, workspace, and automation settings.",
 			},
 			"negotiations.create": {
 				Method:      "POST",
@@ -294,10 +306,45 @@ func BuildWithBaseURL(baseURL string, dockID string) Manifest {
 		},
 		LastSeen: time.Now().UTC().Format(time.RFC3339),
 	}
+	if !legacyMarket {
+		stripLegacyMarketDiscovery(&manifest)
+	}
+	return manifest
 }
 
 func AgentPrompt() string {
-	return "Find my local Exora Dock by reading %LOCALAPPDATA%\\ExoraDock\\agent-discovery.json, start the stdio MCP server from mcpCommand, then use its Exora tools instead of guessing HTTP endpoints. For concrete buyer work, use exora.run_buyer_work first. It is plan-first: classify the request, ask for plan confirmation when needed, write local .exora/agent-plans files, and wait for Dock owner submit_remote_task_manifest approval before seller matching or quoting. If a prompt includes workUid, include that workUid on every related Exora MCP call. Continue only as nextAction requires, and never use exora.negotiate_task as the default path for an unreviewed manifest. Never approve, select, pay, reveal credentials, or call Docker directly. Use baseUrl REST only as fallback."
+	return agentPrompt(false)
+}
+
+func agentPrompt(legacyMarket bool) string {
+	if legacyMarket {
+		return "Find my local Exora Dock by reading %LOCALAPPDATA%\\ExoraDock\\agent-discovery.json, start the stdio MCP server from mcpCommand, then use its Exora tools instead of guessing HTTP endpoints. Never approve, select, pay, reveal credentials, or call Docker directly. Use baseUrl REST only as fallback."
+	}
+	return "Find my local Exora Dock by reading %LOCALAPPDATA%\\ExoraDock\\agent-discovery.json and start the stdio MCP server from mcpCommand. Transaction AutomationRuns expose only the typed Exora V2 run tools authorized by their run capability. Read transaction state and allowed actions before proposing a mutation. Never approve, move funds, reveal credentials, expand workspace access, or call arbitrary local routes."
+}
+
+func stripLegacyMarketDiscovery(manifest *Manifest) {
+	if manifest == nil {
+		return
+	}
+	legacyCapabilities := map[string]bool{
+		"resources.search": true, "task_flow.server_to_docker": true,
+		"delegations.create": true, "leases.create": true,
+	}
+	capabilities := make([]Capability, 0, len(manifest.Capabilities))
+	for _, capability := range manifest.Capabilities {
+		if !legacyCapabilities[capability.Name] {
+			capabilities = append(capabilities, capability)
+		}
+	}
+	manifest.Capabilities = capabilities
+	for _, name := range []string{
+		"resources.search", "resource.detail", "task_flow.start", "negotiations.create", "negotiations.list",
+		"order_plans.from_negotiations", "order_plans.list", "order_plans.detail", "provider.negotiations",
+		"delegations.create", "leases.create",
+	} {
+		delete(manifest.Endpoints, name)
+	}
 }
 
 func OpenCodeConfig(command []string) map[string]any {

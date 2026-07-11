@@ -146,7 +146,7 @@ func TestMCPTaskFlowSurfacesFrontendSellerChoiceSnapshot(t *testing.T) {
 	buyerServer := httptest.NewServer(router)
 	defer buyerServer.Close()
 
-	server := mcp.NewServer(mcp.Options{BaseURL: buyerServer.URL})
+	server := mcp.NewServer(mcp.Options{BaseURL: buyerServer.URL, LegacyMarket: true})
 	resp := server.HandleJSON(context.Background(), []byte(`{
 		"jsonrpc":"2.0",
 		"id":42,

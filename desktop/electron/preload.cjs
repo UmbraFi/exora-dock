@@ -17,6 +17,12 @@ const exoraBridge = Object.freeze({
     }
     return ipcRenderer.invoke('exora:invoke', command, payload ?? {})
   },
+  onLocalAgentEvent(callback) {
+    if (typeof callback !== 'function') return () => undefined
+    const listener = (_event, payload) => callback(payload)
+    ipcRenderer.on('exora:local-agent-event', listener)
+    return () => ipcRenderer.removeListener('exora:local-agent-event', listener)
+  },
 })
 
 contextBridge.exposeInMainWorld('exora', exoraBridge)

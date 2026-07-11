@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/exora-dock/exora-dock/internal/agent"
 	"github.com/exora-dock/exora-dock/internal/approval"
 	"github.com/exora-dock/exora-dock/internal/negotiation"
 	"github.com/exora-dock/exora-dock/internal/orderplan"
 	"github.com/exora-dock/exora-dock/internal/payment"
+	"github.com/exora-dock/exora-dock/internal/supervisor"
 	"github.com/exora-dock/exora-dock/internal/task"
 )
 
@@ -25,7 +25,7 @@ func (h *Handler) GetDisputeEvidence(w http.ResponseWriter, r *http.Request) {
 	orderPlanID := strings.TrimSpace(query.Get("orderPlanId"))
 	taskID := strings.TrimSpace(query.Get("taskId"))
 	negotiationIDs := splitEvidenceIDs(query.Get("negotiationIds"))
-	agentRunIDs := splitEvidenceIDs(query.Get("agentRunIds"))
+	automationRunIDs := splitEvidenceIDs(query.Get("automationRunIds"))
 
 	records := map[string]any{
 		"side":      side,
@@ -123,15 +123,15 @@ func (h *Handler) GetDisputeEvidence(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if h.agentRuns != nil && len(agentRunIDs) > 0 {
+	if h.automationRuns != nil && len(automationRunIDs) > 0 {
 		runs := []any{}
-		for _, id := range agentRunIDs {
-			if run, ok := h.agentRuns.Get(id); ok {
-				runs = append(runs, safeAgentRunEvidence(run))
+		for _, id := range automationRunIDs {
+			if run, ok := h.automationRuns.Get(id); ok {
+				runs = append(runs, safeAutomationRunEvidence(run))
 			}
 		}
 		if len(runs) > 0 {
-			records["agentRuns"] = runs
+			records["automationRuns"] = runs
 		}
 	}
 
@@ -219,24 +219,21 @@ func safeNegotiationEvidence(n negotiation.Negotiation) map[string]any {
 	return redactEvidenceValue(record).(map[string]any)
 }
 
-func safeAgentRunEvidence(run agent.AgentRun) map[string]any {
+func safeAutomationRunEvidence(run supervisor.AutomationRun) map[string]any {
 	record := mapFromJSON(run)
-	turns, _ := record["turns"].([]any)
-	if len(turns) > 20 {
-		turns = turns[len(turns)-20:]
+	events, _ := record["events"].([]any)
+	if len(events) > 50 {
+		events = events[len(events)-50:]
 	}
-	for i, item := range turns {
-		if turn, ok := item.(map[string]any); ok {
-			if content, _ := turn["content"].(string); len(content) > 1200 {
-				turn["content"] = content[:1200] + "...[truncated]"
+	for i, item := range events {
+		if event, ok := item.(map[string]any); ok {
+			if payload, ok := event["payload"]; ok {
+				event["payload"] = redactEvidenceValue(payload)
 			}
-			if result, ok := turn["toolResult"]; ok {
-				turn["toolResult"] = redactEvidenceValue(result)
-			}
-			turns[i] = turn
+			events[i] = event
 		}
 	}
-	record["turns"] = turns
+	record["events"] = events
 	return redactEvidenceValue(record).(map[string]any)
 }
 
@@ -318,7 +315,7 @@ func evidenceBundleID(disputeID string, side string) string {
 
 func evidenceSummary(records map[string]any) string {
 	parts := []string{}
-	for _, key := range []string{"orderPlan", "task", "artifactManifest", "approvals", "payments", "negotiations", "agentRuns"} {
+	for _, key := range []string{"orderPlan", "task", "artifactManifest", "approvals", "payments", "negotiations", "automationRuns"} {
 		if value, ok := records[key]; ok {
 			parts = append(parts, fmt.Sprintf("%s=%d", key, evidenceCount(value)))
 		}

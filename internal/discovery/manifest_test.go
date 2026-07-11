@@ -41,8 +41,11 @@ func TestWriteAndReadFirstUsesExplicitDiscoveryPath(t *testing.T) {
 	if manifest.DockID != "dock-test" {
 		t.Fatalf("DockID = %q, want dock-test", manifest.DockID)
 	}
-	if manifest.Endpoints["resources.search"].URL != "http://127.0.0.1:18080/v1/resources" {
-		t.Fatalf("resources.search URL = %q", manifest.Endpoints["resources.search"].URL)
+	if manifest.Endpoints["automation_runs.list"].URL != "http://127.0.0.1:18080/v1/automation-runs" {
+		t.Fatalf("automation_runs.list URL = %q", manifest.Endpoints["automation_runs.list"].URL)
+	}
+	if _, exposed := manifest.Endpoints["resources.search"]; exposed {
+		t.Fatalf("legacy resource market exposed in V2 manifest: %#v", manifest.Endpoints)
 	}
 	if manifest.AgentPrompt == "" || manifest.OpenCodeConfig == nil || manifest.RESTFallback == nil {
 		t.Fatalf("missing agent copy metadata: %#v", manifest)
