@@ -40,33 +40,6 @@ type SellerAgentSettings struct {
 	DockerMaxCPUs         float64  `json:"dockerMaxCpus,omitempty"`
 	DockerMaxMemoryMB     int      `json:"dockerMaxMemoryMb,omitempty"`
 	DockerPullPolicy      string   `json:"dockerPullPolicy,omitempty"`
-	HasAPIKey             bool     `json:"hasApiKey"`
-	KeyFormat             string   `json:"keyFormat"`
-}
-
-type RemoteLLMProfile struct {
-	ID                      string                 `json:"id"`
-	Name                    string                 `json:"name"`
-	ProviderPreset          string                 `json:"providerPreset"`
-	LLMBaseURL              string                 `json:"llmBaseUrl"`
-	WireAPI                 string                 `json:"wireApi"`
-	Capabilities            config.LLMCapabilities `json:"capabilities"`
-	ResearchModel           string                 `json:"researchModel"`
-	ResearchReasoningEffort string                 `json:"researchReasoningEffort"`
-	UtilityModel            string                 `json:"utilityModel"`
-	UtilityReasoningEffort  string                 `json:"utilityReasoningEffort"`
-	DisableResponseStorage  bool                   `json:"disableResponseStorage"`
-	HasAPIKey               bool                   `json:"hasApiKey"`
-	KeyFormat               string                 `json:"keyFormat"`
-	UseForBuyer             bool                   `json:"useForBuyer,omitempty"`
-	UseForSeller            bool                   `json:"useForSeller,omitempty"`
-}
-
-type LLMProfileStatus struct {
-	Profiles        []RemoteLLMProfile `json:"profiles"`
-	ActiveProfileID string             `json:"activeProfileId,omitempty"`
-	BuyerProfileID  string             `json:"buyerProfileId,omitempty"`
-	SellerProfileID string             `json:"sellerProfileId,omitempty"`
 }
 
 func defaultBuyerAgentSettings() BuyerAgentSettings {
@@ -147,108 +120,6 @@ func (h *Handler) SaveSellerAgentSettings(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{"sellerAgent": sellerSettingsFromConfig(cfg)})
 }
 
-func (h *Handler) ListLLMProfiles(w http.ResponseWriter, r *http.Request) {
-	status := h.llmProfileStatus()
-	writeJSON(w, http.StatusOK, status)
-}
-
-func (h *Handler) SaveLLMProfile(w http.ResponseWriter, r *http.Request) {
-	var req RemoteLLMProfile
-	var rawBody map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&rawBody); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
-		return
-	}
-	data, _ := json.Marshal(rawBody)
-	_ = json.Unmarshal(data, &req)
-	id := strings.TrimSpace(req.ID)
-	if id == "" {
-		if req.UseForSeller && !req.UseForBuyer {
-			id = "seller-llm"
-		} else {
-			id = "buyer-llm"
-		}
-	}
-	apiKey, hasAPIKeyInput := stringField(rawBody, "apiKey")
-	clearAPIKey := boolField(rawBody, "clearApiKey")
-	raw, err := h.loadConfigMap()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	if req.UseForBuyer || (!req.UseForBuyer && !req.UseForSeller && id != "seller-llm") {
-		writeLLMRole(raw, "buyer_llm", req, apiKey, hasAPIKeyInput, clearAPIKey)
-	}
-	if req.UseForSeller || id == "seller-llm" {
-		writeLLMRole(raw, "seller_llm", req, apiKey, hasAPIKeyInput, clearAPIKey)
-	}
-	if err := h.saveConfigMap(raw); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	status := h.llmProfileStatus()
-	writeJSON(w, http.StatusOK, status)
-}
-
-func (h *Handler) DeleteLLMProfile(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimSpace(r.URL.Query().Get("id"))
-	if id == "" {
-		var req struct {
-			ID string `json:"id"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		id = strings.TrimSpace(req.ID)
-	}
-	raw, err := h.loadConfigMap()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	switch id {
-	case "buyer-llm":
-		delete(raw, "buyer_llm")
-	case "seller-llm":
-		delete(raw, "seller_llm")
-	default:
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "profile id must be buyer-llm or seller-llm"})
-		return
-	}
-	if err := h.saveConfigMap(raw); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, h.llmProfileStatus())
-}
-
-func (h *Handler) TestLLMProfile(w http.ResponseWriter, r *http.Request) {
-	var req RemoteLLMProfile
-	_ = json.NewDecoder(r.Body).Decode(&req)
-	profile := req
-	if strings.TrimSpace(profile.LLMBaseURL) == "" {
-		status := h.llmProfileStatus()
-		if len(status.Profiles) > 0 {
-			profile = status.Profiles[0]
-		}
-	}
-	if strings.TrimSpace(profile.LLMBaseURL) == "" {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "status": "missing_base_url", "message": "LLM base URL is required."})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":              true,
-		"status":          "ready",
-		"message":         "LLM profile is syntactically configured. Remote tests never return the API key.",
-		"llmBaseUrl":      strings.TrimRight(strings.TrimSpace(profile.LLMBaseURL), "/"),
-		"providerPreset":  firstNonEmpty(strings.TrimSpace(profile.ProviderPreset), "openai_responses"),
-		"wireApi":         firstNonEmpty(strings.TrimSpace(profile.WireAPI), "responses"),
-		"redactedSecrets": []string{"apiKey"},
-	})
-}
-
-func (h *Handler) ListLLMProfileModels(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "models": []string{}, "message": "Model discovery is not available through the remote relay yet."})
-}
-
 func (h *Handler) buyerAgentSettings() BuyerAgentSettings {
 	settings := defaultBuyerAgentSettings()
 	if h.cache == nil {
@@ -263,18 +134,6 @@ func (h *Handler) buyerAgentSettings() BuyerAgentSettings {
 		settings.AgentID = "exora-pwa-agent"
 	}
 	return settings
-}
-
-func (h *Handler) llmProfileStatus() LLMProfileStatus {
-	cfg, _ := h.loadConfig()
-	buyer := llmProfileFromRole("buyer-llm", "Buyer API", cfg.BuyerLLM, true, false)
-	seller := llmProfileFromRole("seller-llm", "Seller API", cfg.SellerLLM, false, true)
-	return LLMProfileStatus{
-		Profiles:        []RemoteLLMProfile{buyer, seller},
-		ActiveProfileID: "buyer-llm",
-		BuyerProfileID:  "buyer-llm",
-		SellerProfileID: "seller-llm",
-	}
 }
 
 func (h *Handler) loadConfig() (*config.Config, error) {
@@ -327,13 +186,12 @@ func sellerSettingsFromConfig(cfg *config.Config) SellerAgentSettings {
 	}
 	seller := cfg.SellerAgent
 	docker := cfg.Provider.Docker
-	role := cfg.SellerLLM
 	return SellerAgentSettings{
 		Enabled:               seller.Enabled,
 		AutoQuote:             seller.AutoQuote,
 		AutoAcceptLowRisk:     seller.AutoAcceptLowRisk || seller.AutoCompleteTextTasks,
 		AutoCompleteTextTasks: seller.AutoCompleteTextTasks,
-		ProviderID:            firstNonEmpty(strings.TrimSpace(seller.ProviderPubkey), "local-dev-miner"),
+		ProviderID:            firstNonEmpty(strings.TrimSpace(seller.ProviderPubkey), "local-dock"),
 		QuotePrice:            seller.DefaultQuotePrice,
 		Currency:              firstNonEmpty(strings.TrimSpace(seller.DefaultQuoteCurrency), "USDC"),
 		EstimatedSeconds:      seller.DefaultEstimatedSec,
@@ -346,48 +204,7 @@ func sellerSettingsFromConfig(cfg *config.Config) SellerAgentSettings {
 		DockerMaxCPUs:         docker.MaxCPUs,
 		DockerMaxMemoryMB:     docker.MaxMemoryMB,
 		DockerPullPolicy:      docker.PullPolicy,
-		HasAPIKey:             strings.TrimSpace(role.APIKey) != "" || !llmProviderRequiresAPIKey(role.ProviderPreset, role.BaseURL),
-		KeyFormat:             keyFormat(role.APIKey, role.ProviderPreset, role.BaseURL),
 	}
-}
-
-func llmProfileFromRole(id, name string, role config.RoleLLMConfig, buyer, seller bool) RemoteLLMProfile {
-	return RemoteLLMProfile{
-		ID:                      id,
-		Name:                    name,
-		ProviderPreset:          firstNonEmpty(strings.TrimSpace(role.ProviderPreset), "openai_responses"),
-		LLMBaseURL:              strings.TrimRight(firstNonEmpty(strings.TrimSpace(role.BaseURL), "https://api.openai.com/v1"), "/"),
-		WireAPI:                 firstNonEmpty(strings.TrimSpace(role.WireAPI), "responses"),
-		Capabilities:            role.Capabilities,
-		ResearchModel:           firstNonEmpty(strings.TrimSpace(role.ResearchModel), strings.TrimSpace(role.Model), "gpt-5.5"),
-		ResearchReasoningEffort: firstNonEmpty(strings.TrimSpace(role.ResearchReasoningEffort), "high"),
-		UtilityModel:            firstNonEmpty(strings.TrimSpace(role.UtilityModel), strings.TrimSpace(role.ResearchModel), strings.TrimSpace(role.Model), "gpt-5.5"),
-		UtilityReasoningEffort:  firstNonEmpty(strings.TrimSpace(role.UtilityReasoningEffort), "low"),
-		DisableResponseStorage:  role.DisableResponseStorage,
-		HasAPIKey:               strings.TrimSpace(role.APIKey) != "" || !llmProviderRequiresAPIKey(role.ProviderPreset, role.BaseURL),
-		KeyFormat:               keyFormat(role.APIKey, role.ProviderPreset, role.BaseURL),
-		UseForBuyer:             buyer,
-		UseForSeller:            seller,
-	}
-}
-
-func writeLLMRole(raw map[string]any, key string, profile RemoteLLMProfile, apiKey string, hasAPIKeyInput bool, clearAPIKey bool) {
-	role := mapAt(raw, key)
-	role["base_url"] = strings.TrimRight(firstNonEmpty(strings.TrimSpace(profile.LLMBaseURL), "https://api.openai.com/v1"), "/")
-	role["provider_preset"] = firstNonEmpty(strings.TrimSpace(profile.ProviderPreset), "openai_responses")
-	role["wire_api"] = firstNonEmpty(strings.TrimSpace(profile.WireAPI), "responses")
-	role["model"] = firstNonEmpty(strings.TrimSpace(profile.ResearchModel), "gpt-5.5")
-	role["research_model"] = firstNonEmpty(strings.TrimSpace(profile.ResearchModel), "gpt-5.5")
-	role["research_reasoning_effort"] = firstNonEmpty(strings.TrimSpace(profile.ResearchReasoningEffort), "high")
-	role["utility_model"] = firstNonEmpty(strings.TrimSpace(profile.UtilityModel), strings.TrimSpace(profile.ResearchModel), "gpt-5.5")
-	role["utility_reasoning_effort"] = firstNonEmpty(strings.TrimSpace(profile.UtilityReasoningEffort), "low")
-	role["disable_response_storage"] = profile.DisableResponseStorage
-	if clearAPIKey {
-		role["api_key"] = ""
-	} else if hasAPIKeyInput {
-		role["api_key"] = strings.TrimSpace(apiKey)
-	}
-	raw[key] = role
 }
 
 func mapAt(parent map[string]any, key string) map[string]any {
@@ -427,23 +244,6 @@ func defaultSettingsStringList(values []string, fallback []string) []string {
 	return values
 }
 
-func stringField(raw map[string]any, key string) (string, bool) {
-	value, ok := raw[key]
-	if !ok {
-		return "", false
-	}
-	return strings.TrimSpace(toString(value)), true
-}
-
-func boolField(raw map[string]any, key string) bool {
-	value, ok := raw[key]
-	if !ok {
-		return false
-	}
-	v, ok := value.(bool)
-	return ok && v
-}
-
 func toString(value any) string {
 	switch v := value.(type) {
 	case string:
@@ -454,28 +254,4 @@ func toString(value any) string {
 		data, _ := json.Marshal(v)
 		return strings.Trim(string(data), `"`)
 	}
-}
-
-func llmProviderRequiresAPIKey(preset string, baseURL string) bool {
-	preset = strings.ToLower(strings.TrimSpace(preset))
-	baseURL = strings.ToLower(strings.TrimSpace(baseURL))
-	switch preset {
-	case "ollama", "lm_studio", "vllm", "localai", "llama_cpp", "textgen", "koboldcpp", "custom_openai_compatible":
-		return false
-	}
-	return !(strings.Contains(baseURL, "localhost") || strings.Contains(baseURL, "127.0.0.1"))
-}
-
-func keyFormat(apiKey string, preset string, baseURL string) string {
-	apiKey = strings.TrimSpace(apiKey)
-	if apiKey == "" {
-		if llmProviderRequiresAPIKey(preset, baseURL) {
-			return "missing"
-		}
-		return "not_required"
-	}
-	if len(apiKey) < 8 {
-		return "short"
-	}
-	return "saved"
 }

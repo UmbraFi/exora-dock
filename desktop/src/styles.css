@@ -2559,13 +2559,8 @@ h3 {
   max-width: none;
 }
 
-.chat-view.buyer-initial-setup .composer-mcp-copy-button {
-  display: none;
-}
-
 .chat-view.seller-api-only .local-agent-card,
 .chat-view.seller-api-only .work-or-divider,
-.chat-view.seller-api-only .composer-mcp-copy-button,
 .chat-view.seller-api-only .permission-control {
   display: none;
 }
@@ -4762,6 +4757,55 @@ h3 {
   width: 16px;
 }
 
+.chat-agent-control {
+  display: inline-flex;
+  position: relative;
+}
+
+.chat-agent-button {
+  position: relative;
+}
+
+.chat-agent-status-dot {
+  background: #7e8b87;
+  border: 2px solid #e4ebe8;
+  border-radius: 50%;
+  bottom: 5px;
+  height: 8px;
+  position: absolute;
+  right: 5px;
+  width: 8px;
+}
+
+.chat-agent-button[data-session-status="ready"] .chat-agent-status-dot { background: #31966b; }
+.chat-agent-button[data-session-status="busy"] .chat-agent-status-dot { animation: agent-status-pulse 1.2s ease-in-out infinite; background: #31966b; }
+.chat-agent-button[data-session-status="starting"] .chat-agent-status-dot { animation: agent-status-pulse 0.8s ease-in-out infinite; background: #759287; }
+.chat-agent-button[data-session-status="waiting_user"] .chat-agent-status-dot { background: #c78b2b; }
+.chat-agent-button[data-session-status="failed"] .chat-agent-status-dot { background: #c75757; }
+.chat-agent-button[data-session-status="stopped"] .chat-agent-status-dot { background: #7e8b87; }
+
+.chat-agent-menu {
+  bottom: calc(100% + 8px);
+  left: auto;
+  min-width: 248px;
+  right: 0;
+  top: auto;
+  z-index: 30;
+}
+
+.chat-agent-menu-copy {
+  color: #60706a;
+  display: grid;
+  font-size: 12px;
+  gap: 2px;
+  padding: 8px 10px;
+}
+
+@keyframes agent-status-pulse {
+  0%, 100% { opacity: 0.45; transform: scale(0.84); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
 .work-or-divider {
   align-items: center;
   color: #5f6d68;
@@ -4867,7 +4911,7 @@ h3 {
 
 .chat-composer .composer-footer {
   align-self: end;
-  justify-content: space-between;
+  justify-content: flex-end;
   position: relative;
 }
 
@@ -6129,6 +6173,284 @@ button *,
 .agent-env-empty span {
   font-size: 12px;
   line-height: 1.45;
+}
+
+.seller-card-intent-field textarea {
+  min-height: 96px !important;
+}
+
+.seller-card-agent-empty {
+  margin-top: 2px;
+}
+
+.seller-card-questions {
+  border-top: 1px solid rgb(32 52 46 / 0.1);
+  display: grid;
+  gap: 13px;
+  padding: 16px 0 4px;
+}
+
+.seller-card-questions-head {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.seller-card-questions-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.seller-card-questions-head strong {
+  color: #17211e;
+  font-size: 13px;
+}
+
+.seller-card-questions-head small {
+  color: rgb(23 33 30 / 0.56);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.seller-card-questions-head > span {
+  background: #f2e9d8;
+  border-radius: 999px;
+  color: #7b5b1d;
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 5px 9px;
+  text-transform: uppercase;
+}
+
+.seller-card-secret-warning {
+  background: #f7f2e8;
+  border: 1px solid rgb(123 91 29 / 0.16);
+  border-radius: 9px;
+  color: #695329;
+  display: grid;
+  font-size: 11px;
+  gap: 3px;
+  line-height: 1.45;
+  padding: 10px 12px;
+}
+
+.seller-card-question-list {
+  display: grid;
+  gap: 11px;
+}
+
+.seller-card-question {
+  display: grid;
+  gap: 5px;
+}
+
+.seller-card-question .field-label {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+}
+
+.seller-card-question .field-label em {
+  background: #e9efed;
+  border-radius: 999px;
+  color: #52665f;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+  padding: 3px 6px;
+  text-transform: uppercase;
+}
+
+.seller-card-question textarea {
+  min-height: 78px !important;
+}
+
+.seller-card-generated {
+  border-top: 1px solid rgb(32 52 46 / 0.1);
+  display: grid;
+  gap: 14px;
+  padding: 16px 0 4px;
+}
+
+.seller-card-generated-head {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.seller-card-generated-head > span {
+  align-items: center;
+  background: #e4ebe8;
+  border-radius: 9px;
+  color: #29463d;
+  display: inline-flex;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+
+.seller-card-generated-head svg.app-icon {
+  height: 17px;
+  width: 17px;
+}
+
+.seller-card-generated-head div {
+  display: grid;
+  gap: 2px;
+}
+
+.seller-card-generated-head strong,
+.seller-card-generated-columns h3 {
+  color: #17211e;
+  font-size: 12px;
+}
+
+.seller-card-generated-head small,
+.seller-card-generated-summary span {
+  color: rgb(23 33 30 / 0.55);
+  font-size: 11px;
+}
+
+.seller-card-generated-summary,
+.seller-card-generated-columns {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.seller-card-generated-summary > div,
+.seller-card-generated-columns > div {
+  background: rgb(32 52 46 / 0.035);
+  border: 1px solid rgb(32 52 46 / 0.09);
+  border-radius: 9px;
+  display: grid;
+  gap: 5px;
+  padding: 11px 12px;
+}
+
+.seller-card-generated-summary strong {
+  color: #17211e;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.seller-card-generated-columns ol {
+  color: rgb(23 33 30 / 0.72);
+  display: grid;
+  font-size: 12px;
+  gap: 7px;
+  line-height: 1.45;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.seller-card-generated-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.seller-card-generated-tags span {
+  background: #e8efec;
+  border-radius: 999px;
+  color: #3e5b52;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 5px 8px;
+}
+
+.seller-card-permission-policy {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.seller-card-permission-policy > div {
+  background: rgb(32 52 46 / 0.035);
+  border: 1px solid rgb(32 52 46 / 0.09);
+  border-radius: 9px;
+  display: grid;
+  gap: 6px;
+  padding: 11px 12px;
+}
+
+.seller-card-permission-policy h3 {
+  color: #17211e;
+  font-size: 12px;
+  margin: 0;
+}
+
+.seller-card-permission-policy ul,
+.seller-card-permission-policy p {
+  color: rgb(23 33 30 / 0.72);
+  font-size: 11px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.seller-card-permission-policy ul {
+  display: grid;
+  gap: 4px;
+  padding-left: 17px;
+}
+
+.transaction-supervision {
+  align-items: center;
+  background: rgb(32 52 46 / 0.04);
+  border: 1px solid rgb(32 52 46 / 0.1);
+  border-radius: 9px;
+  display: flex;
+  gap: 9px;
+  margin-bottom: 12px;
+  padding: 9px 11px;
+}
+
+.transaction-supervision-dot {
+  background: #2d8a70;
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px rgb(45 138 112 / 0.1);
+  height: 7px;
+  width: 7px;
+}
+
+.transaction-supervision.retry_scheduled .transaction-supervision-dot,
+.transaction-supervision.waiting_user .transaction-supervision-dot,
+.transaction-supervision.waiting_counterparty .transaction-supervision-dot {
+  background: #b38935;
+  box-shadow: 0 0 0 4px rgb(179 137 53 / 0.1);
+}
+
+.transaction-supervision.blocked .transaction-supervision-dot {
+  background: #b45b50;
+  box-shadow: 0 0 0 4px rgb(180 91 80 / 0.1);
+}
+
+.transaction-supervision > div {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+}
+
+.transaction-supervision strong {
+  color: #17211e;
+  font-size: 11px;
+}
+
+.transaction-supervision small,
+.transaction-supervision em {
+  color: rgb(23 33 30 / 0.56);
+  font-size: 10px;
+  font-style: normal;
+}
+
+@media (max-width: 720px) {
+  .seller-card-generated-summary,
+  .seller-card-generated-columns,
+  .seller-card-permission-policy {
+    grid-template-columns: 1fr;
+  }
 }
 
 .agent-env-dashboard {
@@ -10410,6 +10732,34 @@ label span {
   border-color: #2c3b35;
 }
 
+:root[data-theme="dark"] .seller-card-generated {
+  border-color: #2c3b35;
+}
+
+:root[data-theme="dark"] .seller-card-generated-head > span,
+:root[data-theme="dark"] .seller-card-generated-tags span {
+  background: #26342f;
+  color: #b8d1c7;
+}
+
+:root[data-theme="dark"] .seller-card-generated-head strong,
+:root[data-theme="dark"] .seller-card-generated-columns h3,
+:root[data-theme="dark"] .seller-card-generated-summary strong {
+  color: #eaf2ee;
+}
+
+:root[data-theme="dark"] .seller-card-generated-head small,
+:root[data-theme="dark"] .seller-card-generated-summary span,
+:root[data-theme="dark"] .seller-card-generated-columns ol {
+  color: #9caaa4;
+}
+
+:root[data-theme="dark"] .seller-card-generated-summary > div,
+:root[data-theme="dark"] .seller-card-generated-columns > div {
+  background: #18211e;
+  border-color: #2c3b35;
+}
+
 :root[data-theme="dark"] .agent-card-form .card-field-row input:not(.api-role-input):not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
 :root[data-theme="dark"] .agent-card-form .card-field-row select,
 :root[data-theme="dark"] .agent-card-form .card-field-row textarea {
@@ -10514,6 +10864,10 @@ label span {
 }
 
 @media (max-width: 720px) {
+  .seller-card-generated-summary,
+  .seller-card-generated-columns {
+    grid-template-columns: 1fr;
+  }
   html,
   body,
   #app,

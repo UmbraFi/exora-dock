@@ -16,11 +16,8 @@ import (
 const diagnosticsVersion = "safe-local-diagnostics/v0.4"
 
 type DiagnosticsConfig struct {
-	LLMProvider        string
-	LLMConfigured      bool
-	SellerAgentEnabled bool
-	CommandExecutor    bool
-	MCPAvailable       bool
+	CommandExecutor bool
+	MCPAvailable    bool
 }
 
 func CollectDiagnostics(cfg DiagnosticsConfig) Diagnostics {
@@ -37,9 +34,6 @@ func CollectDiagnostics(cfg DiagnosticsConfig) Diagnostics {
 		RAMGB:              ramGB(),
 		GPUs:               gpuInfo(),
 		Storage:            storageInfo(),
-		LLMProvider:        safeProvider(cfg.LLMProvider),
-		LLMConfigured:      cfg.LLMConfigured,
-		SellerAgentEnabled: cfg.SellerAgentEnabled,
 		CommandExecutor:    cfg.CommandExecutor,
 		MCPAvailable:       cfg.MCPAvailable,
 		MCPEntrypoint:      "exora-dock mcp",
@@ -92,9 +86,6 @@ func codeEnvironmentInfo(diag Diagnostics, pythonCommand string) []DependencyInf
 	out = appendCUDAEnvironmentInfo(out)
 	if diag.MCPAvailable {
 		out = appendDependencyInfo(out, "MCP", firstNonEmpty(diag.MCPEntrypoint, "available"), "agent bridge")
-	}
-	if diag.LLMConfigured {
-		out = appendDependencyInfo(out, "LLM provider", firstNonEmpty(diag.LLMProvider, "configured"), "agent bridge")
 	}
 	return out
 }
@@ -817,20 +808,6 @@ func linuxPrettyName(path string) string {
 		return values["PRETTY_NAME"]
 	}
 	return strings.TrimSpace(strings.Join([]string{values["NAME"], values["VERSION"]}, " "))
-}
-
-func safeProvider(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-	value = strings.ReplaceAll(value, "https://", "")
-	value = strings.ReplaceAll(value, "http://", "")
-	value = strings.TrimRight(value, "/")
-	if before, _, ok := strings.Cut(value, "/"); ok {
-		value = before
-	}
-	return value
 }
 
 func firstLine(value string) string {

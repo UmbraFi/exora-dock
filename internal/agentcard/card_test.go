@@ -19,11 +19,21 @@ func TestDraftsPublishWithWhitepaperDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ValidatePublish(seller); err != nil {
-		t.Fatalf("seller card should be publishable with default policy fields: %v", err)
+	if err := ValidatePublish(seller); err == nil {
+		t.Fatalf("seller card should remain incomplete until the Agent permission interview finishes")
 	}
-	if seller.ManualFields.Seller.Pricing == "" || seller.ManualFields.Seller.Availability == "" {
+	if seller.ManualFields.Seller.SellIntent == "" || seller.ManualFields.Seller.PricingPrinciples == "" || seller.ManualFields.Seller.Pricing == "" || seller.ManualFields.Seller.Availability == "" {
 		t.Fatalf("seller defaults missing market fields: %#v", seller.ManualFields.Seller)
+	}
+	seller.ManualFields.Seller.SetupStatus = "complete"
+	seller.ManualFields.Seller.StructuredByAgent = "codex"
+	seller.ManualFields.Seller.StructuredAt = "2026-07-04T00:01:00Z"
+	seller.ManualFields.Seller.AllowedAgentActions = []string{"inspect accepted task inputs", "prepare a quote"}
+	seller.ManualFields.Seller.ApprovalRequired = []string{"use credential alias", "write outside task output"}
+	seller.ManualFields.Seller.CredentialPolicy = "Credential aliases only; secret values stay in local owner storage."
+	seller.ManualFields.Seller.NetworkPolicy = "Only seller-declared service endpoints are allowed."
+	if err := ValidatePublish(seller); err != nil {
+		t.Fatalf("seller card should publish after the permission interview completes: %v", err)
 	}
 }
 
@@ -63,10 +73,7 @@ func TestValidatePublishRequiresRoleMinimumFields(t *testing.T) {
 }
 
 func TestDiagnosticsAvoidSensitiveDetails(t *testing.T) {
-	diag := CollectDiagnostics(DiagnosticsConfig{LLMProvider: "https://api.openai.com/v1", LLMConfigured: true, MCPAvailable: true})
-	if diag.LLMProvider != "api.openai.com" {
-		t.Fatalf("provider should be summarized, got %q", diag.LLMProvider)
-	}
+	diag := CollectDiagnostics(DiagnosticsConfig{MCPAvailable: true})
 	if diag.RedactionSummary == "" {
 		t.Fatalf("expected redaction summary")
 	}

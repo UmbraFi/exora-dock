@@ -119,6 +119,17 @@ export type BuyerManualFields = {
 }
 
 export type SellerManualFields = {
+  sellIntent?: string
+  pricingPrinciples?: string
+  offerings?: string[]
+  pricingProcess?: string[]
+  structuredByAgent?: string
+  structuredAt?: string
+  setupStatus?: 'incomplete' | 'complete'
+  allowedAgentActions?: string[]
+  approvalRequiredActions?: string[]
+  credentialPolicy?: string
+  networkPolicy?: string
   displayName?: string
   capabilitySummary?: string
   capabilityTypes?: string[]

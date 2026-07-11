@@ -2,14 +2,8 @@ package agent
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
-	"fmt"
-	"io"
 	"strings"
 	"time"
-
-	"github.com/exora-dock/exora-dock/internal/ipfs"
 )
 
 // ReviewRequest is the product listing review request from PWA.
@@ -31,123 +25,20 @@ type ReviewResult struct {
 	Timestamp   int64  `json:"timestamp"`
 }
 
-const systemPrompt = `You are a resource listing review agent for an agent capability marketplace.
-Review the resource listing and decide whether to APPROVE or REJECT it.
+// ReviewAgent applies local deterministic listing rules. Executable model
+// automation is provided separately through a user-installed local driver.
+type ReviewAgent struct{}
 
-REJECT if any of the following apply:
-- Prohibited items: weapons, drugs, explosives, stolen goods, counterfeit currency
-- Fraudulent or misleading description that does not match the provided metadata
-- Pornographic, sexually explicit, or excessively violent content
-- Personal data, accounts, or credentials being sold
-- Items that violate intellectual property laws (clear counterfeits)
-- Empty, nonsensical, or spam resource listings
-- Price seems unreasonable for the described resource (potential scam)
+// NewReviewAgent accepts ignored legacy arguments so older embedding callers
+// can upgrade without reintroducing provider credentials.
+func NewReviewAgent(_ ...any) *ReviewAgent { return &ReviewAgent{} }
 
-APPROVE if the listing is a legitimate compute, runtime, storage, repository, project, or dataset resource with a reasonable description.
-
-Respond with ONLY a JSON object (no markdown, no extra text):
-{"approved": true, "reason": "brief explanation"}
-or
-{"approved": false, "reason": "brief explanation"}`
-
-// ReviewAgent performs LLM-based product listing reviews.
-type ReviewAgent struct {
-	llm        *OpenAICompatibleClient
-	ipfsClient *ipfs.Client
-}
-
-// NewReviewAgent creates a new ReviewAgent.
-func NewReviewAgent(baseURL, apiKey, model string, ipfsClient *ipfs.Client) *ReviewAgent {
-	return NewReviewAgentWithConfig(LLMClientConfig{
-		BaseURL:                 baseURL,
-		APIKey:                  apiKey,
-		WireAPI:                 LLMWireChatCompletions,
-		ResearchModel:           model,
-		UtilityModel:            model,
-		ResearchReasoningEffort: "high",
-		UtilityReasoningEffort:  "low",
-	}, ipfsClient)
-}
-
-func NewReviewAgentWithConfig(cfg LLMClientConfig, ipfsClient *ipfs.Client) *ReviewAgent {
-	return &ReviewAgent{
-		llm:        NewOpenAICompatibleClient(cfg),
-		ipfsClient: ipfsClient,
-	}
-}
-
-// Review performs an LLM review of the given product listing.
 func (a *ReviewAgent) Review(ctx context.Context, req ReviewRequest) (ReviewResult, error) {
-	if !a.Configured() {
-		return devReview(req), nil
-	}
-
-	// Build user content parts
-	content := []map[string]any{
-		{
-			"type": "text",
-			"text": fmt.Sprintf("Product: %s\nCategory: %s\nPrice: %s\nDescription: %s",
-				req.Title, req.Category, req.Price, req.Description),
-		},
-	}
-
-	// Fetch images from IPFS and encode as base64
-	if a.ipfsClient != nil {
-		for _, cid := range req.ImageCIDs {
-			rc, err := a.ipfsClient.Cat(cid)
-			if err != nil {
-				continue // skip images that fail to fetch
-			}
-			data, err := io.ReadAll(io.LimitReader(rc, 10<<20))
-			rc.Close()
-			if err != nil {
-				continue
-			}
-			b64 := base64.StdEncoding.EncodeToString(data)
-			content = append(content, map[string]any{
-				"type": "image_url",
-				"image_url": map[string]string{
-					"url": "data:image/jpeg;base64," + b64,
-				},
-			})
-		}
-	}
-
-	raw, err := a.llm.Generate(ctx, systemPrompt, content, LLMRequestOptions{
-		Profile:        LLMProfileResearch,
-		MaxTokens:      256,
-		ResponseFormat: JSONResponseFormat(),
-	})
-	if err != nil {
-		return ReviewResult{}, fmt.Errorf("agent: llm request: %w", err)
-	}
-
-	raw = strings.TrimSpace(raw)
-	// Strip markdown code fences if present
-	raw = strings.TrimPrefix(raw, "```json")
-	raw = strings.TrimPrefix(raw, "```")
-	raw = strings.TrimSuffix(raw, "```")
-	raw = strings.TrimSpace(raw)
-
-	var result struct {
-		Approved bool   `json:"approved"`
-		Reason   string `json:"reason"`
-	}
-	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		return ReviewResult{}, fmt.Errorf("agent: parse llm json: %w (raw: %s)", err, raw)
-	}
-
-	return ReviewResult{
-		Approved:  result.Approved,
-		Reason:    result.Reason,
-		Timestamp: time.Now().Unix(),
-	}, nil
+	_ = ctx
+	return devReview(req), nil
 }
 
-// Configured reports whether the agent has LLM credentials configured.
-func (a *ReviewAgent) Configured() bool {
-	return a != nil && a.llm.Enabled()
-}
+func (a *ReviewAgent) Configured() bool { return a != nil }
 
 func devReview(req ReviewRequest) ReviewResult {
 	approved := true

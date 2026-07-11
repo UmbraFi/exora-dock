@@ -12,10 +12,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/exora-dock/exora-dock/internal/discovery"
+	"github.com/exora-dock/exora-dock/internal/runcapability"
 )
 
 const (
@@ -33,6 +35,11 @@ type Options struct {
 	ConnectionRole string
 	ClientName     string
 	HTTPClient     *http.Client
+	LegacyMarket   bool
+	AgentSessionID string
+	WorkUID        string
+	ProjectPath    string
+	TransactionID  string
 }
 
 type Server struct {
@@ -86,7 +93,9 @@ func (s *Server) handle(ctx context.Context, req rpcRequest) any {
 	isNotification := req.ID == nil
 	switch req.Method {
 	case "initialize":
-		s.registerConnection(ctx)
+		if !s.v2Surface() {
+			s.registerConnection(ctx)
+		}
 		if isNotification {
 			return nil
 		}
@@ -100,7 +109,7 @@ func (s *Server) handle(ctx context.Context, req rpcRequest) any {
 				"title":   "Exora Dock",
 				"version": "0.1.0",
 			},
-			"instructions": "Use Exora Dock tools as a continuous task flow. For buyer work, call exora.run_buyer_work first; it is plan-first. It classifies the request, stops for clarification or local plan confirmation when needed, writes .exora/agent-plans/<plan_id>/ files only after confirmation, and requires Dock owner approval of submit_remote_task_manifest before seller matching or quoting. Include the copied workUid on every related request when the Dock prompt provides one; if the UID is not registered yet, also include the copied projectPath. Preserve and pass the returned resumeJson or runId on every follow-up so each step can checkpoint and resume through JSON. Calls with workUid mark that Work as actively controlled by this external MCP agent for a short renewable lease so the built-in Dock buyer composer does not race the same task. Do not call exora.negotiate_task as the default path for an unreviewed manifest; use it only as a low-level compatibility tool after the owner has approved an equivalent manifest. If Exora Dock returns no suitable task card, seller card, signed quote, or order option, stop and tell the user that Exora Dock cannot help with this task right now, including the Dock/MCP reason. start_task_flow remains a realtime quote fallback. For paid work, call exora.find_payment_evidence and require found_finalized Cloud/chain evidence before any paid worker/job continuation; local payment records alone are not enough. Never treat MCP tool invocation as user approval, seller selection, manifest submission approval, or payment consent.",
+			"instructions": s.instructions(),
 		})
 	case "notifications/initialized":
 		return nil
@@ -113,7 +122,10 @@ func (s *Server) handle(ctx context.Context, req rpcRequest) any {
 		if isNotification {
 			return nil
 		}
-		return rpcResult(req.ID, map[string]any{"tools": toolDefinitions()})
+		if s.v2Surface() {
+			return rpcResult(req.ID, map[string]any{"tools": v2ToolDefinitions()})
+		}
+		return rpcResult(req.ID, map[string]any{"tools": s.toolDefinitions()})
 	case "tools/call":
 		if isNotification {
 			return nil
@@ -149,6 +161,45 @@ func (s *Server) handle(ctx context.Context, req rpcRequest) any {
 }
 
 func (s *Server) callTool(ctx context.Context, name string, args map[string]any) (toolResult, error) {
+	if s.interactiveSession() {
+		locked, err := s.lockInteractiveWorkContext(args)
+		if err != nil {
+			return errorResult(err.Error(), nil), nil
+		}
+		args = locked
+	}
+	result, err := s.callToolInner(ctx, name, args)
+	if s.interactiveSession() {
+		s.recordSessionToolEvent(ctx, name, result, err)
+	}
+	return result, err
+}
+
+func (s *Server) callToolInner(ctx context.Context, name string, args map[string]any) (toolResult, error) {
+	if s.interactiveSession() {
+		switch name {
+		case "exora.session_report_progress":
+			return successResult(map[string]any{"recorded": true, "sessionId": s.opts.AgentSessionID, "message": firstString(args, "message", "summary")}), nil
+		case "exora.session_request_user_input":
+			question := firstString(args, "question", "message")
+			if question == "" {
+				return errorResult("question required", nil), nil
+			}
+			return successResult(map[string]any{"recorded": true, "sessionId": s.opts.AgentSessionID, "waitingFor": "user", "question": question}), nil
+		}
+	}
+	if s.v2Surface() {
+		if !s.v2Automation() {
+			shortName := strings.TrimPrefix(strings.TrimSpace(name), "exora.")
+			for _, allowed := range v2ToolShortNames {
+				if shortName == allowed {
+					return errorResult("run capability required", nil), nil
+				}
+			}
+			return toolResult{}, fmt.Errorf("Unknown V2 tool: %s", name)
+		}
+		return s.callV2Tool(ctx, name, args)
+	}
 	switch name {
 	case "exora.get_my_agent_card":
 		return s.proxy(ctx, http.MethodGet, "/v1/agent-cards/mine", nil, nil)
@@ -326,6 +377,139 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 		return s.stopWorkRun(ctx, args)
 	default:
 		return toolResult{}, fmt.Errorf("Unknown tool: %s", name)
+	}
+}
+
+func (s *Server) v2Automation() bool {
+	return runcapability.IsToken(s.opts.AgentToken)
+}
+
+func (s *Server) v2Surface() bool {
+	if s.interactiveSession() && !s.v2Automation() {
+		return false
+	}
+	return !s.opts.LegacyMarket || s.v2Automation()
+}
+
+func (s *Server) interactiveSession() bool { return strings.TrimSpace(s.opts.AgentSessionID) != "" }
+
+func (s *Server) instructions() string {
+	if s.v2Automation() {
+		return "This MCP connection is bound to one Exora AutomationRun. Call exora.claim_run first. Read transaction state and allowed actions before proposing a mutation. Every mutation requires runId, expectedStateVersion, and a stable idempotencyKey. A tool result never grants human approval, moves funds, reveals credentials, or expands workspace access."
+	}
+	if s.v2Surface() {
+		return "This is the Exora V2 AutomationRun MCP surface. The listed tools require a short-lived run capability issued by Dock Supervisor; restart this MCP server through a claimed AutomationRun. No tool grants human approval, moves funds, reveals credentials, or expands workspace access."
+	}
+	if s.interactiveSession() {
+		return "This MCP connection is locked to Exora chat session " + s.opts.AgentSessionID + " and Work UID " + s.opts.WorkUID + ". Use exora.run_buyer_work for buyer planning, exora.session_report_progress for visible progress, and exora.session_request_user_input for questions. The Dock rejects another workUid or projectPath. Ordinary chat text cannot change transaction state. Never request payment PINs, private keys, owner tokens, model credentials, or arbitration authority."
+	}
+	return "Use Exora Dock tools as a continuous task flow. For buyer work, call exora.run_buyer_work first; it is plan-first. It classifies the request, stops for clarification or local plan confirmation when needed, writes .exora/agent-plans/<plan_id>/ files only after confirmation, and requires Dock owner approval of submit_remote_task_manifest before seller matching or quoting. Include the copied workUid on every related request when the Dock prompt provides one; if the UID is not registered yet, also include the copied projectPath. Preserve and pass the returned resumeJson or runId on every follow-up so each step can checkpoint and resume through JSON. Calls with workUid mark that Work as actively controlled by this external MCP agent for a short renewable lease so the built-in Dock buyer composer does not race the same task. Do not call exora.negotiate_task as the default path for an unreviewed manifest; use it only as a low-level compatibility tool after the owner has approved an equivalent manifest. Never approve, select, pay, reveal credentials, or call Docker directly."
+}
+
+func (s *Server) callV2Tool(ctx context.Context, name string, args map[string]any) (toolResult, error) {
+	shortName := strings.TrimPrefix(strings.TrimSpace(name), "exora.")
+	switch shortName {
+	case "claim_run":
+		if unknown := unknownArguments(args, "runId"); len(unknown) > 0 {
+			return errorResult("unsupported arguments: "+strings.Join(unknown, ", "), nil), nil
+		}
+		runID := firstString(args, "runId")
+		if runID == "" {
+			return errorResult("runId required", nil), nil
+		}
+		return s.proxy(ctx, http.MethodPost, "/v1/automation-runs/"+url.PathEscape(runID)+"/claim", nil, map[string]any{})
+	case "get_transaction_state":
+		if unknown := unknownArguments(args, "transactionId"); len(unknown) > 0 {
+			return errorResult("unsupported arguments: "+strings.Join(unknown, ", "), nil), nil
+		}
+		transactionID := firstString(args, "transactionId")
+		if transactionID == "" {
+			return errorResult("transactionId required", nil), nil
+		}
+		return s.proxy(ctx, http.MethodGet, "/v1/automation/transactions/"+url.PathEscape(transactionID), nil, nil)
+	case "get_allowed_actions":
+		if unknown := unknownArguments(args, "transactionId"); len(unknown) > 0 {
+			return errorResult("unsupported arguments: "+strings.Join(unknown, ", "), nil), nil
+		}
+		transactionID := firstString(args, "transactionId")
+		if transactionID == "" {
+			return errorResult("transactionId required", nil), nil
+		}
+		return s.proxy(ctx, http.MethodGet, "/v1/automation/transactions/"+url.PathEscape(transactionID)+"/allowed-actions", nil, nil)
+	case "search_agent_cards":
+		if unknown := unknownArguments(args, "query", "role"); len(unknown) > 0 {
+			return errorResult("unsupported arguments: "+strings.Join(unknown, ", "), nil), nil
+		}
+		query := url.Values{}
+		copyStringArg(query, args, "role")
+		if value := firstString(args, "query"); value != "" {
+			query.Set("query", value)
+		}
+		return s.proxy(ctx, http.MethodGet, "/v1/automation/agent-cards/search", query, nil)
+	case "report_progress", "request_user_input", "request_approval", "propose_transition", "submit_offer", "submit_deliverable", "report_blocked", "finish_run":
+		if unknown := unknownArguments(args, "runId", "expectedStateVersion", "idempotencyKey", "payload"); len(unknown) > 0 {
+			return errorResult("unsupported arguments: "+strings.Join(unknown, ", "), nil), nil
+		}
+		runID := firstString(args, "runId")
+		idempotencyKey := firstString(args, "idempotencyKey")
+		expected, ok := requiredInt64(args, "expectedStateVersion")
+		if runID == "" || idempotencyKey == "" || !ok {
+			return errorResult("runId, expectedStateVersion and idempotencyKey are required", nil), nil
+		}
+		payload := map[string]any{}
+		if explicit, supplied := args["payload"]; supplied {
+			mapped, ok := explicit.(map[string]any)
+			if !ok {
+				return errorResult("payload must be an object", nil), nil
+			}
+			payload = cloneArgs(mapped)
+		}
+		body := map[string]any{
+			"type": shortName, "expectedStateVersion": expected,
+			"idempotencyKey": idempotencyKey, "payload": payload,
+		}
+		return s.proxy(ctx, http.MethodPost, "/v1/automation-runs/"+url.PathEscape(runID)+"/actions", nil, body)
+	default:
+		return toolResult{}, fmt.Errorf("Unknown V2 automation tool: %s", name)
+	}
+}
+
+func unknownArguments(args map[string]any, allowed ...string) []string {
+	allow := make(map[string]struct{}, len(allowed))
+	for _, name := range allowed {
+		allow[name] = struct{}{}
+	}
+	unknown := make([]string, 0)
+	for name := range args {
+		if _, ok := allow[name]; !ok {
+			unknown = append(unknown, name)
+		}
+	}
+	sort.Strings(unknown)
+	return unknown
+}
+
+func requiredInt64(args map[string]any, key string) (int64, bool) {
+	value, ok := args[key]
+	if !ok {
+		return 0, false
+	}
+	switch typed := value.(type) {
+	case float64:
+		converted := int64(typed)
+		return converted, float64(converted) == typed && typed >= 0
+	case float32:
+		converted := int64(typed)
+		return converted, float32(converted) == typed && typed >= 0
+	case int:
+		return int64(typed), typed >= 0
+	case int64:
+		return typed, typed >= 0
+	case json.Number:
+		converted, err := typed.Int64()
+		return converted, err == nil && converted >= 0
+	default:
+		return 0, false
 	}
 }
 
@@ -1145,6 +1329,9 @@ func (s *Server) daemonJSON(ctx context.Context, method, path string, query url.
 	if strings.TrimSpace(s.opts.AgentToken) != "" {
 		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(s.opts.AgentToken))
 	}
+	if s.interactiveSession() {
+		req.Header.Set("X-Exora-Agent-Session", strings.TrimSpace(s.opts.AgentSessionID))
+	}
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, err
@@ -1434,6 +1621,77 @@ func uniqueStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+var v2ToolShortNames = []string{
+	"claim_run",
+	"get_transaction_state",
+	"get_allowed_actions",
+	"search_agent_cards",
+	"report_progress",
+	"request_user_input",
+	"request_approval",
+	"propose_transition",
+	"submit_offer",
+	"submit_deliverable",
+	"report_blocked",
+	"finish_run",
+}
+
+func V2ToolNames() []string {
+	out := make([]string, 0, len(v2ToolShortNames))
+	for _, name := range v2ToolShortNames {
+		out = append(out, "exora."+name)
+	}
+	return out
+}
+
+func v2ToolDefinitions() []toolDefinition {
+	definitions := []toolDefinition{
+		{
+			Name: "exora.claim_run", Title: "Claim Automation Run",
+			Description: "Bind this Codex turn to its pre-claimed AutomationRun and return the transaction, role, and expected state version.",
+			InputSchema: strictObjectSchema(map[string]any{"runId": stringProp("AutomationRun id from the wake prompt.")}, []string{"runId"}),
+		},
+		{
+			Name: "exora.get_transaction_state", Title: "Get Transaction State",
+			Description: "Read the Cloud V2 transaction projection authorized by this run capability.",
+			InputSchema: strictObjectSchema(map[string]any{"transactionId": stringProp("Transaction id returned by claim_run.")}, []string{"transactionId"}),
+		},
+		{
+			Name: "exora.get_allowed_actions", Title: "Get Allowed Actions",
+			Description: "Read the authoritative state version and currently allowed Cloud transitions.",
+			InputSchema: strictObjectSchema(map[string]any{"transactionId": stringProp("Transaction id returned by claim_run.")}, []string{"transactionId"}),
+		},
+		{
+			Name: "exora.search_agent_cards", Title: "Search Agent Cards",
+			Description: "Search Cloud V2 Agent Cards without exposing Dock credentials.",
+			InputSchema: strictObjectSchema(map[string]any{
+				"query": stringProp("Optional free-text query."),
+				"role":  stringProp("Optional buyer, seller, or verifier role."),
+			}, nil),
+		},
+	}
+	for _, action := range []string{"report_progress", "request_user_input", "request_approval", "propose_transition", "submit_offer", "submit_deliverable", "report_blocked", "finish_run"} {
+		definitions = append(definitions, toolDefinition{
+			Name:        "exora." + action,
+			Title:       strings.ReplaceAll(strings.Title(strings.ReplaceAll(action, "_", " ")), " ", " "),
+			Description: "Submit an idempotent, version-checked " + action + " event for the current AutomationRun. This never grants human approval or moves funds locally.",
+			InputSchema: strictObjectSchema(map[string]any{
+				"runId":                stringProp("AutomationRun id."),
+				"expectedStateVersion": integerProp("Exact transaction state version read from Cloud."),
+				"idempotencyKey":       stringProp("Stable unique key for this logical mutation; reuse it on retries."),
+				"payload":              objectProp("Action-specific structured payload."),
+			}, []string{"runId", "expectedStateVersion", "idempotencyKey"}),
+		})
+	}
+	return definitions
+}
+
+func strictObjectSchema(properties map[string]any, required []string) map[string]any {
+	schema := objectSchema(properties, required)
+	schema["additionalProperties"] = false
+	return schema
 }
 
 func toolDefinitions() []toolDefinition {
@@ -1797,6 +2055,61 @@ func toolDefinitions() []toolDefinition {
 	}
 }
 
+func (s *Server) toolDefinitions() []toolDefinition {
+	definitions := toolDefinitions()
+	if !s.interactiveSession() {
+		return definitions
+	}
+	return append(definitions,
+		toolDefinition{Name: "exora.session_report_progress", Title: "Report Chat Progress", Description: "Record a safe progress update in the bound Exora chat. This cannot change transaction state.", InputSchema: objectSchema(map[string]any{"message": stringProp("Visible progress message."), "summary": stringProp("Alias for message.")}, nil)},
+		toolDefinition{Name: "exora.session_request_user_input", Title: "Request Chat User Input", Description: "Ask the human a question through the bound Exora chat. This grants no approval.", InputSchema: objectSchema(map[string]any{"question": stringProp("Question for the human user.")}, []string{"question"})},
+	)
+}
+
+func (s *Server) lockInteractiveWorkContext(args map[string]any) (map[string]any, error) {
+	out := cloneArgs(args)
+	if expected := strings.TrimSpace(s.opts.WorkUID); expected != "" {
+		if supplied := firstString(out, "workUid", "workUID", "uid"); supplied != "" && supplied != expected {
+			return nil, fmt.Errorf("workUid is locked to this Exora chat")
+		}
+		out["workUid"] = expected
+	}
+	if expected := strings.TrimSpace(s.opts.ProjectPath); expected != "" {
+		if supplied := firstString(out, "projectPath"); supplied != "" && !samePath(supplied, expected) {
+			return nil, fmt.Errorf("projectPath is locked to this Exora chat")
+		}
+		out["projectPath"] = expected
+	}
+	return out, nil
+}
+
+func samePath(left, right string) bool {
+	a, errA := filepath.Abs(strings.TrimSpace(left))
+	b, errB := filepath.Abs(strings.TrimSpace(right))
+	if errA != nil || errB != nil {
+		return false
+	}
+	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+}
+
+func (s *Server) recordSessionToolEvent(ctx context.Context, name string, result toolResult, callErr error) {
+	if !strings.HasPrefix(strings.TrimSpace(name), "exora.") {
+		return
+	}
+	text := ""
+	if len(result.Content) > 0 {
+		text = result.Content[0].Text
+	}
+	if len(text) > 1000 {
+		text = text[:1000]
+	}
+	payload := map[string]any{"isError": result.IsError}
+	if callErr != nil {
+		payload["error"] = callErr.Error()
+	}
+	_, _ = s.proxy(ctx, http.MethodPost, "/v1/local-agent-sessions/"+url.PathEscape(s.opts.AgentSessionID)+"/mcp-events", nil, map[string]any{"tool": name, "text": text, "payload": payload})
+}
+
 func objectSchema(properties map[string]any, required []string) map[string]any {
 	schema := map[string]any{
 		"type":                 "object",
@@ -1815,6 +2128,10 @@ func stringProp(description string) map[string]any {
 
 func numberProp(description string) map[string]any {
 	return map[string]any{"type": "number", "description": description}
+}
+
+func integerProp(description string) map[string]any {
+	return map[string]any{"type": "integer", "minimum": 0, "description": description}
 }
 
 func boolProp(description string) map[string]any {

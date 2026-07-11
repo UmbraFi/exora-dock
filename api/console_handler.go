@@ -36,8 +36,8 @@ func (h *Handler) ConsoleSnapshot(w http.ResponseWriter, r *http.Request) {
 		"dock": map[string]any{
 			"dockId":       firstNonEmpty(h.dockID, h.selfPubkey),
 			"displayName":  "Exora Dock",
-			"mode":         "remote-control",
-			"capabilities": []string{"remote.console", "approvals.queue", "agent.cards", "settings.redacted"},
+			"mode":         "local-supervisor-v2",
+			"capabilities": []string{"automation.wake.v2", "agent.cards", "approvals.queue", "provider.docker"},
 		},
 		"side":               side,
 		"wallet":             walletStatus,
@@ -45,14 +45,14 @@ func (h *Handler) ConsoleSnapshot(w http.ResponseWriter, r *http.Request) {
 		"buyerAgent":         h.buyerAgentSettings(),
 		"sellerAgent":        h.safeSellerSettings(),
 		"sellerMarketStatus": h.safeSellerMarketStatus(),
-		"llmProfiles":        h.llmProfileStatus(),
+		"localAgents":        []any{h.codexAgent},
 		"resources":          h.safeResources(),
 		"marketRail":         h.safeMarketRail(),
 		"orderPlans":         h.safeOrderPlans(),
 		"approvals":          h.safeApprovals(),
 		"tasks":              h.safeTasks(side),
 		"payments":           h.safePayments(),
-		"agentRuns":          h.safeAgentRuns(),
+		"automationRuns":     h.safeAutomationRuns(),
 		"workRuns":           h.safeWorkRuns(),
 		"negotiations":       h.safeNegotiations(),
 	})
@@ -86,10 +86,10 @@ func (h *Handler) safeSellerMarketStatus() any {
 		}
 	}
 	return map[string]any{
-		"discoverable":          settings.Enabled && settings.HasAPIKey && count > 0,
+		"discoverable":          settings.Enabled && count > 0,
 		"resourceListingCount":  count,
 		"providerId":            settings.ProviderID,
-		"redactedSecretSummary": []string{"apiKey", "walletSecret", "localPaths"},
+		"redactedSecretSummary": []string{"walletSecret", "localPaths"},
 	}
 }
 
@@ -159,11 +159,11 @@ func (h *Handler) safePayments() any {
 	return h.payments.List(payment.ListFilter{})
 }
 
-func (h *Handler) safeAgentRuns() any {
-	if h.agentRuns == nil {
+func (h *Handler) safeAutomationRuns() any {
+	if h.automationRuns == nil {
 		return []any{}
 	}
-	return h.agentRuns.List()
+	return h.automationRuns.List("")
 }
 
 func (h *Handler) safeWorkRuns() any {

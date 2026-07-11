@@ -10,68 +10,51 @@ import (
 )
 
 type Config struct {
-	RPC                        string            `yaml:"rpc_url"`
-	ListenAddr                 string            `yaml:"listen_addr"`
-	KeyPath                    string            `yaml:"key_path"`
-	CacheMaxMB                 int               `yaml:"cache_max_mb"`
-	DataDir                    string            `yaml:"data_dir"`
-	FetchInterv                int               `yaml:"fetch_interval_sec"`
-	ProgramID                  string            `yaml:"program_id"`
-	EscrowProgramID            string            `yaml:"escrow_program_id"`
-	SolanaNetwork              string            `yaml:"solana_network"`
-	USDCMint                   string            `yaml:"usdc_mint"`
-	USDCDecimals               uint8             `yaml:"usdc_decimals"`
-	IPFSApiURL                 string            `yaml:"ipfs_api_url"`
-	LLMBaseURL                 string            `yaml:"llm_base_url"`
-	LLMAPIKey                  string            `yaml:"llm_api_key"`
-	LLMProviderPreset          string            `yaml:"llm_provider_preset"`
-	LLMModel                   string            `yaml:"llm_model"`
-	LLMWireAPI                 string            `yaml:"llm_wire_api"`
-	LLMCapabilities            LLMCapabilities   `yaml:"llm_capabilities"`
-	LLMExtraHeaders            map[string]string `yaml:"llm_extra_headers"`
-	LLMResearchModel           string            `yaml:"llm_research_model"`
-	LLMResearchReasoningEffort string            `yaml:"llm_research_reasoning_effort"`
-	LLMUtilityModel            string            `yaml:"llm_utility_model"`
-	LLMUtilityReasoningEffort  string            `yaml:"llm_utility_reasoning_effort"`
-	LLMDisableResponseStorage  bool              `yaml:"llm_disable_response_storage"`
-	BuyerLLM                   RoleLLMConfig     `yaml:"buyer_llm"`
-	SellerLLM                  RoleLLMConfig     `yaml:"seller_llm"`
-	Mode                       string            `yaml:"mode"`
-	CloudURL                   string            `yaml:"cloud_url"`
-	CloudTokenPath             string            `yaml:"cloud_token_path"`
-	CloudPollIntervalSec       int               `yaml:"cloud_poll_interval_sec"`
-	DockID                     string            `yaml:"dock_id"`
-	WalletPath                 string            `yaml:"wallet_path"`
-	AuthTokenPath              string            `yaml:"auth_token_path"`
-	PaymentPINPath             string            `yaml:"payment_pin_path"`
-	CORSAllowedOrigins         []string          `yaml:"cors_allowed_origins"`
-	Provider                   ProviderConfig    `yaml:"provider"`
-	SellerAgent                SellerAgentConfig `yaml:"seller_agent"`
+	RPC                  string            `yaml:"rpc_url"`
+	ListenAddr           string            `yaml:"listen_addr"`
+	KeyPath              string            `yaml:"key_path"`
+	CacheMaxMB           int               `yaml:"cache_max_mb"`
+	DataDir              string            `yaml:"data_dir"`
+	FetchInterv          int               `yaml:"fetch_interval_sec"`
+	ProgramID            string            `yaml:"program_id"`
+	EscrowProgramID      string            `yaml:"escrow_program_id"`
+	SolanaNetwork        string            `yaml:"solana_network"`
+	USDCMint             string            `yaml:"usdc_mint"`
+	USDCDecimals         uint8             `yaml:"usdc_decimals"`
+	IPFSApiURL           string            `yaml:"ipfs_api_url"`
+	Mode                 string            `yaml:"mode"`
+	LegacyMarketEnabled  bool              `yaml:"legacy_market_enabled"`
+	CloudURL             string            `yaml:"cloud_url"`
+	CloudTokenPath       string            `yaml:"cloud_token_path"`
+	CloudPollIntervalSec int               `yaml:"cloud_poll_interval_sec"`
+	DockID               string            `yaml:"dock_id"`
+	WalletPath           string            `yaml:"wallet_path"`
+	AuthTokenPath        string            `yaml:"auth_token_path"`
+	PaymentPINPath       string            `yaml:"payment_pin_path"`
+	RunCapabilityPath    string            `yaml:"run_capability_path"`
+	CORSAllowedOrigins   []string          `yaml:"cors_allowed_origins"`
+	Provider             ProviderConfig    `yaml:"provider"`
+	SellerAgent          SellerAgentConfig `yaml:"seller_agent"`
+	LocalAgents          LocalAgentsConfig `yaml:"local_agents"`
 }
 
-type LLMCapabilities struct {
-	SupportsResponses          bool `yaml:"supports_responses"`
-	SupportsChatCompletions    bool `yaml:"supports_chat_completions"`
-	SupportsSystemMessage      bool `yaml:"supports_system_message"`
-	SupportsJSONResponseFormat bool `yaml:"supports_json_response_format"`
-	SupportsStreaming          bool `yaml:"supports_streaming"`
-	SupportsTools              bool `yaml:"supports_tools"`
-	SupportsReasoningEffort    bool `yaml:"supports_reasoning_effort"`
+type LocalAgentsConfig struct {
+	Codex CodexAgentConfig `yaml:"codex"`
 }
 
-type RoleLLMConfig struct {
-	BaseURL                 string            `yaml:"base_url"`
-	APIKey                  string            `yaml:"api_key"`
-	ProviderPreset          string            `yaml:"provider_preset"`
-	Model                   string            `yaml:"model"`
-	WireAPI                 string            `yaml:"wire_api"`
-	Capabilities            LLMCapabilities   `yaml:"capabilities"`
-	ExtraHeaders            map[string]string `yaml:"extra_headers"`
-	ResearchModel           string            `yaml:"research_model"`
-	ResearchReasoningEffort string            `yaml:"research_reasoning_effort"`
-	UtilityModel            string            `yaml:"utility_model"`
-	UtilityReasoningEffort  string            `yaml:"utility_reasoning_effort"`
-	DisableResponseStorage  bool              `yaml:"disable_response_storage"`
+type CodexAgentConfig struct {
+	Enabled           bool     `yaml:"enabled"`
+	Command           string   `yaml:"command"`
+	Model             string   `yaml:"model"`
+	Roles             []string `yaml:"roles"`
+	Automation        bool     `yaml:"automation"`
+	AutomationMode    string   `yaml:"automation_mode"`
+	Workspace         string   `yaml:"workspace"`
+	WorkspaceRoots    []string `yaml:"workspace_roots"`
+	PermissionProfile string   `yaml:"permission_profile"`
+	MaxConcurrency    int      `yaml:"max_concurrency"`
+	RequestTimeoutSec int      `yaml:"request_timeout_sec"`
+	ProbeTimeoutSec   int      `yaml:"probe_timeout_sec"`
 }
 
 type ProviderConfig struct {
@@ -109,18 +92,12 @@ type SellerAgentConfig struct {
 
 func Load(path string) (*Config, error) {
 	cfg := &Config{
-		ListenAddr:                 ":8080",
-		CacheMaxMB:                 256,
-		DataDir:                    "./data",
-		FetchInterv:                10,
-		IPFSApiURL:                 "http://127.0.0.1:5001",
-		LLMBaseURL:                 "https://api.openai.com/v1",
-		LLMProviderPreset:          "openai_responses",
-		LLMWireAPI:                 "responses",
-		LLMResearchReasoningEffort: "high",
-		LLMUtilityReasoningEffort:  "low",
-		LLMDisableResponseStorage:  true,
-		Mode:                       "hybrid",
+		ListenAddr:  ":8080",
+		CacheMaxMB:  256,
+		DataDir:     "./data",
+		FetchInterv: 10,
+		IPFSApiURL:  "http://127.0.0.1:5001",
+		Mode:        "hybrid",
 		Provider: ProviderConfig{
 			MaxJobSeconds: 300,
 			MaxInputMB:    128,
@@ -136,6 +113,11 @@ func Load(path string) (*Config, error) {
 			DefaultQuoteCurrency: "USDC",
 			DefaultEstimatedSec:  60,
 		},
+		LocalAgents: LocalAgentsConfig{Codex: CodexAgentConfig{
+			Enabled: true, Command: "codex", Roles: []string{"buyer", "seller", "verifier"},
+			Workspace: "", PermissionProfile: "workspace-write", MaxConcurrency: 1,
+			RequestTimeoutSec: 30, ProbeTimeoutSec: 8,
+		}},
 	}
 
 	data, err := os.ReadFile(path)
@@ -169,38 +151,42 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("EXORA_IPFS_API_URL"); v != "" {
 		cfg.IPFSApiURL = v
 	}
-	if v := os.Getenv("EXORA_LLM_BASE_URL"); v != "" {
-		cfg.LLMBaseURL = v
+	if v := os.Getenv("EXORA_CODEX_COMMAND"); v != "" {
+		cfg.LocalAgents.Codex.Command = v
 	}
-	if v := os.Getenv("EXORA_LLM_API_KEY"); v != "" {
-		cfg.LLMAPIKey = v
+	if v := os.Getenv("EXORA_CODEX_ENABLED"); v != "" {
+		cfg.LocalAgents.Codex.Enabled = parseBool(v)
 	}
-	if v := os.Getenv("EXORA_LLM_PROVIDER_PRESET"); v != "" {
-		cfg.LLMProviderPreset = v
+	if v := os.Getenv("EXORA_CODEX_AUTOMATION"); v != "" {
+		cfg.LocalAgents.Codex.Automation = parseBool(v)
+		cfg.LocalAgents.Codex.AutomationMode = ""
 	}
-	if v := os.Getenv("EXORA_LLM_MODEL"); v != "" {
-		cfg.LLMModel = v
+	if v := os.Getenv("EXORA_CODEX_AUTOMATION_MODE"); v != "" {
+		cfg.LocalAgents.Codex.AutomationMode = v
 	}
-	if v := os.Getenv("EXORA_LLM_WIRE_API"); v != "" {
-		cfg.LLMWireAPI = v
+	if v := os.Getenv("EXORA_CODEX_ROLES"); v != "" {
+		cfg.LocalAgents.Codex.Roles = splitCSV(v)
 	}
-	if v := os.Getenv("EXORA_LLM_RESEARCH_MODEL"); v != "" {
-		cfg.LLMResearchModel = v
+	if v := os.Getenv("EXORA_CODEX_WORKSPACE"); v != "" {
+		cfg.LocalAgents.Codex.Workspace = v
+		cfg.LocalAgents.Codex.WorkspaceRoots = nil
 	}
-	if v := os.Getenv("EXORA_LLM_RESEARCH_REASONING_EFFORT"); v != "" {
-		cfg.LLMResearchReasoningEffort = v
+	if v := os.Getenv("EXORA_CODEX_WORKSPACE_ROOTS"); v != "" {
+		cfg.LocalAgents.Codex.WorkspaceRoots = splitCSV(v)
 	}
-	if v := os.Getenv("EXORA_LLM_UTILITY_MODEL"); v != "" {
-		cfg.LLMUtilityModel = v
+	if v := os.Getenv("EXORA_CODEX_PERMISSION_PROFILE"); v != "" {
+		cfg.LocalAgents.Codex.PermissionProfile = v
 	}
-	if v := os.Getenv("EXORA_LLM_UTILITY_REASONING_EFFORT"); v != "" {
-		cfg.LLMUtilityReasoningEffort = v
-	}
-	if v := os.Getenv("EXORA_LLM_DISABLE_RESPONSE_STORAGE"); v != "" {
-		cfg.LLMDisableResponseStorage = parseBool(v)
+	if v := os.Getenv("EXORA_CODEX_MAX_CONCURRENCY"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil {
+			cfg.LocalAgents.Codex.MaxConcurrency = parsed
+		}
 	}
 	if v := os.Getenv("EXORA_MODE"); v != "" {
 		cfg.Mode = v
+	}
+	if v := os.Getenv("EXORA_LEGACY_MARKET_ENABLED"); v != "" {
+		cfg.LegacyMarketEnabled = parseBool(v)
 	}
 	if v := os.Getenv("EXORA_CLOUD_URL"); v != "" {
 		cfg.CloudURL = v
@@ -331,39 +317,6 @@ func applyEnv(cfg *Config) {
 }
 
 func applyDerivedDefaults(cfg *Config) {
-	cfg.LLMBaseURL = strings.TrimRight(strings.TrimSpace(cfg.LLMBaseURL), "/")
-	if cfg.LLMBaseURL == "" {
-		cfg.LLMBaseURL = "https://api.openai.com/v1"
-	}
-	cfg.LLMProviderPreset = normalizeProviderPreset(cfg.LLMProviderPreset)
-	cfg.LLMWireAPI = normalizeWireAPI(cfg.LLMWireAPI)
-	cfg.LLMCapabilities = normalizeLLMCapabilities(cfg.LLMProviderPreset, cfg.LLMBaseURL, cfg.LLMWireAPI, cfg.LLMCapabilities)
-	legacyModel := strings.TrimSpace(cfg.LLMModel)
-	if strings.TrimSpace(cfg.LLMResearchModel) == "" {
-		if legacyModel != "" {
-			cfg.LLMResearchModel = legacyModel
-		} else {
-			cfg.LLMResearchModel = "gpt-5.5"
-		}
-	}
-	if strings.TrimSpace(cfg.LLMUtilityModel) == "" {
-		if legacyModel != "" {
-			cfg.LLMUtilityModel = legacyModel
-		} else {
-			cfg.LLMUtilityModel = "gpt-5.5"
-		}
-	}
-	if strings.TrimSpace(cfg.LLMModel) == "" {
-		cfg.LLMModel = cfg.LLMResearchModel
-	}
-	if strings.TrimSpace(cfg.LLMResearchReasoningEffort) == "" {
-		cfg.LLMResearchReasoningEffort = "high"
-	}
-	if strings.TrimSpace(cfg.LLMUtilityReasoningEffort) == "" {
-		cfg.LLMUtilityReasoningEffort = "low"
-	}
-	cfg.BuyerLLM = normalizeRoleLLMConfig(cfg.BuyerLLM, cfg)
-	cfg.SellerLLM = normalizeRoleLLMConfig(cfg.SellerLLM, cfg)
 	if strings.TrimSpace(cfg.Mode) == "" {
 		cfg.Mode = "hybrid"
 	}
@@ -381,6 +334,9 @@ func applyDerivedDefaults(cfg *Config) {
 	}
 	if strings.TrimSpace(cfg.PaymentPINPath) == "" {
 		cfg.PaymentPINPath = filepath.Join(cfg.DataDir, "payment-pin.json")
+	}
+	if strings.TrimSpace(cfg.RunCapabilityPath) == "" {
+		cfg.RunCapabilityPath = filepath.Join(cfg.DataDir, "run-capabilities.json")
 	}
 	if strings.TrimSpace(cfg.CloudTokenPath) == "" {
 		cfg.CloudTokenPath = filepath.Join(cfg.DataDir, "cloud-token.json")
@@ -423,141 +379,89 @@ func applyDerivedDefaults(cfg *Config) {
 	if cfg.SellerAgent.AutoCompleteTextTasks {
 		cfg.SellerAgent.AutoAcceptLowRisk = true
 	}
+	cfg.LocalAgents.Codex.Command = strings.TrimSpace(cfg.LocalAgents.Codex.Command)
+	if cfg.LocalAgents.Codex.Command == "" {
+		cfg.LocalAgents.Codex.Command = "codex"
+	}
+	cfg.LocalAgents.Codex.Roles = normalizeRoles(cfg.LocalAgents.Codex.Roles)
+	if len(cfg.LocalAgents.Codex.Roles) == 0 {
+		cfg.LocalAgents.Codex.Roles = []string{"buyer", "seller", "verifier"}
+	}
+	workspaceCandidates := make([]string, 0, len(cfg.LocalAgents.Codex.WorkspaceRoots)+1)
+	if legacy := strings.TrimSpace(cfg.LocalAgents.Codex.Workspace); legacy != "" {
+		workspaceCandidates = append(workspaceCandidates, legacy)
+	}
+	workspaceCandidates = append(workspaceCandidates, cfg.LocalAgents.Codex.WorkspaceRoots...)
+	if len(workspaceCandidates) == 0 {
+		workspaceCandidates = append(workspaceCandidates, filepath.Join(cfg.DataDir, "automation"))
+	}
+	cfg.LocalAgents.Codex.WorkspaceRoots = normalizeWorkspaceRoots(workspaceCandidates)
+	if len(cfg.LocalAgents.Codex.WorkspaceRoots) == 0 {
+		fallback, _ := filepath.Abs(filepath.Clean(filepath.Join(cfg.DataDir, "automation")))
+		cfg.LocalAgents.Codex.WorkspaceRoots = []string{fallback}
+	}
+	cfg.LocalAgents.Codex.Workspace = cfg.LocalAgents.Codex.WorkspaceRoots[0]
+	cfg.LocalAgents.Codex.AutomationMode = strings.ToLower(strings.TrimSpace(cfg.LocalAgents.Codex.AutomationMode))
+	switch cfg.LocalAgents.Codex.AutomationMode {
+	case "guarded", "autonomous":
+		cfg.LocalAgents.Codex.Automation = true
+	case "manual":
+		cfg.LocalAgents.Codex.Automation = false
+	default:
+		if cfg.LocalAgents.Codex.Automation {
+			cfg.LocalAgents.Codex.AutomationMode = "guarded"
+		} else {
+			cfg.LocalAgents.Codex.AutomationMode = "manual"
+		}
+	}
+	if strings.TrimSpace(cfg.LocalAgents.Codex.PermissionProfile) == "" {
+		cfg.LocalAgents.Codex.PermissionProfile = "workspace-write"
+	}
+	if cfg.LocalAgents.Codex.MaxConcurrency <= 0 {
+		cfg.LocalAgents.Codex.MaxConcurrency = 1
+	}
+	if cfg.LocalAgents.Codex.RequestTimeoutSec <= 0 {
+		cfg.LocalAgents.Codex.RequestTimeoutSec = 30
+	}
+	if cfg.LocalAgents.Codex.ProbeTimeoutSec <= 0 {
+		cfg.LocalAgents.Codex.ProbeTimeoutSec = 8
+	}
 }
 
-func normalizeRoleLLMConfig(role RoleLLMConfig, cfg *Config) RoleLLMConfig {
-	fallback := topLevelRoleLLMConfig(cfg)
-	if !roleLLMConfigured(role) {
-		return fallback
-	}
-	role.BaseURL = strings.TrimRight(strings.TrimSpace(role.BaseURL), "/")
-	if role.BaseURL == "" {
-		role.BaseURL = fallback.BaseURL
-	}
-	role.APIKey = strings.TrimSpace(role.APIKey)
-	role.ProviderPreset = normalizeProviderPreset(firstText(role.ProviderPreset, fallback.ProviderPreset))
-	role.WireAPI = normalizeWireAPI(firstText(role.WireAPI, fallback.WireAPI))
-	role.Capabilities = normalizeLLMCapabilities(role.ProviderPreset, role.BaseURL, role.WireAPI, role.Capabilities)
-	role.ResearchModel = strings.TrimSpace(role.ResearchModel)
-	role.UtilityModel = strings.TrimSpace(role.UtilityModel)
-	role.Model = strings.TrimSpace(role.Model)
-	legacyModel := role.Model
-	if role.ResearchModel == "" {
-		role.ResearchModel = firstText(legacyModel, fallback.ResearchModel)
-	}
-	if role.UtilityModel == "" {
-		role.UtilityModel = firstText(legacyModel, role.ResearchModel, fallback.UtilityModel)
-	}
-	if role.Model == "" {
-		role.Model = role.ResearchModel
-	}
-	role.ResearchReasoningEffort = firstText(role.ResearchReasoningEffort, fallback.ResearchReasoningEffort, "high")
-	role.UtilityReasoningEffort = firstText(role.UtilityReasoningEffort, fallback.UtilityReasoningEffort, "low")
-	return role
-}
-
-func topLevelRoleLLMConfig(cfg *Config) RoleLLMConfig {
-	return RoleLLMConfig{
-		BaseURL:                 cfg.LLMBaseURL,
-		APIKey:                  cfg.LLMAPIKey,
-		ProviderPreset:          cfg.LLMProviderPreset,
-		Model:                   cfg.LLMModel,
-		WireAPI:                 cfg.LLMWireAPI,
-		Capabilities:            cfg.LLMCapabilities,
-		ExtraHeaders:            cfg.LLMExtraHeaders,
-		ResearchModel:           cfg.LLMResearchModel,
-		ResearchReasoningEffort: cfg.LLMResearchReasoningEffort,
-		UtilityModel:            cfg.LLMUtilityModel,
-		UtilityReasoningEffort:  cfg.LLMUtilityReasoningEffort,
-		DisableResponseStorage:  cfg.LLMDisableResponseStorage,
-	}
-}
-
-func roleLLMConfigured(role RoleLLMConfig) bool {
-	return strings.TrimSpace(role.BaseURL) != "" ||
-		strings.TrimSpace(role.APIKey) != "" ||
-		strings.TrimSpace(role.ProviderPreset) != "" ||
-		strings.TrimSpace(role.Model) != "" ||
-		strings.TrimSpace(role.WireAPI) != "" ||
-		role.Capabilities != (LLMCapabilities{}) ||
-		len(role.ExtraHeaders) > 0 ||
-		strings.TrimSpace(role.ResearchModel) != "" ||
-		strings.TrimSpace(role.ResearchReasoningEffort) != "" ||
-		strings.TrimSpace(role.UtilityModel) != "" ||
-		strings.TrimSpace(role.UtilityReasoningEffort) != "" ||
-		role.DisableResponseStorage
-}
-
-func firstText(values ...string) string {
+func normalizeWorkspaceRoots(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]bool{}
 	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
 		}
-	}
-	return ""
-}
-
-func normalizeProviderPreset(value string) string {
-	normalized := strings.ToLower(strings.TrimSpace(value))
-	normalized = strings.ReplaceAll(normalized, "-", "_")
-	normalized = strings.ReplaceAll(normalized, " ", "_")
-	switch normalized {
-	case "openai_responses", "openai_chat", "openrouter", "litellm", "ollama", "lm_studio", "vllm", "localai", "llama_cpp", "textgen", "koboldcpp", "custom_openai_compatible":
-		return normalized
-	case "openai_chat_completions":
-		return "openai_chat"
-	case "lite_llm", "litellm_proxy":
-		return "litellm"
-	case "lmstudio":
-		return "lm_studio"
-	case "llama.cpp":
-		return "llama_cpp"
-	case "text_generation_webui", "text_generation_web_ui", "oobabooga":
-		return "textgen"
-	case "kobold":
-		return "koboldcpp"
-	case "":
-		return "openai_responses"
-	default:
-		return normalized
-	}
-}
-
-func normalizeLLMCapabilities(preset, baseURL, wire string, caps LLMCapabilities) LLMCapabilities {
-	if caps != (LLMCapabilities{}) {
-		return caps
-	}
-	preset = normalizeProviderPreset(preset)
-	baseURL = strings.ToLower(strings.TrimRight(strings.TrimSpace(baseURL), "/"))
-	switch preset {
-	case "openai_responses":
-		return LLMCapabilities{SupportsResponses: true, SupportsChatCompletions: true, SupportsSystemMessage: true, SupportsJSONResponseFormat: true, SupportsStreaming: true, SupportsTools: true, SupportsReasoningEffort: true}
-	case "openai_chat":
-		return LLMCapabilities{SupportsChatCompletions: true, SupportsSystemMessage: true, SupportsJSONResponseFormat: true, SupportsStreaming: true, SupportsTools: true}
-	case "openrouter", "litellm":
-		return LLMCapabilities{SupportsChatCompletions: true, SupportsSystemMessage: true, SupportsJSONResponseFormat: true, SupportsStreaming: true, SupportsTools: true}
-	case "ollama", "lm_studio", "vllm", "localai", "llama_cpp", "textgen", "koboldcpp", "custom_openai_compatible":
-		return LLMCapabilities{SupportsChatCompletions: true, SupportsSystemMessage: true, SupportsJSONResponseFormat: true, SupportsStreaming: true}
-	default:
-		if wire == "responses" || strings.HasPrefix(baseURL, "https://api.openai.com") {
-			return LLMCapabilities{SupportsResponses: true, SupportsChatCompletions: true, SupportsSystemMessage: true, SupportsJSONResponseFormat: true, SupportsStreaming: true, SupportsTools: true, SupportsReasoningEffort: true}
+		absolute, err := filepath.Abs(filepath.Clean(value))
+		if err != nil || strings.TrimSpace(absolute) == "" {
+			continue
 		}
-		return LLMCapabilities{SupportsChatCompletions: true, SupportsSystemMessage: true, SupportsJSONResponseFormat: true, SupportsStreaming: true}
+		key := absolute
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, absolute)
 	}
+	return out
 }
 
-func normalizeWireAPI(value string) string {
-	normalized := strings.ToLower(strings.TrimSpace(value))
-	normalized = strings.ReplaceAll(normalized, "-", "_")
-	if normalized == "chat" {
-		normalized = "chat_completions"
+func normalizeRoles(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if (value != "buyer" && value != "seller" && value != "verifier") || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
 	}
-	switch normalized {
-	case "responses", "chat_completions":
-		return normalized
-	default:
-		return "responses"
-	}
+	return out
 }
 
 func parseBool(value string) bool {

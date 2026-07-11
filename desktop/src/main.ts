@@ -23,7 +23,6 @@ import {
   FolderOpen,
   FolderPlus,
   Hand,
-  IdCard,
   Inbox,
   KeyRound,
   Languages,
@@ -122,6 +121,39 @@ type ChatThread = {
   status?: string
   participants?: Array<'buyer_agent' | 'seller_agent' | 'buyer_human' | 'seller_human'>
   providerPubkey?: string
+  agentSessionId?: string
+  agentDriverId?: string
+  agentEventCursor?: number
+}
+
+type LocalAgentSessionStatus = 'starting' | 'ready' | 'busy' | 'waiting_user' | 'failed' | 'stopped'
+
+type InteractiveAgentSession = {
+  id: string
+  conversationId: string
+  role: OrderSide
+  purpose?: 'seller_card'
+  driver: string
+  status: LocalAgentSessionStatus
+  vendorSessionId?: string
+  vendorTurnId?: string
+  workspace?: string
+  permissionMode: PermissionMode
+  workUid?: string
+  transactionId?: string
+  eventCursor: number
+  lastError?: string
+  binding?: { bindingId?: string; driver?: string; version?: string }
+}
+
+type AgentSessionEvent = {
+  seq: number
+  kind: string
+  messageId?: string
+  turnId?: string
+  text?: string
+  payload?: Record<string, unknown>
+  createdAt?: string
 }
 
 type SelectedKind = 'plan' | 'approval' | 'task' | 'payment'
@@ -129,7 +161,7 @@ type ActiveView = 'work' | 'market' | 'chat' | 'settings'
 type ChatMode = 'expanded' | 'compact'
 type OrderSide = 'buyer' | 'seller'
 type SellerWorkspaceMode = 'transactions' | 'monitor'
-type SettingsView = 'api' | 'buyer-agent' | 'buyer-card' | 'seller-card' | 'seller' | 'pwa' | 'wallet' | 'archives'
+type SettingsView = 'api' | 'local-agents' | 'buyer-agent' | 'seller-card' | 'seller' | 'pwa' | 'wallet' | 'archives'
 type AppTheme = 'light' | 'dark'
 type LLMTestStatus = 'passed' | 'failed'
 type ProfileSubmenu = 'language' | 'theme'
@@ -140,6 +172,54 @@ type PermissionMode = 'ask' | 'approve' | 'full' | 'custom'
 type BuyerAgentSettings = {
   enabled: boolean
   agentId: string
+}
+
+type LocalAgentAuthState = 'authenticated' | 'not_authenticated' | 'configured' | 'unknown'
+type LocalAgentProtocolState = 'supported' | 'preview' | 'limited' | 'unsupported'
+type LocalAgentStatus = 'ready' | 'available' | 'login_required' | 'not_installed' | 'probe_failed' | 'detected_only'
+
+type LocalAgentInstallation = {
+  driverId: string
+  name: string
+  vendor: string
+  installed: boolean
+  bindable: boolean
+  bound: boolean
+  status: LocalAgentStatus
+  authState: LocalAgentAuthState
+  executablePath?: string
+  version?: string
+  detail?: string
+  protocol: string
+  protocolState: LocalAgentProtocolState
+  protocolLabel: string
+  capabilities: string[]
+  note?: string
+}
+
+type LocalAgentBinding = {
+  bindingId: string
+  driverId: string
+  name: string
+  vendor: string
+  executablePath: string
+  version?: string
+  protocol: string
+  protocolState: LocalAgentProtocolState
+  protocolLabel: string
+  capabilities: string[]
+  boundAt: string
+  lastVerifiedAt: string
+  status: LocalAgentStatus
+  authState: LocalAgentAuthState
+  valid: boolean
+}
+
+type LocalAgentScanResult = {
+  agents: LocalAgentInstallation[]
+  binding?: LocalAgentBinding | null
+  scannedAt?: string | null
+  hasSnapshot: boolean
 }
 
 type CardDiagnosticsTask = {
@@ -410,11 +490,22 @@ type ProjectFolder = {
   daemonRestarted?: boolean
 }
 
-type WorkMCPContext = {
-  workUid: string
-  projectPath: string
-  projectName?: string
-  task?: string
+type SellerCardGeneration = {
+  sessionId?: string
+  eventCursor: number
+  responseText: string
+  status: 'collecting' | 'starting_agent' | 'analyzing' | 'waiting_user' | 'completed' | 'failed'
+  questions?: SellerCardSetupQuestion[]
+  round: number
+  error?: string
+}
+
+type SellerCardSetupQuestion = {
+  id: string
+  question: string
+  why?: string
+  placeholder?: string
+  required: boolean
 }
 
 type WorkMCPLease = {
@@ -485,6 +576,22 @@ type WorkRunEvent = {
   summary?: string
   data?: Record<string, unknown>
   createdAt?: string
+}
+
+type CloudTransactionProjection = {
+  transactionId: string
+  version: number
+  phase: string
+  condition: string
+  supervision?: {
+    status?: 'driving' | 'waiting_user' | 'waiting_counterparty' | 'retry_scheduled' | 'blocked' | 'completed'
+    responsibleRole?: 'buyer' | 'seller'
+    activeRunId?: string
+    nextWakeAt?: string
+    consecutiveNoProgress?: number
+    reason?: string
+    updatedAt?: string
+  }
 }
 
 type TransactionProgressStage = {
@@ -834,8 +941,8 @@ const profileIcons = {
 
 const settingsNavIcons: Record<SettingsView, string> = {
   api: icon(KeyRound),
+  'local-agents': icon(Network),
   'buyer-agent': icon(ShoppingCart),
-  'buyer-card': icon(IdCard),
   'seller-card': icon(BadgeCheck),
   seller: icon(ShoppingBag),
   pwa: icon(QrCode),
@@ -1110,26 +1217,6 @@ app.innerHTML = `
         <div class="transaction-overlay" data-transaction-overlay></div>
         <div class="chat-feed" data-chat-feed aria-live="polite"></div>
         <div class="buyer-entry-stack" data-buyer-entry-stack>
-          <section class="local-agent-card" data-local-agent-card>
-            <div class="local-agent-card-head">
-              <span class="local-agent-icon">${localAgentIcon}</span>
-              <div>
-                <strong>Local agent via MCP</strong>
-                <p>Copy a task prompt for an external local agent. It will operate through MCP while this app keeps seller choice, approvals, payment, and secrets under owner control.</p>
-              </div>
-            </div>
-            <div class="local-agent-copy-row">
-              <textarea data-local-agent-task rows="2" placeholder="Describe the task your local agent should order or negotiate..."></textarea>
-              <div class="composer-footer">
-                <button class="composer-action-button local-agent-copy-button" type="button" data-action="copy-local-agent-prompt" aria-label="Copy local agent MCP prompt" title="Copy">${toolbarIcons.copy}</button>
-              </div>
-            </div>
-            <div class="local-agent-demo-actions">
-              <button class="secondary gpu-demo-start-button" type="button" data-action="start-gpu-demo">GPU Job Demo</button>
-              <button class="secondary ghost gpu-demo-reset-button" type="button" data-action="reset-gpu-demo">Reset Demo</button>
-            </div>
-          </section>
-          <div class="work-or-divider" aria-hidden="true"><span>or</span></div>
           <div class="external-work-lock hidden" data-external-work-lock>
             <span data-external-work-lock-text>External local agent is working on this transaction.</span>
             <button class="secondary compact-action" type="button" data-action="take-over-work">${toolbarIcons.hand}<span>Take over</span></button>
@@ -1137,12 +1224,11 @@ app.innerHTML = `
           <form class="chat-composer" data-agent-chat-form>
             <textarea data-agent-query rows="1" placeholder="${agentComposerPlaceholder()}"></textarea>
             <div class="composer-footer">
-              <div class="permission-control">
-                <button class="permission-button" type="button" data-action="toggle-permission-menu" aria-haspopup="menu" aria-expanded="false" title="Permission mode"></button>
-                <div class="permission-menu hidden" data-permission-menu role="menu" aria-label="Permission mode"></div>
-              </div>
               <div class="composer-action-group">
-                <button class="composer-action-button composer-mcp-copy-button" type="button" data-action="copy-local-agent-prompt" data-copy-source="composer" aria-label="Copy MCP prompt" title="Copy MCP prompt">${localAgentIcon}</button>
+                <div class="chat-agent-control">
+                  <button class="composer-action-button composer-mcp-copy-button chat-agent-button" type="button" data-action="toggle-chat-agent" aria-label="Connect local Agent" title="Connect local Agent" aria-haspopup="menu" aria-expanded="false">${localAgentIcon}<span class="chat-agent-status-dot" data-chat-agent-status-dot aria-hidden="true"></span></button>
+                  <div class="permission-menu chat-agent-menu hidden" data-chat-agent-menu role="menu" aria-label="Local Agent session"></div>
+                </div>
                 <button class="composer-action-button" type="submit" aria-label="Send message" title="Send" data-agent-send>${toolbarIcons.send}</button>
               </div>
             </div>
@@ -1213,6 +1299,10 @@ app.innerHTML = `
             </div>
           </section>
 
+          <section class="settings-page hidden" data-settings-page="local-agents">
+            <div class="settings-section agent-card-settings-shell" data-local-agents-content aria-live="polite"></div>
+          </section>
+
           <section class="settings-page hidden" data-settings-page="pwa">
             <div class="settings-section">
               <div class="section-title">
@@ -1249,7 +1339,7 @@ app.innerHTML = `
               <form class="agent-card-form card-setup-list" data-buyer-agent-form>
                 <label class="card-setup-row card-field-row inline-check-row">
                   <span class="field-label">Enabled</span>
-                  <small class="field-help">Controls the built-in buyer agent composer.</small>
+                  <small class="field-help">Controls the bound local Agent used by this chat.</small>
                   <span class="inline-check-control"><input data-buyer-field="enabled" type="checkbox" /> Enable buyer agent</span>
                 </label>
                 <label class="card-setup-row card-field-row">
@@ -1261,10 +1351,6 @@ app.innerHTML = `
                 <button type="submit">Save Buyer Agent</button>
               </form>
             </div>
-          </section>
-
-          <section class="settings-page hidden" data-settings-page="buyer-card">
-            <div class="settings-section agent-card-settings-shell" data-settings-card-content="buyer"></div>
           </section>
 
           <section class="settings-page hidden" data-settings-page="seller-card">
@@ -1626,14 +1712,13 @@ const fields = {
   newChatButton: app.querySelector<HTMLButtonElement>('[data-action="new-chat"]')!,
   sellerMonitorDock: app.querySelector<HTMLElement>('[data-seller-monitor-dock]')!,
   settingsReturnButton: app.querySelector<HTMLButtonElement>('[data-action="return-from-settings"]')!,
-  localAgentCard: app.querySelector<HTMLElement>('[data-local-agent-card]')!,
-  localAgentTask: app.querySelector<HTMLTextAreaElement>('[data-local-agent-task]')!,
-  localAgentCopyButton: app.querySelector<HTMLButtonElement>('[data-action="copy-local-agent-prompt"]')!,
   externalWorkLock: app.querySelector<HTMLElement>('[data-external-work-lock]')!,
   externalWorkLockText: app.querySelector<HTMLElement>('[data-external-work-lock-text]')!,
   externalWorkTakeoverButton: app.querySelector<HTMLButtonElement>('[data-action="take-over-work"]')!,
-  permissionButton: app.querySelector<HTMLButtonElement>('[data-action="toggle-permission-menu"]')!,
-  permissionMenu: app.querySelector<HTMLElement>('[data-permission-menu]')!,
+  permissionButton: app.querySelector<HTMLButtonElement>('[data-action="toggle-permission-menu"]'),
+  permissionMenu: app.querySelector<HTMLElement>('[data-permission-menu]'),
+  chatAgentButton: app.querySelector<HTMLButtonElement>('[data-action="toggle-chat-agent"]')!,
+  chatAgentMenu: app.querySelector<HTMLElement>('[data-chat-agent-menu]')!,
   transactionOverlay: app.querySelector<HTMLElement>('[data-transaction-overlay]')!,
   transactionDetailSidebar: app.querySelector<HTMLElement>('[data-transaction-detail-sidebar]')!,
   transactionDetailPopoutControls: app.querySelector<HTMLElement>('[data-transaction-detail-popout-controls]')!,
@@ -1650,6 +1735,7 @@ const fields = {
   chatView: app.querySelector<HTMLElement>('[data-view-panel="chat"]')!,
   actionView: app.querySelector<HTMLElement>('[data-view-panel="action"]')!,
   settingsView: app.querySelector<HTMLElement>('[data-view-panel="settings"]')!,
+  localAgentsContent: app.querySelector<HTMLElement>('[data-local-agents-content]')!,
   marketProjectPicker: app.querySelector<HTMLElement>('[data-market-project-picker]')!,
   marketProjectDialog: app.querySelector<HTMLElement>('[data-market-project-dialog]')!,
   cartModal: app.querySelector<HTMLElement>('[data-cart-modal]')!,
@@ -1877,6 +1963,7 @@ const state: {
   marketCardSearchError?: string
   cardDrafts: Partial<Record<AgentCardRole, AgentCard>>
   cardDiagnosticsTasks: Partial<Record<AgentCardRole, CardDiagnosticsTask>>
+  sellerCardGeneration?: SellerCardGeneration
   cartOpen: boolean
   activeCardEditor?: AgentCardRole
   cardMessage?: string
@@ -1894,6 +1981,16 @@ const state: {
   llmDraftProfile?: LLMProfile
   llmKeyStorageAvailable: boolean
   activeSettingsView: SettingsView
+  localAgents: LocalAgentInstallation[]
+  localAgentBinding?: LocalAgentBinding
+  localAgentScanning: boolean
+  localAgentSnapshotLoaded: boolean
+  localAgentSnapshotLoading: boolean
+  localAgentScannedAt?: string
+  localAgentError?: string
+  localAgentSessions: Record<string, InteractiveAgentSession>
+  chatAgentMenuOpen: boolean
+  chatAgentConnecting: boolean
   walletStatus?: WalletStatus
   pwaLink?: PwaLinkStatus
   pwaLinkMessage?: string
@@ -1905,6 +2002,7 @@ const state: {
   workMcpLeases: WorkMCPLease[]
   workRuns: WorkRun[]
   workRunEvents: Record<string, WorkRunEvent[]>
+  cloudTransactions: CloudTransactionProjection[]
   workspaceOnline: boolean
   workspaceErrors: string[]
   expandedProjectFolderPaths: Set<string>
@@ -1969,9 +2067,20 @@ const state: {
   marketCardSearchLoading: false,
   cardDrafts: {},
   cardDiagnosticsTasks: {},
+  sellerCardGeneration: undefined,
   cartOpen: false,
   llmTestStatus: undefined,
   activeSettingsView: 'api',
+  localAgents: [],
+  localAgentSessions: {},
+  chatAgentMenuOpen: false,
+  chatAgentConnecting: false,
+  localAgentBinding: undefined,
+  localAgentScanning: false,
+  localAgentSnapshotLoaded: false,
+  localAgentSnapshotLoading: false,
+  localAgentScannedAt: undefined,
+  localAgentError: undefined,
   pwaLink: demoPwaLinkStatus(),
   pwaLinkMessage: MVP_DEMO_PWA_MESSAGE,
   projectFolders: [],
@@ -1979,6 +2088,7 @@ const state: {
   workMcpLeases: [],
   workRuns: [],
   workRunEvents: {},
+  cloudTransactions: [],
   workspaceOnline: true,
   workspaceErrors: [],
   expandedProjectFolderPaths: new Set(),
@@ -2016,6 +2126,9 @@ const state: {
 let pwaLinkPollTimer: number | undefined
 let transactionProgressPollTimer: number | undefined
 let transactionProgressPollKey = ''
+let localAgentEventUnsubscribe: (() => void) | undefined
+const localAgentAssistantMessages = new Map<string, string>()
+const localAgentAssistantBuffers = new Map<string, string>()
 let cardDiagnosticsTaskSequence = 0
 let buyerFirstStepTransitionTimer: number | undefined
 let sellerListingToggleInFlight = false
@@ -2066,7 +2179,8 @@ function isOrderSide(value: unknown): value is OrderSide {
 function normalizeSettingsView(value: unknown): SettingsView | undefined {
   if (value === 'security') return 'wallet'
   if (value === 'diagnostics' || value === 'runtime') return 'api'
-  if (value === 'api' || value === 'buyer-agent' || value === 'buyer-card' || value === 'seller-card' || value === 'seller' || value === 'pwa' || value === 'wallet' || value === 'archives') {
+  if (value === 'buyer-card') return 'seller-card'
+  if (value === 'api' || value === 'local-agents' || value === 'buyer-agent' || value === 'seller-card' || value === 'seller' || value === 'pwa' || value === 'wallet' || value === 'archives') {
     return value
   }
   return undefined
@@ -2226,7 +2340,7 @@ function restorePersistedConversations(records: DesktopConversationRecord[]) {
   const folders: ProjectFolder[] = []
   for (const record of records) {
     const thread = normalizeChatThreadForState(record.thread)
-    if (!thread || thread.messages.length === 0) continue
+    if (!thread || (thread.messages.length === 0 && !thread.agentSessionId)) continue
     const existing = byId.get(thread.id)
     if (!existing || thread.updatedAt > existing.updatedAt || thread.messages.length > existing.messages.length) {
       byId.set(thread.id, thread)
@@ -2271,6 +2385,9 @@ function normalizeChatThreadForState(value: unknown): ChatThread | undefined {
     status: String(input.status || '').trim() || undefined,
     participants: Array.isArray(input.participants) ? input.participants.filter((item): item is NonNullable<ChatThread['participants']>[number] => item === 'buyer_agent' || item === 'seller_agent' || item === 'buyer_human' || item === 'seller_human') : ['buyer_human', 'buyer_agent', 'seller_agent'],
     providerPubkey: String(input.providerPubkey || '').trim() || undefined,
+    agentSessionId: String(input.agentSessionId || '').trim() || undefined,
+    agentDriverId: String(input.agentDriverId || '').trim() || undefined,
+    agentEventCursor: Math.max(0, Number(input.agentEventCursor || 0) || 0),
   }
 }
 
@@ -2552,7 +2669,7 @@ function gpuDemoOrderState(demo: GpuDemoState): NonNullable<OrderPlan['orderStat
 function gpuDemoPlanEvents(demo: GpuDemoState): NonNullable<OrderPlan['events']> {
   const seller = selectedGpuDemoSeller(demo)
   const events: NonNullable<OrderPlan['events']> = [
-    { time: demo.startedAt, type: 'mcp_prompt_copied', message: 'MCP prompt copied for the local GPU job demo.' },
+    { time: demo.startedAt, type: 'agent_session_ready', message: 'Local Agent session prepared for the GPU job demo.' },
     { time: demo.updatedAt, type: 'buyer_manifest_ready', message: `GPU job manifest requires ${demo.answers.gpuProfile}, budget ${demo.answers.budget} USDC, outputs ${demo.answers.outputs}.` },
   ]
   if (gpuDemoAtLeast('seller_options')) events.push({ time: demo.updatedAt, type: 'seller_quotes_ready', message: 'Three local demo sellers returned fixed quotes.' })
@@ -3604,7 +3721,7 @@ function conversationStorageKey(thread: ChatThread) {
 }
 
 function scheduleSaveChatThread(thread?: ChatThread, delay = CHAT_SAVE_DELAY) {
-  if (!thread?.messages.length || !hasDesktopBridge()) return
+  if ((!thread?.messages.length && !thread?.agentSessionId) || !hasDesktopBridge()) return
   if (isDemoChatThread(thread)) return
   const existing = chatSaveTimers.get(thread.id)
   if (existing !== undefined) window.clearTimeout(existing)
@@ -3616,7 +3733,7 @@ function scheduleSaveChatThread(thread?: ChatThread, delay = CHAT_SAVE_DELAY) {
 }
 
 function flushSaveChatThread(thread?: ChatThread) {
-  if (!thread?.messages.length || !hasDesktopBridge()) return undefined
+  if ((!thread?.messages.length && !thread?.agentSessionId) || !hasDesktopBridge()) return undefined
   if (isDemoChatThread(thread)) return undefined
   const existing = chatSaveTimers.get(thread.id)
   if (existing !== undefined) {
@@ -3796,10 +3913,9 @@ function renderProfileSummary() {
 }
 
 function profileDisplayName() {
-  const buyerName = state.agentCards.buyer?.manualFields.buyer?.displayName?.trim()
   const sellerName = state.agentCards.seller?.manualFields.seller?.displayName?.trim()
   const providerId = state.sellerMarketStatus?.providerId?.trim() || state.sellerSettings?.providerId?.trim()
-  return buyerName || sellerName || providerId || t('app.userFallback')
+  return sellerName || providerId || t('app.userFallback')
 }
 
 function profileInitial(name: string) {
@@ -3820,6 +3936,7 @@ function activePermissionOption() {
 }
 
 function renderPermissionControl() {
+  if (!fields.permissionButton || !fields.permissionMenu) return
   const active = activePermissionOption()
   fields.permissionButton.innerHTML = `
     <span class="permission-button-icon permission-icon-${active.mode}">${permissionIcons[active.mode]}</span>
@@ -4851,6 +4968,9 @@ async function saveAgentCardFromForm(form: HTMLFormElement, role: AgentCardRole)
 }
 
 async function publishAgentCard(role: AgentCardRole, root: ParentNode = fields.decisionContent) {
+  if (role === 'seller' && cardForRole('seller')?.manualFields.seller?.setupStatus !== 'complete') {
+    throw new Error('Complete the Seller Setup questions and permission boundary before publishing.')
+  }
   const form = findAgentCardForm(role, root)
   if (form) {
     const saved = await saveAgentCardFromForm(form, role)
@@ -5008,22 +5128,341 @@ function buyerFieldsFromForm(data: FormData, current: BuyerManualFields): BuyerM
 }
 
 function sellerFieldsFromForm(data: FormData, current: SellerManualFields): SellerManualFields {
-  const settings = state.sellerSettings
   return {
     ...current,
-    displayName: formText(data, 'displayName'),
-    capabilitySummary: formText(data, 'capabilitySummary'),
-    capabilityTypes: parseListInput(data.get('capabilityTypes')),
-    pricing: formText(data, 'pricing') || sellerPricingSummary(settings),
-    availability: formText(data, 'availability') || sellerAvailabilitySummary(settings),
-    humanConfirmation: formText(data, 'humanConfirmation'),
-    dataBoundary: formText(data, 'dataBoundary'),
-    managedApis: parseListInput(data.get('managedApis')),
-    outputFormats: parseListInput(data.get('outputFormats')),
-    autoQuote: formCheckbox(data, 'autoQuote', Boolean(settings?.autoQuote)),
-    autoAcceptLowRisk: formCheckbox(data, 'autoAcceptLowRisk', Boolean(settings?.autoAcceptLowRisk || settings?.autoCompleteTextTasks)),
-    externalWritePolicy: formText(data, 'externalWritePolicy'),
+    sellIntent: formText(data, 'sellIntent'),
+    pricingPrinciples: formText(data, 'pricingPrinciples'),
   }
+}
+
+async function generateSellerCardWithAgent(root: ParentNode = fields.decisionContent) {
+  const form = findAgentCardForm('seller', root)
+  if (!form) throw new Error('Seller Card form is unavailable.')
+  const manual = sellerFieldsFromForm(new FormData(form), cardForRole('seller')?.manualFields.seller || {})
+  if (!manual.sellIntent) throw new Error('Describe what you want to sell before generating the Seller Card.')
+  if (!manual.pricingPrinciples) throw new Error('Enter your pricing principles before generating the Seller Card.')
+  if (containsLikelySecret(`${manual.sellIntent}\n${manual.pricingPrinciples}`)) {
+    throw new Error('Do not paste real credentials into Seller Card fields. Use a credential alias and describe only its permission boundary.')
+  }
+  const bindingResult = await invoke<{ binding?: LocalAgentBinding | null }>('local_agent_binding')
+  const binding = bindingResult.binding || undefined
+  state.localAgentBinding = binding
+  if (!binding?.valid || binding.status !== 'ready') throw new Error('Bind and verify a supported local Agent before generating the Seller Card.')
+
+  state.sellerCardGeneration = { eventCursor: 0, responseText: '', status: 'collecting', round: 1 }
+  state.activeCardEditor = 'seller'
+  state.cardMessage = 'Inspecting the local environment with Exora tools...'
+
+  const draft = await generateAgentCardDraft('seller', form, { render: false, track: false })
+  if (!draft) throw new Error('Exora could not collect a Seller Card environment snapshot.')
+  const incompleteSeller: SellerManualFields = {
+    ...(draft.manualFields.seller || {}),
+    ...manual,
+    setupStatus: 'incomplete',
+    structuredByAgent: undefined,
+    structuredAt: undefined,
+    allowedAgentActions: [],
+    approvalRequiredActions: [],
+    credentialPolicy: '',
+    networkPolicy: '',
+  }
+  const incompleteDraft: AgentCard = {
+    ...draft,
+    manualFields: { ...draft.manualFields, seller: incompleteSeller },
+  }
+  const saved = await invoke<{ card?: AgentCard }>('save_agent_card', { input: { role: 'seller', card: incompleteDraft } })
+  const setupCard = saved.card || incompleteDraft
+  state.agentCards = { ...state.agentCards, seller: setupCard }
+  state.cardDrafts.seller = undefined
+  state.sellerCardGeneration.status = 'starting_agent'
+  state.cardMessage = `Starting ${localAgentDisplayName(binding.driverId)}...`
+  renderAgentCardSurfaces()
+
+  const conversationId = `seller-card-${crypto.randomUUID()}`
+  const response = await invoke<{ session: InteractiveAgentSession }>('local_agent_session_start', {
+    input: {
+      conversationId,
+      role: 'seller',
+      purpose: 'seller_card',
+      workspace: activeProjectFolder().path,
+      permissionMode: 'ask',
+      transactionId: '',
+      workUid: conversationId,
+      runId: '',
+      idempotencyKey: `seller-card:${conversationId}`,
+    },
+  })
+  const session = response.session
+  state.localAgentSessions[session.id] = session
+  state.sellerCardGeneration.sessionId = session.id
+  await invoke('local_agent_session_subscribe', { input: { sessionId: session.id, after: 0 } })
+  const clientMessageId = `seller-card-message-${crypto.randomUUID()}`
+  state.sellerCardGeneration.status = 'analyzing'
+  state.cardMessage = `${localAgentDisplayName(binding.driverId)} is structuring offerings and pricing...`
+  renderAgentCardSurfaces()
+  await invoke('local_agent_session_send', {
+    input: {
+      sessionId: session.id,
+      clientMessageId,
+      text: sellerCardAgentPrompt(setupCard),
+      idempotencyKey: `send:${clientMessageId}`,
+    },
+  })
+}
+
+function sellerCardAgentPrompt(card: AgentCard) {
+  const seller = card.manualFields.seller || {}
+  const diagnostics = card.diagnostics
+  const input = {
+    sellerIntent: seller.sellIntent,
+    pricingPrinciples: seller.pricingPrinciples,
+    environment: {
+      os: diagnostics.os,
+      osVersion: diagnostics.osVersion,
+      arch: diagnostics.arch,
+      cpuCores: diagnostics.cpuCores,
+      cpuModel: diagnostics.cpuModel,
+      ramGb: diagnostics.ramGb,
+      gpus: diagnostics.gpus?.map(({ name, chip, driverVersion, vramGb }) => ({ name, chip, driverVersion, vramGb })),
+      storage: diagnostics.storage?.map(({ label, totalGb, freeGb }) => ({ label, totalGb, freeGb })),
+      docker: diagnostics.dockerAvailable ? diagnostics.dockerVersion || 'available' : 'not available',
+      python: diagnostics.pythonVersion,
+      node: diagnostics.nodeVersion,
+      codeEnvironment: diagnostics.codeEnvironment?.map(({ name, version, source }) => ({ name, version, source })),
+      dependencies: diagnostics.dependencies?.map(({ name, version, source }) => ({ name, version, source })),
+    },
+  }
+  return [
+    'You are conducting a Seller Setup conversation. Create a truthful public Seller Card and settle the local Agent permission boundary before declaring setup complete.',
+    'Do not invent installed software, credentials, APIs, performance, availability, or certifications that are not supported by the input.',
+    'The seller intent and pricing principles are authoritative. Turn them into concise buyer-facing offerings and a deterministic quote workflow.',
+    'Ask compact batches of required questions when any important commercial, execution, or permission boundary is unclear. Multiple rounds are allowed.',
+    'If APIs or credentials may be involved, settle credential aliases (names only), permitted read/query/write/publish actions, permitted domains or endpoint classes, rate or spend limits, approval cases, and retention/logging boundaries.',
+    'Never ask for or accept API keys, access tokens, passwords, private keys, recovery codes, cookie values, or other secret material. Refer to credentials only by a human-readable alias.',
+    'Return exactly one JSON object using one of these two envelopes:',
+    '{"status":"needs_input","questions":[{"id":"stable_id","question":"string","why":"string","placeholder":"string","required":true}]}',
+    '{"status":"complete","card":{"displayName":"string","capabilitySummary":"string","capabilityTypes":["string"],"pricing":"string","availability":"string","offerings":["string"],"pricingProcess":["string"],"humanConfirmation":"string","dataBoundary":"string","managedApis":["string"],"outputFormats":["string"],"externalWritePolicy":"string","allowedAgentActions":["string"],"approvalRequiredActions":["string"],"credentialPolicy":"string","networkPolicy":"string"}}',
+    'Do not return complete until the permission boundary is unambiguous. A complete card requires at least one allowed Agent action and at least one action that always requires human approval.',
+    'Use 1-8 offerings and 3-8 pricing steps. Keep every string concise. managedApis must contain product or credential alias names only and must be empty unless explicitly supported.',
+    'Human confirmation must always remain required for secret creation or replacement, payments, public disclosure, privilege expansion, and writes outside the accepted task boundary.',
+    '',
+    JSON.stringify(input),
+  ].join('\n')
+}
+
+function handleSellerCardAgentEvent(envelope: { sessionId?: unknown; event?: unknown; error?: unknown }) {
+  const generation = state.sellerCardGeneration
+  const sessionId = String(envelope.sessionId || '').trim()
+  if (!generation?.sessionId || generation.sessionId !== sessionId) return false
+  if (envelope.error) {
+    failSellerCardGeneration(String(envelope.error))
+    return true
+  }
+  if (!envelope.event || typeof envelope.event !== 'object' || Array.isArray(envelope.event)) return true
+  const event = envelope.event as AgentSessionEvent
+  const seq = Number(event.seq)
+  if (!Number.isFinite(seq) || seq <= generation.eventCursor) return true
+  generation.eventCursor = seq
+  if (event.kind === 'agent.message.delta') generation.responseText += String(event.text || '')
+  if (event.kind === 'agent.message.completed' && event.text) generation.responseText = String(event.text)
+  if (event.kind === 'driver.failure' || event.kind === 'turn.failed') {
+    failSellerCardGeneration(event.text || 'The bound local Agent failed while generating the Seller Card.')
+  } else if (event.kind === 'turn.completed') {
+    try {
+      applySellerCardAgentResult(generation.responseText)
+    } catch (error) {
+      failSellerCardGeneration(humanizeError(error))
+    }
+  }
+  return true
+}
+
+function applySellerCardAgentResult(text: string) {
+  const parsed = parseSellerCardAgentResult(text)
+  if (parsed.status === 'needs_input') {
+    const generation = state.sellerCardGeneration
+    if (!generation) throw new Error('Seller Setup session disappeared before questions were received.')
+    generation.status = 'waiting_user'
+    generation.questions = parsed.questions
+    generation.responseText = ''
+    state.cardMessage = `Setup incomplete: answer ${parsed.questions.filter((question) => question.required).length} required permission question(s).`
+    renderAgentCardSurfaces()
+    return
+  }
+  const card = cardForRole('seller')
+  if (!card) throw new Error('Seller Card draft disappeared before Agent generation completed.')
+  const current = card.manualFields.seller || {}
+  const nextSeller: SellerManualFields = {
+    ...current,
+    displayName: parsed.card.displayName || current.displayName || state.sellerSettings?.providerId || 'Exora Seller',
+    capabilitySummary: parsed.card.capabilitySummary,
+    capabilityTypes: parsed.card.capabilityTypes,
+    pricing: parsed.card.pricing,
+    availability: parsed.card.availability,
+    offerings: parsed.card.offerings,
+    pricingProcess: parsed.card.pricingProcess,
+    structuredByAgent: state.localAgentBinding?.driverId || 'local-agent',
+    structuredAt: new Date().toISOString(),
+    setupStatus: 'complete',
+    allowedAgentActions: parsed.card.allowedAgentActions,
+    approvalRequiredActions: parsed.card.approvalRequiredActions,
+    credentialPolicy: parsed.card.credentialPolicy,
+    networkPolicy: parsed.card.networkPolicy,
+    humanConfirmation: parsed.card.humanConfirmation || 'Human confirmation is required for secret changes, payment, public disclosure, privilege expansion, and writes outside the accepted task.',
+    dataBoundary: parsed.card.dataBoundary || 'Buyer inputs remain scoped to the accepted task and are not reused without consent.',
+    managedApis: parsed.card.managedApis,
+    outputFormats: parsed.card.outputFormats,
+    externalWritePolicy: parsed.card.externalWritePolicy || 'Writes outside the accepted task boundary require explicit seller authorization.',
+  }
+  state.cardDrafts.seller = { ...card, manualFields: { ...card.manualFields, seller: nextSeller } }
+  if (state.sellerCardGeneration) state.sellerCardGeneration.status = 'completed'
+  state.cardMessage = 'Seller Card generated. Review the offerings and pricing workflow before publishing.'
+  finishSellerCardGenerationSession()
+  renderAgentCardSurfaces()
+}
+
+function parseSellerCardAgentResult(text: string) {
+  const trimmed = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')
+  const start = trimmed.indexOf('{')
+  const end = trimmed.lastIndexOf('}')
+  if (start < 0 || end <= start) throw new Error('The local Agent did not return a structured Seller Card. Retry generation.')
+  let value: Record<string, unknown>
+  try {
+    value = JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>
+  } catch {
+    throw new Error('The local Agent returned invalid Seller Card JSON. Retry generation.')
+  }
+  const status = String(value.status || '').trim()
+  if (status === 'needs_input') {
+    const questions = (Array.isArray(value.questions) ? value.questions as unknown[] : [])
+      .map((item, index): SellerCardSetupQuestion | undefined => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined
+        const question = item as Record<string, unknown>
+        const prompt = String(question.question || '').trim().slice(0, 600)
+        if (!prompt) return undefined
+        return {
+          id: String(question.id || `question_${index + 1}`).trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80),
+          question: prompt,
+          why: String(question.why || '').trim().slice(0, 500),
+          placeholder: String(question.placeholder || '').trim().slice(0, 300),
+          required: question.required !== false,
+        }
+      })
+      .filter((item): item is SellerCardSetupQuestion => Boolean(item))
+      .slice(0, 12)
+    if (!questions.length) throw new Error('The local Agent marked setup incomplete but returned no questions.')
+    return { status: 'needs_input' as const, questions }
+  }
+  if (status !== 'complete' || !value.card || typeof value.card !== 'object' || Array.isArray(value.card)) {
+    throw new Error('The local Agent did not return a valid Seller Setup envelope.')
+  }
+  const card = value.card as Record<string, unknown>
+  const stringValue = (key: string, required = false) => {
+    const result = String(card[key] || '').trim().slice(0, 1200)
+    if (required && !result) throw new Error(`The generated Seller Card is missing ${key}.`)
+    return result
+  }
+  const stringList = (key: string, required = false) => {
+    const result = (Array.isArray(card[key]) ? card[key] as unknown[] : [])
+      .map((item) => String(item || '').trim().slice(0, 320))
+      .filter(Boolean)
+      .slice(0, 12)
+    if (required && !result.length) throw new Error(`The generated Seller Card is missing ${key}.`)
+    return result
+  }
+  return {
+    status: 'complete' as const,
+    card: {
+      displayName: stringValue('displayName'),
+      capabilitySummary: stringValue('capabilitySummary', true),
+      capabilityTypes: stringList('capabilityTypes', true),
+      pricing: stringValue('pricing', true),
+      availability: stringValue('availability', true),
+      offerings: stringList('offerings', true),
+      pricingProcess: stringList('pricingProcess', true),
+      humanConfirmation: stringValue('humanConfirmation'),
+      dataBoundary: stringValue('dataBoundary'),
+      managedApis: stringList('managedApis'),
+      outputFormats: stringList('outputFormats'),
+      externalWritePolicy: stringValue('externalWritePolicy'),
+      allowedAgentActions: stringList('allowedAgentActions', true),
+      approvalRequiredActions: stringList('approvalRequiredActions', true),
+      credentialPolicy: stringValue('credentialPolicy', true),
+      networkPolicy: stringValue('networkPolicy', true),
+    },
+  }
+}
+
+function containsLikelySecret(value: string) {
+  return /(?:sk-[a-z0-9_-]{16,}|gh[pousr]_[a-z0-9]{20,}|AIza[a-z0-9_-]{20,}|-----BEGIN [^-]*PRIVATE KEY-----|eyJ[a-z0-9_-]+\.eyJ[a-z0-9_-]+\.[a-z0-9_-]+|(?:api[_ -]?key|access[_ -]?token|secret|password)\s*[:=]\s*\S{8,})/i.test(value)
+}
+
+async function continueSellerCardSetup(root: ParentNode = fields.decisionContent) {
+  const generation = state.sellerCardGeneration
+  if (!generation?.sessionId || generation.status !== 'waiting_user' || !generation.questions?.length) {
+    throw new Error('There is no Seller Setup question waiting for an answer.')
+  }
+  const form = findAgentCardForm('seller', root)
+  if (!form) throw new Error('Seller Card form is unavailable.')
+  const controls = Array.from(form.querySelectorAll<HTMLTextAreaElement>('[data-seller-card-question]'))
+  const values = new Map(controls.map((control) => [control.dataset.sellerCardQuestion || '', control.value.trim()]))
+  const pendingQuestions = generation.questions
+  const answers = pendingQuestions.map((question) => ({
+    id: question.id,
+    question: question.question,
+    answer: values.get(question.id) || '',
+  }))
+  const missing = pendingQuestions.filter((question) => question.required && !values.get(question.id))
+  if (missing.length) throw new Error(`Answer every required Seller Setup question (${missing.length} remaining).`)
+  const secretAnswer = answers.find((answer) => containsLikelySecret(answer.answer))
+  if (secretAnswer) {
+    throw new Error('Do not paste real credentials into Seller Setup. Use an alias such as “GitHub seller account” and describe its permission boundary.')
+  }
+  generation.status = 'analyzing'
+  generation.questions = undefined
+  generation.responseText = ''
+  generation.round += 1
+  state.cardMessage = `The local Agent is reviewing Seller Setup round ${generation.round}...`
+  renderAgentCardSurfaces()
+  const clientMessageId = `seller-card-answer-${crypto.randomUUID()}`
+  try {
+    await invoke('local_agent_session_send', {
+      input: {
+        sessionId: generation.sessionId,
+        clientMessageId,
+        text: [
+          `Seller Setup answers for round ${generation.round}:`,
+          JSON.stringify({ answers }),
+          'Continue the same Seller Setup. Never request secret values. Return exactly one needs_input or complete JSON envelope using the schema from the initial instruction.',
+        ].join('\n'),
+        idempotencyKey: `send:${clientMessageId}`,
+      },
+    })
+  } catch (error) {
+    generation.status = 'waiting_user'
+    generation.questions = pendingQuestions
+    generation.round = Math.max(1, generation.round - 1)
+    state.cardMessage = humanizeError(error)
+    renderAgentCardSurfaces()
+    throw error
+  }
+}
+
+function failSellerCardGeneration(message: string) {
+  if (state.sellerCardGeneration) {
+    state.sellerCardGeneration.status = 'failed'
+    state.sellerCardGeneration.error = message
+  }
+  state.cardMessage = message
+  finishSellerCardGenerationSession()
+  renderAgentCardSurfaces()
+}
+
+function finishSellerCardGenerationSession() {
+  const sessionId = state.sellerCardGeneration?.sessionId
+  if (!sessionId) return
+  invoke('local_agent_session_unsubscribe', { input: { sessionId } }).catch(() => undefined)
+  invoke('local_agent_session_stop', { input: { sessionId } }).catch(() => undefined)
 }
 
 function signaturePart(value: unknown) {
@@ -5243,6 +5682,10 @@ async function refreshWorkspaceNow(options: { quiet?: boolean } = {}) {
     state.workMcpLeases = snapshot.workMcpLeases || []
     state.workRuns = offline ? previousSnapshot.workRuns : snapshot.workRuns || []
     state.workRunEvents = snapshot.workRunEvents || previousSnapshot.workRunEvents || {}
+    if (snapshot.online !== false) {
+      const cloud = await invoke<{ transactions?: CloudTransactionProjection[] }>('cloud_transactions').catch(() => undefined)
+      if (cloud?.transactions) state.cloudTransactions = cloud.transactions
+    }
     applyDemoTransactionsToState()
     applyGpuDemoRecordsToState()
     const connectionFolders = projectFoldersFromConnections(state.mcpConnections)
@@ -5466,97 +5909,277 @@ function planIdFromAgentResponse(response: MarketSearchResult) {
   return String(response.selectionRequest?.planId || payload.planId || payload.plan_id || '').trim()
 }
 
+function agentSessionChatThread(sessionId?: string) {
+  const id = String(sessionId || '').trim()
+  return id ? state.chatThreads.find((thread) => thread.agentSessionId === id) : undefined
+}
+
+function currentAgentChatThread() {
+  if (state.newConversationDraft) return undefined
+  return activeChatThread() || selectedChatThread()
+}
+
+function currentInteractiveAgentSession() {
+  const sessionId = currentAgentChatThread()?.agentSessionId
+  return sessionId ? state.localAgentSessions[sessionId] : undefined
+}
+
+function currentAgentTransactionId() {
+  const thread = selectedWorkThread()
+  return String(thread?.orderId || orderIdFromWorkThreadId(thread?.id) || thread?.taskIds[0] || '').trim()
+}
+
+function agentSessionCanReceiveMessage(session?: InteractiveAgentSession) {
+  return Boolean(session && (session.status === 'ready' || session.status === 'busy' || session.status === 'waiting_user'))
+}
+
+function renderChatAgentControl() {
+  const session = currentInteractiveAgentSession()
+  const sellerTransactionMissing = state.workOrderSide === 'seller' && !currentAgentTransactionId()
+  const status = state.chatAgentConnecting ? 'starting' : session?.status || 'stopped'
+  const agentName = localAgentDisplayName(session?.driver || currentAgentChatThread()?.agentDriverId || state.localAgentBinding?.driverId)
+  fields.chatAgentButton.dataset.sessionStatus = status
+  fields.chatAgentButton.classList.remove('hidden')
+  fields.chatAgentButton.disabled = state.busy || sellerTransactionMissing
+  fields.chatAgentButton.setAttribute('aria-expanded', String(state.chatAgentMenuOpen && Boolean(session)))
+  fields.chatAgentButton.setAttribute('aria-label', session ? `${agentName} session: ${status}` : `Connect ${agentName || 'local Agent'}`)
+  fields.chatAgentButton.setAttribute('title', sellerTransactionMissing
+    ? 'Select a seller transaction before connecting a local Agent.'
+    : session
+      ? `${agentName} · ${status}`
+      : `Connect ${agentName || 'local Agent'}`)
+
+  fields.chatAgentMenu.classList.toggle('hidden', !state.chatAgentMenuOpen || !session)
+  if (state.chatAgentMenuOpen && session) {
+    const canResume = session.status === 'stopped' || session.status === 'failed'
+    const canStop = session.status !== 'stopped'
+    const switchedBinding = Boolean(state.localAgentBinding?.driverId && state.localAgentBinding.driverId !== session.driver)
+    fields.chatAgentMenu.innerHTML = `
+      <div class="chat-agent-menu-copy"><strong>${escapeHTML(agentName)}</strong><span>${escapeHTML(session.status.replace('_', ' '))}${session.lastError ? ` · ${escapeHTML(compactText(session.lastError, 80))}` : ''}</span></div>
+      ${canResume ? `<button class="permission-menu-item" type="button" data-chat-agent-action="resume" role="menuitem"><span class="permission-menu-text"><strong>Resume session</strong><small>Reuse ${escapeHTML(shortID(session.vendorSessionId || session.id))}</small></span></button>` : ''}
+      ${switchedBinding ? `<button class="permission-menu-item" type="button" data-chat-agent-action="switch" role="menuitem"><span class="permission-menu-text"><strong>Switch to ${escapeHTML(localAgentDisplayName(state.localAgentBinding?.driverId))}</strong><small>Start a fresh vendor session for this chat</small></span></button>` : ''}
+      ${canStop ? `<button class="permission-menu-item" type="button" data-chat-agent-action="stop" role="menuitem"><span class="permission-menu-text"><strong>Stop session</strong><small>Keep the vendor session ID for later resume</small></span></button>` : ''}
+    `
+  } else {
+    fields.chatAgentMenu.innerHTML = ''
+  }
+  const externallyLocked = Boolean(activeExternalWorkLease() || activeExternalWorkRun()) && !session
+  const sessionStarting = state.chatAgentConnecting || session?.status === 'starting'
+  agentSendButton.disabled = state.busy || externallyLocked || sellerTransactionMissing || sessionStarting
+}
+
+function localAgentDisplayName(driverId?: string) {
+  const id = String(driverId || '').trim()
+  const bindingName = state.localAgentBinding?.driverId === id ? state.localAgentBinding.name : ''
+  return state.localAgents.find((agent) => agent.driverId === id)?.name
+    || bindingName
+    || ({ codex: 'Codex', 'claude-code': 'Claude Code', gemini: 'Gemini CLI', 'github-copilot': 'GitHub Copilot CLI', opencode: 'OpenCode' } as Record<string, string>)[id]
+    || 'Local Agent'
+}
+
+async function connectCurrentChatAgent(options: { switchAgent?: boolean } = {}): Promise<InteractiveAgentSession | undefined> {
+  if (state.chatAgentConnecting) return
+  if (!window.exora?.invoke) throw new Error('Local Agent sessions require the Electron app.')
+  if (state.workOrderSide === 'seller' && !currentAgentTransactionId()) throw new Error('Select a seller transaction before connecting a local Agent.')
+  const thread = ensureChatThread()
+  thread.side = state.workOrderSide
+  state.chatAgentConnecting = true
+  state.chatAgentMenuOpen = false
+  renderChatAgentControl()
+  try {
+    const response = await invoke<{ session: InteractiveAgentSession }>('local_agent_session_start', {
+      input: {
+        conversationId: thread.id,
+        role: state.workOrderSide,
+        workspace: thread.projectPath || defaultWorkProjectPath(),
+        permissionMode: 'ask',
+        transactionId: currentAgentTransactionId(),
+        workUid: '',
+        runId: '',
+        idempotencyKey: `connect:${thread.id}:${state.workOrderSide}:${options.switchAgent ? crypto.randomUUID() : thread.agentSessionId || 'default'}`,
+      },
+    })
+    const session = response.session
+    state.localAgentSessions[session.id] = session
+    thread.agentSessionId = session.id
+    thread.agentDriverId = session.driver
+    thread.agentEventCursor = thread.agentEventCursor || 0
+    thread.updatedAt = Date.now()
+    flushSaveChatThread(thread)
+    await subscribeLocalAgentSession(thread, session)
+    showToast(`${localAgentDisplayName(session.driver)} connected in the background.`)
+    return session
+  } finally {
+    state.chatAgentConnecting = false
+    renderChatAgentControl()
+    renderChat()
+  }
+}
+
+async function resumeCurrentChatAgent(): Promise<InteractiveAgentSession | undefined> {
+  const session = currentInteractiveAgentSession()
+  if (!session) return
+  const response = await invoke<{ session: InteractiveAgentSession }>('local_agent_session_resume', { input: { sessionId: session.id } })
+  state.localAgentSessions[session.id] = response.session
+  state.chatAgentMenuOpen = false
+  const thread = agentSessionChatThread(session.id)
+  if (thread) await subscribeLocalAgentSession(thread, response.session)
+  renderChatAgentControl()
+  return response.session
+}
+
+async function stopCurrentChatAgent() {
+  const session = currentInteractiveAgentSession()
+  if (!session) return
+  const response = await invoke<{ session: InteractiveAgentSession }>('local_agent_session_stop', { input: { sessionId: session.id } })
+  state.localAgentSessions[session.id] = response.session
+  state.chatAgentMenuOpen = false
+  renderChatAgentControl()
+}
+
+async function switchCurrentChatAgent() {
+  const old = currentInteractiveAgentSession()
+  if (old && old.status !== 'stopped') await invoke('local_agent_session_stop', { input: { sessionId: old.id } })
+  const thread = currentAgentChatThread()
+  if (thread) {
+    thread.agentSessionId = undefined
+    thread.agentDriverId = undefined
+    thread.agentEventCursor = 0
+    flushSaveChatThread(thread)
+  }
+  await connectCurrentChatAgent({ switchAgent: true })
+}
+
+async function subscribeLocalAgentSession(thread: ChatThread, session: InteractiveAgentSession) {
+  await invoke('local_agent_session_subscribe', { input: { sessionId: session.id, after: thread.agentEventCursor || 0 } })
+}
+
+async function hydrateLocalAgentChatSessions() {
+  try {
+    const result = await invoke<{ binding?: LocalAgentBinding | null }>('local_agent_binding')
+    state.localAgentBinding = result.binding || undefined
+    state.localAgentSnapshotLoaded = true
+  } catch {
+    // Dock startup can race hydration; the connect action retries through main.
+  }
+  for (const thread of state.chatThreads) {
+    if (!thread.agentSessionId) continue
+    try {
+      const response = await invoke<{ session: InteractiveAgentSession }>('local_agent_session_get', { input: { sessionId: thread.agentSessionId } })
+      state.localAgentSessions[response.session.id] = response.session
+      await subscribeLocalAgentSession(thread, response.session)
+    } catch (error) {
+      console.warn(`Failed to restore local Agent session ${thread.agentSessionId}:`, error)
+    }
+  }
+  renderChatAgentControl()
+  if (state.activeView === 'settings' && state.activeSettingsView === 'seller-card') renderDecisionPanel()
+}
+
+function appendAgentSessionMessage(thread: ChatThread, input: Omit<ChatMessage, 'id'>) {
+  const message: ChatMessage = { id: nextID(), ...input }
+  thread.messages.push(message)
+  thread.updatedAt = Date.now()
+  if (thread.title === 'New chat' && message.role === 'user') thread.title = chatTitle(message)
+  scheduleSaveChatThread(thread)
+  if (thread.id === state.selectedChatId) {
+    forceChatFeedScrollBottom = true
+    renderChat()
+    renderLedger()
+  }
+  return message.id
+}
+
+function handleLocalAgentEventPayload(payload: unknown) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return
+  const envelope = payload as { sessionId?: unknown; event?: unknown; error?: unknown }
+  if (handleSellerCardAgentEvent(envelope)) return
+  const sessionId = String(envelope.sessionId || '').trim()
+  const thread = agentSessionChatThread(sessionId)
+  const session = state.localAgentSessions[sessionId]
+  if (!thread || !session) return
+  if (envelope.error) {
+    session.status = 'failed'
+    session.lastError = String(envelope.error)
+    renderChatAgentControl()
+    return
+  }
+  if (!envelope.event || typeof envelope.event !== 'object' || Array.isArray(envelope.event)) return
+  const event = envelope.event as AgentSessionEvent
+  if (!Number.isFinite(Number(event.seq)) || Number(event.seq) <= Number(thread.agentEventCursor || 0)) return
+  thread.agentEventCursor = Number(event.seq)
+  session.eventCursor = Math.max(session.eventCursor || 0, Number(event.seq))
+  const messageKey = `${sessionId}:${event.messageId || event.turnId || 'turn'}`
+  if (event.kind === 'turn.started') session.status = 'busy'
+  if (event.kind === 'session.ready' || event.kind === 'turn.completed' || event.kind === 'turn.interrupted') session.status = 'ready'
+  if (event.kind === 'session.stopped') session.status = 'stopped'
+  if (event.kind === 'driver.failure' || event.kind === 'turn.failed') {
+    session.status = 'failed'
+    session.lastError = event.text || 'Local Agent failed.'
+  }
+  if (event.kind === 'agent.message.delta' || event.kind === 'agent.message.completed') {
+    const existingId = localAgentAssistantMessages.get(messageKey)
+    const previous = localAgentAssistantBuffers.get(messageKey) || ''
+    const nextText = event.kind === 'agent.message.delta' ? previous + String(event.text || '') : String(event.text || '') || previous
+    localAgentAssistantBuffers.set(messageKey, nextText)
+    if (existingId) {
+      const message = thread.messages.find((item) => item.id === existingId)
+      if (message) {
+        message.text = nextText
+        message.pending = event.kind !== 'agent.message.completed'
+      }
+    } else if (nextText) {
+      const id = appendAgentSessionMessage(thread, {
+        role: 'assistant',
+        actor: session.role === 'seller' ? 'seller_agent' : 'buyer_agent',
+        text: nextText,
+        meta: localAgentDisplayName(session.driver),
+        pending: event.kind !== 'agent.message.completed',
+      })
+      localAgentAssistantMessages.set(messageKey, id)
+    }
+    if (event.kind === 'agent.message.completed') flushSaveChatThread(thread)
+  } else if (event.kind === 'mcp.event') {
+    appendAgentSessionMessage(thread, { kind: 'order_event', role: 'assistant', actor: session.role === 'seller' ? 'seller_agent' : 'buyer_agent', text: event.text || 'Exora MCP recorded a structured Agent event.', meta: 'Exora MCP' })
+  } else if ((event.kind === 'driver.failure' || event.kind === 'turn.failed') && event.text) {
+    appendAgentSessionMessage(thread, { role: 'system', text: event.text, meta: 'Local Agent' })
+  }
+  thread.updatedAt = Date.now()
+  scheduleSaveChatThread(thread)
+  renderChatAgentControl()
+}
+
 async function submitAgentMessage() {
   const query = agentQuery.value.trim()
   if (!query || state.busy) return
-  if (state.workOrderSide === 'seller') {
-    const sellerThread = selectedWorkThread()
-    if (state.newConversationDraft || !sellerThread) {
-      showToast('Select a seller transaction before adding seller notes.')
+  let session = currentInteractiveAgentSession()
+  if (!agentSessionCanReceiveMessage(session)) {
+    try {
+      session = session?.status === 'stopped' || session?.status === 'failed'
+        ? await resumeCurrentChatAgent()
+        : await connectCurrentChatAgent()
+    } catch (error) {
+      const message = humanizeError(error)
+      showToast(message)
+      if (/Bind a local Agent|Scan and bind/i.test(message)) openSettings('local-agents')
       return
     }
-    closePermissionMenu()
-    setActiveView('chat')
-    renderViewTabs()
-    agentQuery.value = ''
-    resizeAgentComposer()
-    pushMessage({ role: 'user', actor: 'seller_human', text: query })
-    return
+    if (!agentSessionCanReceiveMessage(session)) {
+      showToast(session?.lastError || 'The bound local Agent could not start a chat session.')
+      return
+    }
   }
-  const activeLease = activeExternalWorkLease()
-  if (activeLease) {
-    renderExternalWorkLockControls()
-    showToast(t('toast.externalWorkLocked'))
-    return
-  }
-  if (!state.buyerAgentSettings.enabled) {
-    showToast(t('toast.buyerAgentDisabled'))
-    return
-  }
-
-  const enteringBuyerFirstStep = state.workOrderSide === 'buyer' && state.newConversationDraft
-  const continuation = activeBuyerAgentContinuationContext()
-  if (enteringBuyerFirstStep) triggerBuyerFirstStepTransition()
   closePermissionMenu()
   setActiveView('chat')
   renderViewTabs()
   agentQuery.value = ''
   resizeAgentComposer()
-  pushMessage({ role: 'user', text: query })
-
-  if (!enteringBuyerFirstStep) {
-    return
-  }
-
-  const pendingID = pushMessage({
-    role: 'assistant',
-    text: 'Creating a draft transaction and checking whether this should enter the Exora plan flow...',
-    meta: 'Built-in Agent',
-    pending: true,
-  })
-
-  setBusy(true)
+  const clientMessageId = `agent-message-${crypto.randomUUID()}`
+  pushMessage({ role: 'user', actor: state.workOrderSide === 'seller' ? 'seller_human' : 'buyer_human', text: query })
   try {
-    const searchInputExtra: Record<string, unknown> = {
-      projectPath: continuation.projectPath || defaultWorkProjectPath(),
-      permissionMode: state.permissionMode,
-      taskTemplate: permissionTaskTemplate(),
-    }
-    if (continuation.planId) searchInputExtra.planId = continuation.planId
-    if (continuation.approvalId) searchInputExtra.approvalId = continuation.approvalId
-    if (continuation.workUid) searchInputExtra.workUid = continuation.workUid
-    const response = await invoke<MarketSearchResult>('agent_search_sellers', {
-      input: buyerAgentSearchInput(query, searchInputExtra),
-    })
-    updateMessage(pendingID, {
-      text: marketResponseText(response),
-      meta: response.selectionRequest ? `Transaction plan ${shortID(response.selectionRequest.planId)}` : 'Search complete',
-      result: response,
-      pending: false,
-    })
-    const responsePlanId = planIdFromAgentResponse(response)
-    if (responsePlanId) {
-      if (continuation.planId && responsePlanId !== continuation.planId) {
-        console.warn(`Ignoring duplicate transaction plan ${responsePlanId}; active plan is ${continuation.planId}.`)
-        updateMessage(pendingID, { meta: `Kept transaction ${shortID(continuation.planId)}` })
-      } else {
-        state.selectedId = selectionId('plan', responsePlanId)
-        bindActiveChatToOrder(responsePlanId, response.selectionRequest?.status)
-      }
-    } else if (continuation.planId) {
-      bindActiveChatToOrder(continuation.planId)
-    }
-    await refreshWorkspace({ quiet: true })
+    await invoke('local_agent_session_send', { input: { sessionId: session!.id, clientMessageId, text: query, idempotencyKey: `send:${clientMessageId}` } })
   } catch (error) {
-    updateMessage(pendingID, {
-      text: `I could not search the market yet: ${humanizeError(error)}`,
-      meta: 'Search failed',
-      pending: false,
-    })
-  } finally {
-    setBusy(false)
-    await refreshStatus()
-    await refreshSeller()
+    appendAgentSessionMessage(currentAgentChatThread()!, { role: 'system', text: humanizeError(error), meta: 'Local Agent' })
   }
 }
 
@@ -5564,7 +6187,6 @@ function renderStatus(status: AppStatus) {
   state.appStatus = status
   fields.daemon.textContent = status.daemon
   fields.daemon.dataset.state = status.daemon
-  renderLocalAgentPromptControls()
 }
 
 type ChatFeedScrollSnapshot = {
@@ -6317,6 +6939,28 @@ function renderTransactionStageContent(thread: WorkThread, chatThread: ChatThrea
     : renderBuyerTransactionStageContent(thread, chatThread, messages)
 }
 
+function renderTransactionSupervision(thread: WorkThread) {
+  const ids = new Set([thread.orderId, thread.id, ...thread.taskIds, ...thread.planIds].filter((value): value is string => Boolean(value)))
+  const transaction = state.cloudTransactions.find((item) => ids.has(item.transactionId))
+  const supervision = transaction?.supervision
+  if (!transaction || !supervision?.status) return ''
+  const labels: Record<string, string> = {
+    driving: `Exora is driving the ${supervision.responsibleRole || 'local'} Agent`,
+    waiting_user: 'Waiting for your confirmation',
+    waiting_counterparty: `Waiting for the ${supervision.responsibleRole || 'counterparty'} Agent`,
+    retry_scheduled: supervision.nextWakeAt ? `Retry scheduled for ${compactTimestamp(supervision.nextWakeAt)}` : 'Agent retry scheduled',
+    blocked: 'Progress Supervisor stopped',
+    completed: 'Supervision completed',
+  }
+  return `
+    <div class="transaction-supervision ${escapeAttr(supervision.status)}">
+      <span class="transaction-supervision-dot" aria-hidden="true"></span>
+      <div><strong>${escapeHTML(labels[supervision.status] || supervision.status)}</strong><small>${escapeHTML(supervision.reason || (supervision.activeRunId ? `Run ${shortID(supervision.activeRunId)}` : `Transaction version ${transaction.version}`))}</small></div>
+      ${supervision.consecutiveNoProgress ? `<em>${supervision.consecutiveNoProgress}/3 no progress</em>` : ''}
+    </div>
+  `
+}
+
 function renderTransactionStageDetailFrame(thread: WorkThread, snapshot: TransactionProgressSnapshot, stageId: TransactionStageId, body: string) {
   const stage = snapshot.stages.find((item) => item.id === stageId) || snapshot.stages[0]
   const currentStage = snapshot.stages.find((item) => item.id === snapshot.currentStageId)
@@ -6344,6 +6988,7 @@ function renderTransactionStageDetailFrame(thread: WorkThread, snapshot: Transac
             </div>
             <small>${escapeHTML(currentStage ? `Current: ${currentStage.title}` : '')}</small>
           </header>
+          ${renderTransactionSupervision(thread)}
           ${renderStageTopline(snapshot)}
           ${body}
         </div>
@@ -6520,6 +7165,7 @@ function renderTransactionDetailSidebar() {
         <span>${escapeHTML(stage?.id === snapshot.currentStageId ? progressStateLabel(snapshot.state) : `Viewing ${stage?.title || 'stage'}`)}</span>
         <p>${escapeHTML(stage?.detail || '')}</p>
       </header>
+      ${renderTransactionSupervision(thread)}
       ${renderStageTopline(snapshot)}
       ${body}
     </section>
@@ -8061,10 +8707,9 @@ function renderChatSurface() {
   fields.chatView.classList.toggle('seller-monitor-mode', sellerMonitor)
   fields.chatView.classList.toggle('buyer-first-step-transition', state.buyerFirstStepTransition && state.workOrderSide === 'buyer')
   fields.chatFeed.classList.remove('hidden')
-  fields.localAgentCard.classList.toggle('hidden', started || sellerMode || sellerMonitor)
-  app.querySelector<HTMLElement>('.work-or-divider')?.classList.toggle('hidden', started || sellerMode || sellerMonitor)
   agentChatForm.classList.toggle('hidden', sellerEmptySetup || sellerMonitor)
   renderExternalWorkLockControls()
+  renderChatAgentControl()
   resizeAgentComposer()
 }
 
@@ -8152,7 +8797,7 @@ async function searchCardMarket(query: string) {
 
 const settingsNavItems: Array<{ view: SettingsView; titleKey: string }> = [
   { view: 'api', titleKey: 'settings.api.nav' },
-  { view: 'buyer-card', titleKey: 'settings.buyerCard.nav' },
+  { view: 'local-agents', titleKey: 'settings.localAgents.nav' },
   { view: 'seller-card', titleKey: 'settings.sellerCard.nav' },
   { view: 'buyer-agent', titleKey: 'settings.buyerAgent.nav' },
   { view: 'seller', titleKey: 'settings.seller.nav' },
@@ -8195,6 +8840,9 @@ function renderSettingsSidebar() {
       state.activeSettingsView = button.dataset.settingsTab as SettingsView
       scheduleSaveAppSettings()
       renderAll()
+      if (state.activeSettingsView === 'local-agents') {
+        void loadLocalAgentSnapshot()
+      }
       if (state.activeSettingsView === 'wallet') {
         refreshSettingsStatus()
       }
@@ -8818,6 +9466,7 @@ function renderAgentCardSetupList(role: AgentCardRole) {
 }
 
 function renderAgentCardActionBar(role: AgentCardRole) {
+  if (role === 'seller') return renderSellerCardActionBar()
   const diagnosing = state.cardDiagnosticsTasks[role]?.running === true
   const hasUnsavedChanges = agentCardHasUnsavedChanges(role)
   const scanStatus = agentCardScanStatusText(role)
@@ -8913,22 +9562,118 @@ function renderBuyerCardFields(buyer: BuyerManualFields) {
 }
 
 function renderSellerCardFields(seller: SellerManualFields) {
-  const settings = state.sellerSettings
-  const autoQuote = seller.autoQuote ?? settings?.autoQuote ?? false
-  const autoAcceptLowRisk = seller.autoAcceptLowRisk ?? Boolean(settings?.autoAcceptLowRisk || settings?.autoCompleteTextTasks)
+  const sellIntent = seller.sellIntent || seller.capabilitySummary || ''
+  const pricingPrinciples = seller.pricingPrinciples || seller.pricing || ''
+  const generated = Boolean(seller.setupStatus === 'complete' && seller.structuredByAgent && seller.structuredAt)
+  const incomplete = seller.setupStatus === 'incomplete'
   return `
-    <label class="card-setup-row card-field-row"><span class="field-label">Display name</span><small class="field-help">Public name for this local seller card.</small><input name="displayName" value="${escapeAttr(seller.displayName || '')}" placeholder="Local provider agent" /></label>
-    <label class="card-setup-row card-field-row"><span class="field-label">Capability summary</span><small class="field-help">Short provider capability description shown in market search.</small><textarea name="capabilitySummary" placeholder="Local seller card for safely offering compute, code, or agent work.">${escapeHTML(seller.capabilitySummary || '')}</textarea></label>
-    <label class="card-setup-row card-field-row"><span class="field-label">Capability types</span><small class="field-help">Comma-separated capability classes.</small><input name="capabilityTypes" value="${escapeAttr(listInput(seller.capabilityTypes))}" placeholder="Skill Capability, Managed API Capability" /></label>
-    <label class="card-setup-row card-field-row"><span class="field-label">Pricing</span><small class="field-help">Public pricing policy or quote default summary.</small><textarea name="pricing" placeholder="10 USDC per lightweight job; task-specific quotes may adjust.">${escapeHTML(seller.pricing || sellerPricingSummary(settings))}</textarea></label>
-    <label class="card-setup-row card-field-row"><span class="field-label">Availability</span><small class="field-help">When this seller agent can accept work.</small><textarea name="availability" placeholder="Enabled locally; availability is checked during seller-agent negotiation.">${escapeHTML(seller.availability || sellerAvailabilitySummary(settings))}</textarea></label>
-    <label class="card-setup-row card-field-row"><span class="field-label">Human confirmation</span><small class="field-help">Actions requiring provider owner confirmation.</small><textarea name="humanConfirmation" placeholder="Human confirmation is required for external writes, payments, credential use, and public disclosure.">${escapeHTML(seller.humanConfirmation || '')}</textarea></label>
-    <label class="card-setup-row card-field-row"><span class="field-label">Data boundary</span><small class="field-help">How buyer inputs are scoped and retained.</small><textarea name="dataBoundary" placeholder="Buyer inputs are task-scoped and are not reused for training or resale without consent.">${escapeHTML(seller.dataBoundary || '')}</textarea></label>
-    <label class="card-setup-row card-field-row"><span class="field-label">Managed APIs</span><small class="field-help">Names only; do not include keys, tokens, or private endpoints.</small><input name="managedApis" value="${escapeAttr(listInput(seller.managedApis))}" placeholder="OpenAI-compatible LLM, browser automation" /></label>
-    <label class="card-setup-row card-field-row"><span class="field-label">Output formats</span><small class="field-help">Comma-separated outputs this seller returns.</small><input name="outputFormats" value="${escapeAttr(listInput(seller.outputFormats))}" placeholder="artifact, log summary, receipt" /></label>
-    <label class="card-setup-row card-field-row inline-check-row"><span class="field-label">Auto quote</span><small class="field-help">Mirrors the seller-agent quote policy.</small><input name="autoQuote" type="hidden" value="false" /><span class="inline-check-control"><input name="autoQuote" type="checkbox" value="true"${autoQuote ? ' checked' : ''} /> Auto quote new tasks</span></label>
-    <label class="card-setup-row card-field-row inline-check-row"><span class="field-label">Low-risk auto accept</span><small class="field-help">Mirrors the seller-agent low-risk acceptance policy.</small><input name="autoAcceptLowRisk" type="hidden" value="false" /><span class="inline-check-control"><input name="autoAcceptLowRisk" type="checkbox" value="true"${autoAcceptLowRisk ? ' checked' : ''} /> Auto accept low-risk work</span></label>
-    <label class="card-setup-row card-field-row"><span class="field-label">External write policy</span><small class="field-help">Rules for writing outside local task outputs.</small><textarea name="externalWritePolicy" placeholder="External writes require explicit owner approval.">${escapeHTML(seller.externalWritePolicy || '')}</textarea></label>
+    <label class="card-setup-row card-field-row seller-card-intent-field"><span class="field-label">What do you want to sell?</span><small class="field-help">Describe the service, compute, software capability, data work, or deliverable you want buyers to discover.</small><textarea name="sellIntent" placeholder="For example: CUDA inference jobs, Blender rendering, data cleanup, code review, or use of a licensed local tool.">${escapeHTML(sellIntent)}</textarea></label>
+    <label class="card-setup-row card-field-row seller-card-intent-field"><span class="field-label">Pricing principles</span><small class="field-help">State how price should respond to workload, runtime, urgency, resource use, minimum fees, or negotiation.</small><textarea name="pricingPrinciples" placeholder="For example: 5 USDC minimum; add GPU runtime and storage costs; urgent work carries a premium; quote uncertain jobs before acceptance.">${escapeHTML(pricingPrinciples)}</textarea></label>
+    ${renderSellerCardQuestions()}
+    ${generated ? renderGeneratedSellerCard(seller) : `
+      <div class="agent-env-empty seller-card-agent-empty">
+        <strong>${incomplete ? 'Seller Setup is incomplete.' : 'The bound local Agent has not structured this Seller Card yet.'}</strong>
+        <span>${incomplete ? 'Finish every required question and permission boundary before this Card can be saved or published.' : `Enter the two fields above, then let the Agent inspect Exora's redacted environment report and generate offerings and a pricing workflow.`}</span>
+      </div>
+    `}
+  `
+}
+
+function renderSellerCardQuestions() {
+  const generation = state.sellerCardGeneration
+  if (generation?.status !== 'waiting_user' || !generation.questions?.length) return ''
+  return `
+    <section class="seller-card-questions" aria-label="Seller Setup questions">
+      <div class="seller-card-questions-head">
+        <div><strong>Seller Setup · Round ${generation.round}</strong><small>The local Agent needs these answers before it can finalize capabilities and permissions.</small></div>
+        <span>Incomplete</span>
+      </div>
+      <div class="seller-card-secret-warning">
+        <strong>Never paste secrets here.</strong>
+        <span>Use credential aliases only—for example “GitHub seller account”. API keys, tokens, passwords, private keys, cookies, and recovery codes stay outside the Agent conversation.</span>
+      </div>
+      <div class="seller-card-question-list">
+        ${generation.questions.map((question, index) => `
+          <label class="seller-card-question">
+            <span class="field-label">${index + 1}. ${escapeHTML(question.question)}${question.required ? '<em>Required</em>' : '<em>Optional</em>'}</span>
+            ${question.why ? `<small class="field-help">${escapeHTML(question.why)}</small>` : ''}
+            <textarea data-seller-card-question="${escapeAttr(question.id)}" placeholder="${escapeAttr(question.placeholder || 'Describe the boundary without including any secret value.')}" ${question.required ? 'required' : ''}></textarea>
+          </label>
+        `).join('')}
+      </div>
+    </section>
+  `
+}
+
+function renderSellerCardActionBar() {
+  const generation = state.sellerCardGeneration
+  const waitingUser = generation?.status === 'waiting_user'
+  const running = Boolean(generation && generation.status !== 'completed' && generation.status !== 'failed' && generation.status !== 'waiting_user')
+  const binding = state.localAgentBinding
+  const bindingReady = Boolean(binding?.valid)
+  const hasUnsavedChanges = agentCardHasUnsavedChanges('seller')
+  const seller = cardForRole('seller')?.manualFields.seller
+  const structured = Boolean(seller?.setupStatus === 'complete' && seller.structuredByAgent && seller.structuredAt)
+  const cardActionsDisabled = Boolean(running || waitingUser || !structured)
+  const status = running
+    ? generation?.status === 'collecting' ? 'Inspecting the local environment with Exora tools...'
+      : generation?.status === 'starting_agent' ? `Starting ${localAgentDisplayName(binding?.driverId)}...`
+        : `${localAgentDisplayName(binding?.driverId)} is reviewing offerings and permission boundaries...`
+    : waitingUser ? `Setup incomplete · answer ${generation?.questions?.filter((question) => question.required).length || 0} required question(s).`
+    : generation?.status === 'failed' ? generation.error || 'Seller Card generation failed.'
+      : seller?.setupStatus === 'incomplete' ? 'Seller Setup is incomplete. Restart the Agent setup to finish permissions.'
+      : bindingReady ? `${localAgentDisplayName(binding?.driverId)} is ready to investigate this Seller Card.`
+        : 'Bind and verify a supported local Agent before generating this Seller Card.'
+  const primaryAction = waitingUser ? 'continue-seller-card' : 'generate-seller-card'
+  const primaryDisabled = waitingUser ? false : Boolean(running || !bindingReady)
+  const primaryText = waitingUser ? 'Continue setup' : running ? 'Agent investigating' : `Generate with ${localAgentDisplayName(binding?.driverId)}`
+  return `
+    <div class="card-setup-actionbar card-scan-actionbar seller-card-agent-actionbar" aria-label="Generate Seller Card with local Agent">
+      <button type="button" class="card-action-button diagnose-card-action ${running ? 'is-running' : ''} ${waitingUser ? 'is-waiting' : ''}" data-card-action="${primaryAction}" data-card-role="seller" ${primaryDisabled ? 'disabled' : ''} ${running ? 'aria-busy="true"' : ''}>
+        <span class="card-action-icon">${running ? cardActionIcons.diagnose : localAgentIcon}</span>
+        <span class="card-action-text">${escapeHTML(primaryText)}</span>
+      </button>
+      <span class="card-scan-status" title="${escapeAttr(status)}">${escapeHTML(status)}</span>
+    </div>
+    <div class="card-setup-actionbar card-save-actionbar" aria-label="Seller Card actions">
+      <button type="button" class="card-action-button save-card-action ${hasUnsavedChanges ? 'is-dirty' : 'is-saved'}" data-card-action="save" data-card-role="seller" ${cardActionsDisabled ? 'disabled' : ''} title="${!structured ? 'Generate the Seller Card with the bound Agent first' : hasUnsavedChanges ? 'Save local changes' : 'Current card is saved'}">
+        <span class="card-action-icon">${hasUnsavedChanges ? cardActionIcons.save : cardActionIcons.saved}</span>
+        <span class="card-action-text">${hasUnsavedChanges ? 'Save local' : 'Saved'}</span>
+      </button>
+      <button type="button" class="card-action-button publish-card-action" data-card-action="publish" data-card-role="seller" ${cardActionsDisabled ? 'disabled' : ''} title="${!structured ? 'Generate the Seller Card with the bound Agent first' : 'Save and publish this card to Exora Cloud'}">
+        <span class="card-action-icon">${cardActionIcons.publish}</span>
+        <span class="card-action-text">Publish</span>
+      </button>
+    </div>
+  `
+}
+
+function renderGeneratedSellerCard(seller: SellerManualFields) {
+  const offerings = seller.offerings || []
+  const pricingProcess = seller.pricingProcess || []
+  const allowedActions = seller.allowedAgentActions || []
+  const approvalActions = seller.approvalRequiredActions || []
+  return `
+    <section class="seller-card-generated" aria-label="Agent generated Seller Card">
+      <div class="seller-card-generated-head"><span>${localAgentIcon}</span><div><strong>Agent-structured Seller Card</strong><small>Generated from seller intent and redacted local diagnostics. Review before publishing.</small></div></div>
+      <div class="seller-card-generated-summary">
+        <div><span>Public name</span><strong>${escapeHTML(seller.displayName || 'Exora Seller')}</strong></div>
+        <div><span>Capability</span><strong>${escapeHTML(seller.capabilitySummary || 'Pending Agent analysis')}</strong></div>
+        <div><span>Pricing summary</span><strong>${escapeHTML(seller.pricing || 'Pending Agent analysis')}</strong></div>
+        <div><span>Availability</span><strong>${escapeHTML(seller.availability || 'Checked when quoting')}</strong></div>
+      </div>
+      <div class="seller-card-generated-columns">
+        <div><h3>What buyers can order</h3><ol>${offerings.map((item) => `<li>${escapeHTML(item)}</li>`).join('') || '<li>Pending Agent analysis</li>'}</ol></div>
+        <div><h3>Pricing workflow</h3><ol>${pricingProcess.map((item) => `<li>${escapeHTML(item)}</li>`).join('') || '<li>Pending Agent analysis</li>'}</ol></div>
+      </div>
+      <div class="seller-card-permission-policy">
+        <div><h3>Agent may do</h3><ul>${allowedActions.map((item) => `<li>${escapeHTML(item)}</li>`).join('') || '<li>No autonomous action granted</li>'}</ul></div>
+        <div><h3>Always needs seller approval</h3><ul>${approvalActions.map((item) => `<li>${escapeHTML(item)}</li>`).join('') || '<li>Permission policy incomplete</li>'}</ul></div>
+        <div><h3>Credentials</h3><p>${escapeHTML(seller.credentialPolicy || 'Real credential values never enter Seller Setup.')}</p></div>
+        <div><h3>Network boundary</h3><p>${escapeHTML(seller.networkPolicy || 'No network boundary granted.')}</p></div>
+      </div>
+      ${seller.capabilityTypes?.length ? `<div class="seller-card-generated-tags">${seller.capabilityTypes.map((item) => `<span>${escapeHTML(item)}</span>`).join('')}</div>` : ''}
+    </section>
   `
 }
 
@@ -9766,6 +10511,17 @@ function attachCardHandlers(root: ParentNode = fields.decisionContent) {
       const role = button.dataset.cardRole as AgentCardRole | undefined
       if ((action === 'diagnose' || action === 'detect') && role) {
         startAgentCardDiagnostics(role, root)
+      } else if (action === 'generate-seller-card') {
+        generateSellerCardWithAgent(root).catch((error) => {
+          failSellerCardGeneration(humanizeError(error))
+          showToast(humanizeError(error))
+          if (/Bind and verify|Bind a local Agent|Scan and bind/i.test(humanizeError(error))) openSettings('local-agents')
+        })
+      } else if (action === 'continue-seller-card') {
+        continueSellerCardSetup(root).catch((error) => {
+          state.cardMessage = humanizeError(error)
+          showToast(humanizeError(error))
+        })
       } else if (action === 'stop-diagnose' && role) {
         stopAgentCardDiagnostics(role)
       } else if (action === 'save' && role) {
@@ -9834,10 +10590,23 @@ function updateCardSaveActionState(role: AgentCardRole, root: ParentNode = field
   const form = findAgentCardForm(role, root)
   if (!button || !form) return
   const hasUnsavedChanges = agentCardHasUnsavedChanges(role, form)
+  const seller = role === 'seller' ? cardForRole('seller')?.manualFields.seller : undefined
+  const formSeller = role === 'seller' ? sellerFieldsFromForm(new FormData(form), seller || {}) : undefined
+  const sellerStructureStale = Boolean(role === 'seller' && (
+    !seller?.structuredByAgent ||
+    formSeller?.sellIntent !== seller.sellIntent ||
+    formSeller?.pricingPrinciples !== seller.pricingPrinciples
+  ))
   button.classList.toggle('is-dirty', hasUnsavedChanges)
   button.classList.toggle('is-saved', !hasUnsavedChanges)
-  button.title = hasUnsavedChanges ? t('card.saveDirtyTitle') : t('card.saveSavedTitle')
+  button.disabled = sellerStructureStale
+  button.title = sellerStructureStale ? 'Regenerate the Seller Card after changing seller intent or pricing principles.' : hasUnsavedChanges ? t('card.saveDirtyTitle') : t('card.saveSavedTitle')
   button.setAttribute('aria-label', hasUnsavedChanges ? t('card.saveDirtyTitle') : t('card.saveSavedTitle'))
+  const publishButton = root.querySelector<HTMLButtonElement>('[data-card-action="publish"][data-card-role="seller"]')
+  if (publishButton && role === 'seller') {
+    publishButton.disabled = sellerStructureStale
+    if (sellerStructureStale) publishButton.title = 'Regenerate the Seller Card before publishing.'
+  }
   const iconSlot = button.querySelector<HTMLElement>('.card-action-icon')
   const textSlot = button.querySelector<HTMLElement>('.card-action-text')
   if (iconSlot) iconSlot.innerHTML = hasUnsavedChanges ? cardActionIcons.save : cardActionIcons.saved
@@ -10479,11 +11248,8 @@ function renderExternalWorkLockControls() {
   if (state.workOrderSide === 'seller') {
     fields.externalWorkLock.classList.add('hidden')
     agentQuery.disabled = state.busy
-    agentSendButton.disabled = state.busy
-    agentQuery.placeholder = 'Add a seller-side note to this transaction...'
-    app.querySelectorAll<HTMLButtonElement>('.composer-mcp-copy-button').forEach((button) => {
-      button.classList.add('hidden')
-    })
+    agentSendButton.disabled = state.busy || !agentSessionCanReceiveMessage(currentInteractiveAgentSession())
+    agentQuery.placeholder = 'Message the bound seller Agent...'
     return
   }
   app.querySelectorAll<HTMLButtonElement>('.composer-mcp-copy-button').forEach((button) => {
@@ -10491,7 +11257,7 @@ function renderExternalWorkLockControls() {
   })
   const lease = activeExternalWorkLease()
   const run = activeExternalWorkRun()
-  const locked = Boolean(lease || run)
+  const locked = Boolean(lease || run) && !currentInteractiveAgentSession()
   fields.externalWorkLock.classList.toggle('hidden', !locked)
   if (lease || run) {
     const projectPath = lease?.projectPath || run?.projectPath || activeProjectFolder().path
@@ -11644,8 +12410,8 @@ function renderAll() {
   renderLedger()
   renderContextStrip()
   renderDecisionPanel()
-  renderLocalAgentPromptControls()
   renderExternalWorkLockControls()
+  renderChatAgentControl()
   renderMarketProjectPicker()
   renderCartModal()
   syncTransactionProgressPolling()
@@ -11980,140 +12746,6 @@ async function run(action: () => Promise<unknown>, success?: string) {
     await refreshStatus()
     await refreshSeller({ market: state.activeView === 'settings' })
   }
-}
-
-function renderLocalAgentPromptControls() {
-  const ready = Boolean(state.appStatus?.mcpCommand && state.appStatus.discoveryPath)
-  const demoReady = Boolean(state.gpuDemo?.active)
-  app.querySelectorAll<HTMLButtonElement>('[data-action="copy-local-agent-prompt"]').forEach((button) => {
-    button.disabled = state.busy || (!ready && !demoReady)
-    button.setAttribute('title', uiText(demoReady ? 'Copy GPU demo MCP prompt' : ready ? 'Copy local agent MCP prompt' : 'Starting local Dock'))
-  })
-}
-
-function composeLocalAgentPrompt(task: string, work: WorkMCPContext) {
-  const status = state.appStatus
-  const folder = { ...defaultWorkProjectFolder(), path: work.projectPath || defaultWorkProjectPath() }
-  const discoveryPath = status?.discoveryPath || ''
-  const mcpCommand = status?.mcpCommand || ''
-  return [
-    'External agent instructions for Exora Dock:',
-    '',
-    'You are the external local agent for the user task at the end of this prompt. Use my local Exora Dock through MCP as the order and seller-selection control plane.',
-    '',
-    'Connect to Exora Dock:',
-    `1. Read the local discovery manifest: ${discoveryPath}`,
-    `2. Start the stdio MCP server with: ${mcpCommand}`,
-    '3. Use the Exora MCP tools. Start with exora.run_buyer_work. It is plan-first: classify, ask for plan confirmation, write local manifest files, wait for Dock owner manifest approval, then match sellers and quote.',
-    '',
-    `Work UID: ${work.workUid}`,
-    `AgenStaff folder: ${folder.path}`,
-    `Permission mode: ${activePermissionOption().label}`,
-    `Permission policy: ${permissionPolicyText()}`,
-    '',
-    'Required MCP request fields:',
-    `- Include workUid: "${work.workUid}" on every related Exora MCP call.`,
-    `- Include projectPath: "${folder.path}" on the first related MCP call and whenever a tool accepts it; Dock will create/register this AgenStaff transaction folder if needed and can resolve later calls from workUid.`,
-    '- Do not ask me to advance each step. Continue calling resume_negotiation, create_order_plan_from_quote, and resume_task_flow when nextAction asks for it.',
-    '- If Exora Dock returns no suitable task card, seller card, quote, or order option, stop and tell the user that Exora Dock cannot help with this task right now. Include the Dock/MCP reason and do not invent a provider.',
-    '',
-    'Safety boundaries:',
-    '- Do not approve payments, enter payment PINs, or treat MCP tool calls as user payment consent.',
-    '- Do not expose secrets, private keys, cloud tokens, or unrelated local files.',
-    '- Follow the permission policy above for file and internet access; seller choice, approval, payment, and secrets still stay under Exora Dock owner control.',
-    '- Keep all order/task context associated with the AgenStaff folder above unless the user explicitly asks otherwise.',
-    '',
-    'User task:',
-    task,
-  ].join('\n')
-}
-
-function localAgentTaskFromInput(value: string) {
-  const marker = '\nUser task:\n'
-  const index = value.lastIndexOf(marker)
-  if (index >= 0) return value.slice(index + marker.length).trim()
-  return value.trim()
-}
-
-function currentTransactionTaskText() {
-  const chat = activeChatThread()
-  const lastUser = [...(chat?.messages || [])].reverse().find((message) => message.role === 'user')
-  const workThread = selectedWorkThread()
-  return firstDisplayText(
-    lastUser?.text,
-    workThread?.title && !/^New (chat|task)(?: \d+)?$/.test(workThread.title) ? workThread.title : '',
-    chat?.title && !/^New (chat|task)(?: \d+)?$/.test(chat.title) ? chat.title : '',
-  )
-}
-
-function localAgentPromptTask(source: 'mcp-card' | 'composer') {
-  const cardTask = localAgentTaskFromInput(fields.localAgentTask.value)
-  const composerTask = agentQuery.value.trim()
-  const transactionTask = currentTransactionTaskText()
-  if (source === 'composer') {
-    return composerTask || transactionTask || cardTask || '[Describe the user task here before sending this prompt to the external agent.]'
-  }
-  return cardTask || composerTask || transactionTask || '[Describe the user task here before sending this prompt to the external agent.]'
-}
-
-async function createWorkMCPContext(task: string): Promise<WorkMCPContext> {
-  const folder = defaultWorkProjectFolder()
-  try {
-    return await invoke<WorkMCPContext>('create_work_mcp_uid', {
-      input: { projectPath: folder.path, task },
-    })
-  } catch (error) {
-    const message = humanizeError(error)
-    if (!message.includes('unknown desktop command: create_work_mcp_uid')) throw error
-    return {
-      workUid: `work-${crypto.randomUUID()}`,
-      projectPath: folder.path,
-      projectName: folder.name,
-      task,
-    }
-  }
-}
-
-function enterBuyerMCPHandoff(task: string, work: WorkMCPContext) {
-  const title = task.startsWith('[Describe the user task') ? 'MCP handoff' : compactText(task, 52)
-  state.workOrderSide = 'buyer'
-  state.marketOrderSide = 'buyer'
-  setActiveView('chat')
-  triggerBuyerFirstStepTransition()
-  agentQuery.value = ''
-  fields.localAgentTask.value = ''
-  createChatThread({
-    title,
-    status: 'draft',
-    projectPath: work.projectPath || defaultWorkProjectPath(),
-    participants: ['buyer_human', 'buyer_agent', 'seller_agent'],
-  })
-  pushMessage({
-    role: 'system',
-    text: `MCP prompt copied for Work UID ${shortID(work.workUid)}. Waiting for the external local agent to connect through MCP.`,
-    meta: 'MCP Handoff',
-  })
-}
-
-async function copyLocalAgentPrompt(source: 'mcp-card' | 'composer' = 'mcp-card') {
-  if (source === 'mcp-card' && state.gpuDemo?.active) {
-    await copyGpuDemoPrompt()
-    return
-  }
-  const task = localAgentPromptTask(source)
-  if (!state.appStatus?.mcpCommand || !state.appStatus.discoveryPath) {
-    showToast(t('toast.refreshRuntimeBeforePrompt'))
-    return
-  }
-  const enteringBuyerFirstStep = source === 'mcp-card' && state.workOrderSide === 'buyer' && !chatSurfaceStarted()
-  const work = await createWorkMCPContext(task)
-  const prompt = composeLocalAgentPrompt(task, work)
-  await navigator.clipboard.writeText(prompt)
-  setProjectFolders([{ name: work.projectName || projectFolderNameForPath(work.projectPath), path: work.projectPath }, ...state.projectFolders], work.projectPath)
-  if (enteringBuyerFirstStep) {
-    enterBuyerMCPHandoff(task, work)
-  }
-  showToast(t('toast.localAgentPromptCopied', { id: shortID(work.workUid) }))
 }
 
 async function takeOverExternalWork() {
@@ -12565,6 +13197,9 @@ function createChatThread(input: { title?: string; providerPubkey?: string; work
     status: input.status,
     participants: input.participants || ['buyer_human', 'buyer_agent', 'seller_agent'],
     providerPubkey: input.providerPubkey,
+    agentSessionId: undefined,
+    agentDriverId: undefined,
+    agentEventCursor: 0,
   }
   state.chatThreads.push(thread)
   if (input.select !== false) {
@@ -12619,15 +13254,14 @@ function startGpuJobDemo() {
   state.sellerWorkspaceMode = 'transactions'
   setProjectFolders([{ name: demo.projectName, path: demo.projectPath }, ...state.projectFolders], demo.projectPath)
   state.expandedProjectFolderPaths.add(projectPathKey(demo.projectPath))
-  fields.localAgentTask.value = demo.taskText
-  agentQuery.value = ''
+  agentQuery.value = demo.taskText
   setActiveView('chat')
   triggerBuyerFirstStepTransition()
   ensureGpuDemoThread()
   applyGpuDemoRecordsToState()
   renderAll()
-  window.setTimeout(() => app.querySelector<HTMLButtonElement>('[data-action="copy-local-agent-prompt"][data-copy-source="mcp-card"], [data-action="copy-local-agent-prompt"]:not([data-copy-source])')?.focus(), 0)
-  showToast('GPU Job Demo ready. Copy the MCP prompt to start.')
+  window.setTimeout(() => agentQuery.focus(), 0)
+  showToast('GPU Job Demo ready in the local Agent chat.')
 }
 
 function resetGpuJobDemo(options: { quiet?: boolean } = {}) {
@@ -12643,83 +13277,11 @@ function resetGpuJobDemo(options: { quiet?: boolean } = {}) {
   if (state.selectedId && isGpuDemoIdentifier(state.selectedId)) state.selectedId = undefined
   if (state.selectedWorkThreadId && isGpuDemoIdentifier(state.selectedWorkThreadId)) state.selectedWorkThreadId = undefined
   state.newConversationDraft = true
-  fields.localAgentTask.value = GPU_DEMO_TASK
   agentQuery.value = ''
   setActiveView('chat')
   scheduleSaveAppSettings()
   renderAll()
   if (!options.quiet) showToast('GPU Job Demo reset.')
-}
-
-async function copyGpuDemoPrompt() {
-  if (!state.gpuDemo?.active) startGpuJobDemo()
-  const demo = state.gpuDemo
-  if (!demo) return
-  const task = localAgentTaskFromInput(fields.localAgentTask.value) || demo.taskText || GPU_DEMO_TASK
-  demo.taskText = task
-  demo.updatedAt = new Date().toISOString()
-  fields.localAgentTask.value = task
-  const prompt = composeGpuDemoPrompt(demo)
-  await navigator.clipboard.writeText(prompt)
-  ensureGpuDemoThread()
-  pushMessage({
-    role: 'system',
-    text: `GPU demo MCP prompt copied for Work UID ${shortID(demo.ids.workUid)}. Waiting for the external local agent to inspect the task.`,
-    meta: 'MCP Handoff',
-  })
-  pushMessage({
-    role: 'assistant',
-    actor: 'buyer_agent',
-    text: 'I received the GPU job MCP handoff. I will classify the request, identify missing constraints, then ask the owner only the questions needed to build a seller-facing task checklist.',
-    meta: 'External Agent',
-  })
-  setGpuDemoStage('thinking')
-  scheduleGpuDemo(() => {
-    const current = state.gpuDemo
-    if (!current || current.ids.base !== demo.ids.base || current.stage !== 'thinking') return
-    pushMessage({
-      role: 'assistant',
-      actor: 'buyer_agent',
-      text: 'I need four details before matching sellers: GPU profile, max budget, input batch description, and output files.',
-      meta: 'Agent Questions',
-    })
-    setGpuDemoStage('questions')
-  }, 1100)
-  showToast('GPU demo MCP prompt copied.')
-}
-
-function composeGpuDemoPrompt(demo: GpuDemoState) {
-  const discoveryPath = state.appStatus?.discoveryPath || 'Local MVP demo discovery manifest (Electron-only)'
-  const mcpCommand = state.appStatus?.mcpCommand || 'exora-dockd mcp <local-demo-config>'
-  return [
-    'External agent instructions for Exora Dock GPU Job Demo:',
-    '',
-    'You are demonstrating a pure-local Exora Dock buyer flow. Use this prompt as if you were an external agent connected through MCP, but do not call Exora Cloud, do not approve payments, and do not start a real Docker or GPU job.',
-    '',
-    'Connect to the local Dock control plane:',
-    `1. Discovery manifest: ${discoveryPath}`,
-    `2. MCP command: ${mcpCommand}`,
-    '3. Start from the buyer work flow: understand the task, ask owner questions, build a seller-facing checklist, wait for owner review, then match sellers.',
-    '',
-    `Work UID: ${demo.ids.workUid}`,
-    `AgenStaff folder: ${demo.projectPath}`,
-    'Demo boundaries:',
-    '- Seller matching is fixed local demo data.',
-    '- Seller confirmation is simulated locally.',
-    '- PIN entry records only a simulated payment proof.',
-    '- GPU execution is a scripted local progress sequence.',
-    '- Return artifact names and hashes only; do not access real private files.',
-    '',
-    'Required demo story:',
-    '1. Think about the task and ask 2-4 concise owner questions.',
-    '2. Convert the answers into a task checklist for other agents.',
-    '3. Present three sellers and wait for owner selection.',
-    '4. Wait for seller confirmation, then ask Dock for owner PIN/payment.',
-    '5. Report queued, pulling image, running, uploading artifacts, completed.',
-    '',
-    'User task:',
-    demo.taskText,
-  ].join('\n')
 }
 
 function ensureGpuDemoThread() {
@@ -13082,8 +13644,6 @@ function setBusy(next: boolean) {
     button.disabled = next
   })
   agentQuery.disabled = next || builtInBuyerInputLocked()
-  fields.localAgentTask.disabled = next
-  renderLocalAgentPromptControls()
   renderExternalWorkLockControls()
   renderChromeControls()
 }
@@ -13105,8 +13665,8 @@ function showToast(message: string) {
 function settingsTitles(): Record<SettingsView, { kicker: string; title: string }> {
   return {
     api: { kicker: t('settings.api.kicker'), title: t('settings.api.title') },
+    'local-agents': { kicker: t('settings.localAgents.kicker'), title: t('settings.localAgents.title') },
     'buyer-agent': { kicker: t('settings.buyerAgent.kicker'), title: t('settings.buyerAgent.title') },
-    'buyer-card': { kicker: t('settings.buyerCard.kicker'), title: t('settings.buyerCard.title') },
     'seller-card': { kicker: t('settings.sellerCard.kicker'), title: t('settings.sellerCard.title') },
     seller: { kicker: t('settings.seller.kicker'), title: t('settings.seller.title') },
     pwa: { kicker: t('settings.pwa.kicker'), title: t('settings.pwa.title') },
@@ -13116,7 +13676,7 @@ function settingsTitles(): Record<SettingsView, { kicker: string; title: string 
 }
 
 function settingsViewForCardRole(role: AgentCardRole): SettingsView {
-  return role === 'buyer' ? 'buyer-card' : 'seller-card'
+  return 'seller-card'
 }
 
 function renderSettingsAgentCardPages() {
@@ -13126,6 +13686,182 @@ function renderSettingsAgentCardPages() {
     container.innerHTML = renderAgentCardSettingsPage(role)
     attachCardHandlers(container)
   })
+}
+
+function renderLocalAgentsSettings() {
+  const binding = state.localAgentBinding
+  const defaultValue = binding
+    ? `${binding.vendor} ${binding.name}${binding.valid ? '' : ` · ${t('localAgents.needsAttention')}`}`
+    : t('localAgents.noneBound')
+  const records = state.localAgents.length
+    ? state.localAgents.map(renderLocalAgentRecord).join('')
+    : `
+      <div class="agent-env-empty">
+        <strong>${escapeHTML(state.localAgentSnapshotLoading ? t('localAgents.loadingSaved') : state.localAgentScanning ? t('localAgents.scanning') : t('localAgents.notScanned'))}</strong>
+        <span>${escapeHTML(t('localAgents.scanHelp'))}</span>
+      </div>
+    `
+  const scanStatus = state.localAgentError
+    ? state.localAgentError
+    : state.localAgentScanning
+      ? t('localAgents.scanning')
+      : state.localAgentSnapshotLoading
+        ? t('localAgents.loadingSaved')
+      : state.localAgentScannedAt
+        ? t('localAgents.scanSummary', {
+            found: state.localAgents.filter((agent) => agent.installed).length,
+            total: state.localAgents.length,
+            time: compactTimestamp(state.localAgentScannedAt),
+          })
+        : t('localAgents.notScanned')
+
+  fields.localAgentsContent.innerHTML = `
+    <div class="agent-card-form card-setup-list agent-card-settings-form">
+      <div class="card-setup-row card-message-row">
+        <span class="field-label">${escapeHTML(t('localAgents.default'))}</span>
+        <small class="field-help">${escapeHTML(t('localAgents.defaultHelp'))}</small>
+        <strong class="diagnostic-value" data-no-i18n>${escapeHTML(defaultValue)}</strong>
+      </div>
+      <div class="archive-record-list">
+        ${records}
+      </div>
+    </div>
+    <div class="card-setup-actionbar card-scan-actionbar" aria-label="${escapeAttr(t('localAgents.scan'))}">
+      <button type="button" class="card-action-button diagnose-card-action ${state.localAgentScanning ? 'is-running' : ''}" data-local-agent-action="scan" ${state.localAgentScanning || state.localAgentSnapshotLoading || state.busy ? 'disabled aria-busy="true"' : ''}>
+        <span class="card-action-icon">${state.localAgentScanning ? windowIcons.close : cardActionIcons.diagnose}</span>
+        <span class="card-action-text">${escapeHTML(state.localAgentScanning ? t('localAgents.scanningShort') : t('localAgents.scan'))}</span>
+      </button>
+      ${binding ? `
+        <button type="button" class="card-action-button" data-local-agent-action="unbind" ${state.localAgentSnapshotLoading || state.busy ? 'disabled' : ''}>
+          <span class="card-action-icon">${windowIcons.close}</span>
+          <span class="card-action-text">${escapeHTML(t('localAgents.unbind'))}</span>
+        </button>
+      ` : ''}
+      <span class="card-scan-status" title="${escapeAttr(scanStatus)}">${escapeHTML(scanStatus)}</span>
+    </div>
+  `
+}
+
+function renderLocalAgentRecord(agent: LocalAgentInstallation) {
+  const bound = state.localAgentBinding?.driverId === agent.driverId
+  const status = localAgentStatusText(agent)
+  const protocol = localAgentProtocolText(agent)
+  const metadata = [agent.version, status].filter(Boolean).join(' · ')
+  const executable = agent.executablePath || t('localAgents.notFound')
+  const canBind = agent.installed && agent.bindable && (agent.status === 'ready' || agent.status === 'available')
+  const action = bound
+    ? `<span class="card-status-chip">${escapeHTML(t('localAgents.bound'))}</span>`
+    : canBind
+      ? `<button type="button" class="secondary" data-local-agent-action="bind" data-local-agent-driver="${escapeAttr(agent.driverId)}" ${state.busy || state.localAgentScanning || state.localAgentSnapshotLoading ? 'disabled' : ''}>${escapeHTML(t(state.localAgentBinding ? 'localAgents.switch' : 'localAgents.bind'))}</button>`
+      : `<span class="card-status-chip">${escapeHTML(localAgentShortStatus(agent))}</span>`
+  return `
+    <article class="archive-record-card" data-local-agent-driver-record="${escapeAttr(agent.driverId)}">
+      <div class="archive-record-main">
+        <strong data-no-i18n>${escapeHTML(agent.name)}</strong>
+        <span>${escapeHTML(`${agent.vendor} · ${protocol}`)}</span>
+        <code data-no-i18n title="${escapeAttr(executable)}">${escapeHTML(`${metadata} · ${executable}`)}</code>
+      </div>
+      <div class="archive-record-actions">${action}</div>
+    </article>
+  `
+}
+
+function localAgentStatusText(agent: LocalAgentInstallation) {
+  if (agent.status === 'not_installed') return t('localAgents.notInstalled')
+  if (agent.status === 'probe_failed') return t('localAgents.probeFailed')
+  if (agent.status === 'login_required') return t('localAgents.loginRequired')
+  if (agent.status === 'detected_only') return t('localAgents.detectedOnly')
+  if (agent.authState === 'authenticated') return t('localAgents.authenticated')
+  if (agent.authState === 'configured') return t('localAgents.configured')
+  return t('localAgents.authUnknown')
+}
+
+function localAgentShortStatus(agent: LocalAgentInstallation) {
+  if (agent.status === 'login_required') return t('localAgents.signIn')
+  if (agent.status === 'detected_only') return t('localAgents.detectOnly')
+  if (agent.status === 'probe_failed') return t('localAgents.checkFailed')
+  return t('localAgents.unavailable')
+}
+
+function localAgentProtocolText(agent: LocalAgentInstallation) {
+  const stateLabel = agent.protocolState === 'supported'
+    ? t('localAgents.supported')
+    : agent.protocolState === 'preview'
+      ? t('localAgents.beta')
+      : agent.protocolState === 'limited'
+        ? t('localAgents.limited')
+        : t('localAgents.detectOnly')
+  return `${agent.protocolLabel} · ${stateLabel}${agent.note ? ` · ${agent.note}` : ''}`
+}
+
+function applyLocalAgentSnapshot(result: LocalAgentScanResult) {
+  state.localAgents = Array.isArray(result.agents) ? result.agents : []
+  state.localAgentBinding = result.binding || undefined
+  state.localAgentScannedAt = result.scannedAt || undefined
+}
+
+async function loadLocalAgentSnapshot() {
+  if (state.localAgentSnapshotLoaded || state.localAgentSnapshotLoading || state.localAgentScanning) return
+  if (!hasDesktopBridge()) {
+    state.localAgentError = t('localAgents.desktopOnly')
+    state.localAgentSnapshotLoaded = true
+    renderLocalAgentsSettings()
+    return
+  }
+  state.localAgentSnapshotLoading = true
+  state.localAgentError = undefined
+  renderLocalAgentsSettings()
+  try {
+    applyLocalAgentSnapshot(await invoke<LocalAgentScanResult>('local_agent_snapshot'))
+  } catch (error) {
+    state.localAgentError = humanizeError(error)
+  } finally {
+    state.localAgentSnapshotLoading = false
+    state.localAgentSnapshotLoaded = true
+    renderLocalAgentsSettings()
+  }
+}
+
+async function scanLocalAgentsNow() {
+  if (state.localAgentScanning || state.localAgentSnapshotLoading) return
+  if (!hasDesktopBridge()) {
+    state.localAgentError = t('localAgents.desktopOnly')
+    renderLocalAgentsSettings()
+    return
+  }
+  state.localAgentScanning = true
+  state.localAgentError = undefined
+  renderLocalAgentsSettings()
+  try {
+    applyLocalAgentSnapshot(await invoke<LocalAgentScanResult>('local_agent_scan'))
+    state.localAgentSnapshotLoaded = true
+  } catch (error) {
+    state.localAgentError = humanizeError(error)
+  } finally {
+    state.localAgentScanning = false
+    renderLocalAgentsSettings()
+  }
+}
+
+async function bindLocalAgent(driverId: string) {
+  const result = await invoke<{ binding: LocalAgentBinding; agent: LocalAgentInstallation }>('bind_local_agent', {
+    input: { driverId },
+  })
+  state.localAgentBinding = result.binding
+  state.localAgents = state.localAgents.map((agent) => ({
+    ...agent,
+    bound: agent.driverId === result.binding.driverId,
+  }))
+  state.localAgentError = undefined
+  renderLocalAgentsSettings()
+}
+
+async function unbindLocalAgent() {
+  await invoke('unbind_local_agent')
+  state.localAgentBinding = undefined
+  state.localAgents = state.localAgents.map((agent) => ({ ...agent, bound: false }))
+  state.localAgentError = undefined
+  renderLocalAgentsSettings()
 }
 
 function renderSettingsPanel() {
@@ -13142,6 +13878,7 @@ function renderSettingsPanel() {
     page.classList.toggle('hidden', page.dataset.settingsPage !== state.activeSettingsView)
   })
   if (state.activeSettingsView === 'api') renderLLMSettings(state.sellerSettings)
+  if (state.activeSettingsView === 'local-agents') renderLocalAgentsSettings()
   renderSettingsAgentCardPages()
   renderLLMTestNote()
   renderPwaLinkStatus()
@@ -13256,6 +13993,7 @@ function openSettings(view?: SettingsView) {
   refreshSeller({ market: true })
   refreshAgentCards()
   refreshSettingsStatus()
+  if (state.activeSettingsView === 'local-agents') void loadLocalAgentSnapshot()
 }
 
 function returnFromSettings() {
@@ -13577,10 +14315,6 @@ document.addEventListener('keydown', (event) => {
 fields.newChatButton.addEventListener('click', () => {
   closeProjectFolderMenu()
   closeTaskContextMenu()
-  if (state.workOrderSide === 'buyer') {
-    startGpuJobDemo()
-    return
-  }
   startNewConversation()
 })
 
@@ -13613,14 +14347,14 @@ fields.projectFolderToggle.addEventListener('click', () => {
   renderProjectFolder()
 })
 
-fields.permissionButton.addEventListener('click', (event) => {
+fields.permissionButton?.addEventListener('click', (event) => {
   event.preventDefault()
   event.stopPropagation()
   closeTaskContextMenu()
   togglePermissionMenu()
 })
 
-fields.permissionMenu.addEventListener('click', (event) => {
+fields.permissionMenu?.addEventListener('click', (event) => {
   const target = event.target
   if (!(target instanceof Element)) return
   const button = target.closest<HTMLButtonElement>('[data-permission-mode]')
@@ -13843,21 +14577,6 @@ app.querySelectorAll<HTMLButtonElement>('[data-action="open-pwa-link"]').forEach
   })
 })
 
-app.querySelectorAll<HTMLButtonElement>('[data-action="copy-local-agent-prompt"]').forEach((button) => {
-  button.addEventListener('click', () => {
-    const source = button.dataset.copySource === 'composer' ? 'composer' : 'mcp-card'
-    copyLocalAgentPrompt(source).catch((error) => showToast(humanizeError(error)))
-  })
-})
-
-app.querySelectorAll<HTMLButtonElement>('[data-action="start-gpu-demo"]').forEach((button) => {
-  button.addEventListener('click', () => startGpuJobDemo())
-})
-
-app.querySelectorAll<HTMLButtonElement>('[data-action="reset-gpu-demo"]').forEach((button) => {
-  button.addEventListener('click', () => resetGpuJobDemo())
-})
-
 fields.externalWorkTakeoverButton.addEventListener('click', () => {
   takeOverExternalWork().catch((error) => showToast(humanizeError(error)))
 })
@@ -13986,6 +14705,63 @@ app.querySelector<HTMLButtonElement>('[data-action="wallet-refresh"]')!.addEvent
   run(() => refreshSettingsStatus())
 })
 
+fields.chatAgentButton.addEventListener('click', (event) => {
+  event.preventDefault()
+  event.stopPropagation()
+  const session = currentInteractiveAgentSession()
+  if (!session) {
+    connectCurrentChatAgent().catch((error) => {
+      const message = humanizeError(error)
+      showToast(message)
+      if (/Bind a local Agent|Scan and bind/i.test(message)) openSettings('local-agents')
+    })
+    return
+  }
+  state.chatAgentMenuOpen = !state.chatAgentMenuOpen
+  closePermissionMenu(false)
+  renderChatAgentControl()
+})
+
+fields.chatAgentMenu.addEventListener('click', (event) => {
+  const target = event.target
+  if (!(target instanceof Element)) return
+  const button = target.closest<HTMLButtonElement>('[data-chat-agent-action]')
+  if (!button) return
+  event.preventDefault()
+  event.stopPropagation()
+  const action = button.dataset.chatAgentAction
+  const task = action === 'resume' ? resumeCurrentChatAgent() : action === 'stop' ? stopCurrentChatAgent() : action === 'switch' ? switchCurrentChatAgent() : undefined
+  task?.catch((error) => showToast(humanizeError(error)))
+})
+
+document.addEventListener('click', (event) => {
+  if (!state.chatAgentMenuOpen) return
+  if (event.target instanceof Node && (fields.chatAgentMenu.contains(event.target) || fields.chatAgentButton.contains(event.target))) return
+  state.chatAgentMenuOpen = false
+  renderChatAgentControl()
+})
+
+fields.localAgentsContent.addEventListener('click', (event) => {
+  const target = event.target
+  if (!(target instanceof Element)) return
+  const button = target.closest<HTMLButtonElement>('[data-local-agent-action]')
+  if (!button) return
+  const action = button.dataset.localAgentAction
+  if (action === 'scan') {
+    void scanLocalAgentsNow()
+    return
+  }
+  if (action === 'bind') {
+    const driverId = button.dataset.localAgentDriver
+    if (!driverId) return
+    void run(() => bindLocalAgent(driverId), t('localAgents.boundToast'))
+    return
+  }
+  if (action === 'unbind') {
+    void run(() => unbindLocalAgent(), t('localAgents.unboundToast'))
+  }
+})
+
 app.querySelector<HTMLButtonElement>('[data-action="wallet-copy-address"]')!.addEventListener('click', () => {
   run(async () => {
     const address = state.walletStatus?.address
@@ -14031,11 +14807,13 @@ fields.chatView.addEventListener('wheel', routeExpandedTransactionStageWheel, { 
 
 async function bootstrap() {
   await hydrateDesktopPersistence()
+  localAgentEventUnsubscribe = window.exora?.onLocalAgentEvent?.(handleLocalAgentEventPayload)
   applyUserPreferences()
   renderChat()
   renderAll()
   refreshProjectFolder()
-  void startDockOnLaunch()
+  await startDockOnLaunch()
+  await hydrateLocalAgentChatSessions()
   refreshWalletStatus().catch(() => undefined)
   refreshSeller({ market: true })
   refreshAgentCards()

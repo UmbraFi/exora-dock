@@ -1,0 +1,52 @@
+{
+  "passed": false,
+  "transactionId": "txv2_t2-deBM0u0PEYi2Ne8dLWA",
+  "finalPhase": "intent",
+  "finalCondition": "waiting_agent",
+  "artifactPath": "artifact.txt",
+  "artifactSha256": "",
+  "buyerThreads": [
+    "019f50fd-f656-79d0-bbb9-1ce790826d61"
+  ],
+  "sellerThreads": [],
+  "humanResponses": null,
+  "supervision": {
+    "status": "blocked",
+    "responsibleRole": "buyer",
+    "consecutiveNoProgress": 3,
+    "reason": "agent_no_progress",
+    "updatedAt": "2026-07-11T11:46:47.5256856Z"
+  },
+  "events": [
+    {
+      "eventId": "event_0k91mPefbv3xus6fbA4ohw",
+      "transactionId": "txv2_t2-deBM0u0PEYi2Ne8dLWA",
+      "seq": 1,
+      "prevHash": "",
+      "eventHash": "e4497d526032a8f269385c859dc38c829889cef307bb04fdc6ec81b394f409c0",
+      "type": "transaction.created",
+      "actor": "account:acct_DIxG2eQFvMbaevrYHQ9G5g",
+      "role": "buyer",
+      "stateBefore": {
+        "version": 0,
+        "phase": "",
+        "condition": ""
+      },
+      "stateAfter": {
+        "version": 1,
+        "phase": "intent",
+        "condition": "waiting_agent"
+      },
+      "redactedPayload": {
+        "artifact": "artifact.txt",
+        "instructions": "Buyer: move intent to plan using planHash real-local-plan-v1. Seller: submit a 1-unit test offer. After human approval move authorize to execute, create artifact.txt in the current workspace with the exact requiredContent, calculate its SHA-256, and submit the deliverable with fileName and artifactHash. Buyer: read artifact.txt, verify exact content and SHA-256, then move deliver to verify. Do not only describe work; use MCP for every durable result.",
+        "requiredContent": "EXORA REAL LOCAL TRANSACTION ACCEPTED\nSELLER WORK COMPLETED\nBUYER VERIFIED ARTIFACT\n",
+        "task": "Complete this local acceptance transaction using Exora MCP."
+      },
+      "idempotencyKey": "real-local-transaction-create",
+      "createdAt": "2026-07-11T11:44:04.919573Z"
+    }
+  ],
+  "duration": "2m42.883s",
+  "failure": "supervisor blocked: agent_no_progress\nbuyer-dock.log: 2026/07/11 19:44:04 [store] restored 0 messages from disk\n2026/07/11 19:44:04 [discovery] manifest written: C:\\Users\\malou\\AppData\\Local\\ExoraDock\\agent-discovery.json, C:\\Users\\malou\\AppData\\Roaming\\ExoraDock\\agent-discovery.json, C:\\Users\\malou\\.exora-dock\\agent-discovery.json\n2026/07/11 19:44:04 [server] listening on 127.0.0.1:62455\n2026/07/11 19:44:04 [wake-v2] typed automation poller enabled for dock real-buyer-dock\n2026/07/11 19:44:04 \"GET http://127.0.0.1:62455/health HTTP/1.1\" from 127.0.0.1:62460 - 200 118B in 0s\n\nseller-dock.log: 2026/07/11 19:44:04 [store] restored 0 messages from disk\n2026/07/11 19:44:04 [discovery] manifest written: C:\\Users\\malou\\AppData\\Local\\ExoraDock\\agent-discovery.json, C:\\Users\\malou\\AppData\\Roaming\\ExoraDock\\agent-discovery.json, C:\\Users\\malou\\.exora-dock\\agent-discovery.json\n2026/07/11 19:44:04 [server] listening on 127.0.0.1:62456\n2026/07/11 19:44:04 [wake-v2] typed automation poller enabled for dock real-seller-dock\n2026/07/11 19:44:04 \"GET http://127.0.0.1:62456/health HTTP/1.1\" from 127.0.0.1:62461 - 200 118B in 0s\n"
+}

@@ -1,0 +1,174 @@
+
+> exora-dock-desktop@0.1.0 dev
+> concurrently -k "npm run dev:frontend" "wait-on http://127.0.0.1:1420 && electron ."
+
+[0] 
+[0] > exora-dock-desktop@0.1.0 dev:frontend
+[0] > vite --host 127.0.0.1 --port 1420
+[0] 
+[0] 
+[0]   [32m[1mVITE[22m v7.3.6[39m  [2mready in [0m[1m210[22m[2m[0m ms[22m
+[0] 
+[0]   [32m➜[39m  [1mLocal[22m:   [36mhttp://127.0.0.1:[1m1420[22m/[39m
+[1] 
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[0] [2m23:55:51[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/main.ts[22m
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[0] [2m23:56:02[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/main.ts[22m
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[0] [2m23:56:53[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/main.ts[22m
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[0] [2m23:57:12[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/main.ts[22m
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[0] [2m23:57:21[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/main.ts[22m
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[0] [2m23:57:28[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/main.ts[22m
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[0] [2m23:57:52[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/main.ts[22m
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[0] [2m23:57:59[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/main.ts[22m
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[0] [2m23:58:07[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/main.ts[22m
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[0] [2m23:59:53[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/main.ts[22m
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[0] [2m00:00:04[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/main.ts[22m
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[0] [2m00:00:31[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/main.ts[22m
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[0] [2m00:01:17[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/i18n.ts[22m
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[1] Error occurred in handler for 'exora:invoke': Error: local dock returned 404: 404 page not found
+[1] 
+[1]     at httpJson (C:\Users\malou\Documents\GitHub\ExoraDock\exora-dock\desktop\electron\main.cjs:2837:27)
+[1]     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+[1]     at async Session.<anonymous> (node:electron/js2c/browser_init:2:107287)
+[1] wait-on http://127.0.0.1:1420 && electron . exited with code 4294967295
+--> Sending SIGTERM to other processes..
+[0] npm run dev:frontend exited with code 1
