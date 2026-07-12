@@ -11,6 +11,14 @@ for (const file of electronScripts(__dirname)) {
   }
 }
 
+const renderer = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.ts'), 'utf8')
+for (const marker of ['function renderV3BuyerSurface', 'function renderV3SellerSurface', "['vm', 'VM']", "['resources', 'Resources']", "['openapi', 'OpenAPI']", "['listings', 'Listings']"]) {
+  if (!renderer.includes(marker)) throw new Error(`V3 Electron surface missing: ${marker}`)
+}
+for (const preserved of ['class="app-shell"', 'class="task-sidebar"', 'data-ledger-list', 'data-order-side-tab="buyer"']) {
+  if (!renderer.includes(preserved)) throw new Error(`existing purple Dock shell was replaced: ${preserved}`)
+}
+
 function electronScripts(root) {
   const files = []
   for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
