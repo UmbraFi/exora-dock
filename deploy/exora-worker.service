@@ -1,0 +1,20 @@
+[Unit]
+Description=Exora privileged KVM provider worker
+After=libvirtd.service network-online.target
+Requires=libvirtd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/exora-worker --socket /run/exora/worker.sock --data-dir /var/lib/exora-worker
+User=root
+Group=root
+RuntimeDirectory=exora
+RuntimeDirectoryMode=0750
+UMask=0007
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

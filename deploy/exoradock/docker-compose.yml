@@ -1,0 +1,14 @@
+services:
+  api:
+    build:
+      context: ../..
+    image: exora-dock-api:local
+    container_name: exora-dock-api
+    restart: unless-stopped
+    environment:
+      EXORA_DATA_DIR: /data
+    ports:
+      - "127.0.0.1:18080:8080"
+    volumes:
+      - ./data:/data
+      - ./config.yaml:/etc/exora-dock/config.yaml:ro

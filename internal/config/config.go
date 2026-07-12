@@ -81,6 +81,7 @@ type DockerConfig struct {
 type SellerAgentConfig struct {
 	Enabled               bool    `yaml:"enabled"`
 	AutoQuote             bool    `yaml:"auto_quote"`
+	QuotePublishMode      string  `yaml:"quote_publish_mode"`
 	AutoAcceptLowRisk     bool    `yaml:"auto_accept_low_risk"`
 	AutoCompleteTextTasks bool    `yaml:"auto_complete_text_tasks"`
 	ProviderPubkey        string  `yaml:"provider_pubkey"`
@@ -284,6 +285,9 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("EXORA_SELLER_AGENT_AUTO_QUOTE"); v != "" {
 		cfg.SellerAgent.AutoQuote = parseBool(v)
 	}
+	if v := os.Getenv("EXORA_SELLER_AGENT_QUOTE_PUBLISH_MODE"); v != "" {
+		cfg.SellerAgent.QuotePublishMode = strings.TrimSpace(v)
+	}
 	if v := os.Getenv("EXORA_SELLER_AGENT_AUTO_ACCEPT_LOW_RISK"); v != "" {
 		cfg.SellerAgent.AutoAcceptLowRisk = parseBool(v)
 	}
@@ -317,6 +321,13 @@ func applyEnv(cfg *Config) {
 }
 
 func applyDerivedDefaults(cfg *Config) {
+	if strings.TrimSpace(cfg.SellerAgent.QuotePublishMode) == "" {
+		if cfg.SellerAgent.AutoQuote {
+			cfg.SellerAgent.QuotePublishMode = "auto"
+		} else {
+			cfg.SellerAgent.QuotePublishMode = "manual_review"
+		}
+	}
 	if strings.TrimSpace(cfg.Mode) == "" {
 		cfg.Mode = "hybrid"
 	}

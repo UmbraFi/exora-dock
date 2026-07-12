@@ -11,6 +11,7 @@ import (
 	"github.com/exora-dock/exora-dock/internal/agentdriver"
 	"github.com/exora-dock/exora-dock/internal/agentsession"
 	"github.com/exora-dock/exora-dock/internal/approval"
+	"github.com/exora-dock/exora-dock/internal/buyerflow"
 	"github.com/exora-dock/exora-dock/internal/cache"
 	"github.com/exora-dock/exora-dock/internal/chat"
 	"github.com/exora-dock/exora-dock/internal/delegation"
@@ -56,6 +57,7 @@ type RuntimeStores struct {
 	CardDiagnostics agentcard.DiagnosticsConfig
 	CardPublisher   agentcard.CloudPublisher
 	WorkRuns        *workrun.Store
+	BuyerFlows      *buyerflow.Store
 	EscrowProgramID string
 	SolanaNetwork   string
 	USDCMint        string
@@ -94,6 +96,7 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 		CardDiagnostics: stores.CardDiagnostics,
 		CardPublisher:   stores.CardPublisher,
 		WorkRuns:        stores.WorkRuns,
+		BuyerFlows:      stores.BuyerFlows,
 		EscrowProgramID: stores.EscrowProgramID,
 		SolanaNetwork:   stores.SolanaNetwork,
 		USDCMint:        stores.USDCMint,
@@ -146,6 +149,26 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 		r.Get("/market/rail-cards", h.MarketRailCards)
 		r.Get("/console/snapshot", h.ConsoleSnapshot)
 		r.Post("/agent/buyer-work", h.CoordinateBuyerWork)
+		r.Post("/buyer-flows", h.CreateBuyerFlow)
+		r.Get("/buyer-flows", h.ListBuyerFlows)
+		r.Get("/buyer-flows/{id}", h.GetBuyerFlow)
+		r.Post("/buyer-flows/{id}/plans/approve", h.ApproveBuyerPlans)
+		r.Post("/buyer-flows/{id}/preparation/start", h.PrepareBuyerBundle)
+		r.Post("/buyer-flows/{id}/bundle/approve", h.ApproveBuyerBundle)
+		r.Post("/buyer-flows/{id}/matching/start", h.StartBuyerMatching)
+		r.Post("/buyer-flows/{id}/seller-quotes", h.SubmitSellerQuote)
+		r.Post("/buyer-flows/{id}/quotes/{quoteId}/select", h.SelectBuyerQuote)
+		r.Post("/buyer-flows/{id}/quotes/{quoteId}/publish", h.PublishSellerQuote)
+		r.Post("/buyer-flows/{id}/quotes/{quoteId}/update", h.UpdateSellerQuote)
+		r.Post("/buyer-flows/{id}/quotes/{quoteId}/withdraw", h.WithdrawSellerQuote)
+		r.Post("/buyer-flows/{id}/review/questions", h.AskBuyerReviewQuestion)
+		r.Post("/buyer-flows/{id}/payment/fund", h.FundBuyerEscrow)
+		r.Post("/buyer-flows/{id}/execution/questions", h.AskBuyerExecutionQuestion)
+		r.Post("/buyer-flows/{id}/execution/questions/{questionId}/answer", h.AnswerBuyerExecutionQuestion)
+		r.Post("/buyer-flows/{id}/execution/deliver", h.DeliverBuyerTask)
+		r.Post("/buyer-flows/{id}/acceptance/decide", h.DecideBuyerAcceptance)
+		r.Post("/buyer-flows/{id}/dispute/resolve", h.ResolveBuyerDispute)
+		r.Post("/buyer-flows/{id}/rating", h.RateBuyerSeller)
 		r.Post("/work-runs", h.CreateWorkRun)
 		r.Get("/work-runs", h.ListWorkRuns)
 		r.Get("/work-runs/{id}", h.GetWorkRun)
@@ -279,6 +302,12 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 		r.Post("/review/submit", h.SubmitReview)
 		r.Post("/review/vote", h.Vote)
 		r.Get("/review/{productID}", h.GetReview)
+	})
+	r.Route("/v3", func(r chi.Router) {
+		r.Get("/catalog/products", h.V3Catalog)
+		r.Get("/catalog/products/{id}", h.V3CatalogProduct)
+		r.HandleFunc("/provider/worker/{command}", h.V3WorkerCommand)
+		r.HandleFunc("/provider/*", h.V3ProviderProxy)
 	})
 
 	return r

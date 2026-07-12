@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, screen, shell, Tray } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell, Tray } = require('electron')
 const { spawn, execFile } = require('node:child_process')
 const crypto = require('node:crypto')
 const fs = require('node:fs')
@@ -18,6 +18,8 @@ const {
   localAgentDriver,
   restoreLocalAgentScanSnapshot,
   scanLocalAgents,
+  scanLocalAgentsGlobal,
+  verifyLocalAgentInstallation,
 } = require('./local-agents.cjs')
 
 const APP_ID = 'io.exora.dock'
@@ -28,6 +30,7 @@ const DEFAULT_PROJECT_NAME = 'AgenStaff'
 const DESKTOP_STATE_NAME = 'desktop-state.json'
 const PERSISTENCE_DIR_NAME = 'exora-data'
 const WORK_MCP_LEASE_LIMIT = 100
+const v3SelectedFiles = new Map()
 const DEV_URL = process.env.EXORA_DOCK_DESKTOP_DEV_URL || 'http://127.0.0.1:1420'
 const WINDOW_ICON = process.platform === 'win32'
   ? path.join(__dirname, 'assets', 'icon.ico')
@@ -47,9 +50,25 @@ app.commandLine.appendSwitch('lang', chromiumLocaleForLanguage(STARTUP_LANGUAGE)
 let mainWindow
 let tray
 let appIsQuitting = false
-let manualWindowDrag
 let localAgentScanInFlight
+let localAgentGlobalScanController
+let localAgentGlobalScanPromise
+let localAgentGlobalScanPaused = false
+let localAgentScanPauseRequested = false
+const localAgentGlobalScanPauseWaiters = []
 const localAgentSessionStreams = new Map()
+const localAgentSessionEventBacklogs = new Map()
+
+if (!app.requestSingleInstanceLock()) {
+  app.exit(0)
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+  })
+}
 const workspaceSnapshotService = createWorkspaceSnapshot({
   dockPaths,
   ensureLocalLayout,
@@ -154,9 +173,6 @@ function createIpcHandlerGroups() {
       window_minimize,
       window_toggle_maximize,
       window_close,
-      window_begin_manual_drag,
-      window_manual_drag_move,
-      window_end_manual_drag,
     },
     dockRuntime: {
       app_status,
@@ -177,6 +193,7 @@ function createIpcHandlerGroups() {
     },
     localWork: {
       workspace_snapshot,
+      buyer_flow_action,
       create_work_mcp_uid,
       release_work_mcp_lease,
       stop_work_run,
@@ -214,6 +231,24 @@ function createIpcHandlerGroups() {
     pwaLink: {
       pwa_link_start,
       pwa_link_status,
+    },
+    v3Market: {
+      catalog_products,
+      catalog_product,
+      provider_vm_probe,
+      provider_vm_domains,
+      provider_vm_import,
+      provider_vm_validate,
+      provider_product_create,
+      provider_asset_choose_files,
+      provider_asset_create,
+      provider_asset_upload,
+      provider_asset_cancel,
+      provider_openapi_choose,
+      provider_openapi_import,
+      provider_listings,
+      provider_listing_save,
+      provider_listing_action,
     },
     llmAndSeller: {
       seller_settings,
@@ -273,36 +308,6 @@ async function window_toggle_maximize() {
 
 async function window_close() {
   mainWindow?.hide()
-}
-
-async function window_begin_manual_drag() {
-  if (!mainWindow || mainWindow.isDestroyed()) return false
-  if (mainWindow.isMaximized()) return false
-  manualWindowDrag = {
-    cursor: screen.getCursorScreenPoint(),
-    bounds: mainWindow.getBounds(),
-  }
-  return true
-}
-
-async function window_manual_drag_move() {
-  moveManualWindowDrag()
-  return true
-}
-
-async function window_end_manual_drag() {
-  manualWindowDrag = undefined
-  return true
-}
-
-function moveManualWindowDrag() {
-  if (!manualWindowDrag || !mainWindow || mainWindow.isDestroyed()) return
-  const cursor = screen.getCursorScreenPoint()
-  mainWindow.setPosition(
-    Math.round(manualWindowDrag.bounds.x + cursor.x - manualWindowDrag.cursor.x),
-    Math.round(manualWindowDrag.bounds.y + cursor.y - manualWindowDrag.cursor.y),
-    false,
-  )
 }
 
 async function app_status() {
@@ -684,9 +689,10 @@ async function local_agent_snapshot() {
   return localAgentSnapshotResponse(paths)
 }
 
-async function local_agent_scan() {
+async function local_agent_scan(_payload = {}, event) {
   if (localAgentScanInFlight) return localAgentScanInFlight
-  const scanPromise = performLocalAgentScan()
+  localAgentScanPauseRequested = false
+  const scanPromise = performLocalAgentScan(event?.sender)
   localAgentScanInFlight = scanPromise
   try {
     return await scanPromise
@@ -695,44 +701,163 @@ async function local_agent_scan() {
   }
 }
 
-async function performLocalAgentScan() {
+async function local_agent_scan_restart(_payload = {}, event) {
+  localAgentScanPauseRequested = false
+  localAgentGlobalScanPaused = false
+  for (const resolve of localAgentGlobalScanPauseWaiters.splice(0)) resolve()
+  localAgentGlobalScanController?.abort()
+  if (localAgentGlobalScanPromise) await localAgentGlobalScanPromise.catch(() => undefined)
+  if (localAgentScanInFlight) await localAgentScanInFlight.catch(() => undefined)
+  localAgentGlobalScanController?.abort()
+  if (localAgentGlobalScanPromise) await localAgentGlobalScanPromise.catch(() => undefined)
+  return local_agent_scan({}, event)
+}
+
+function local_agent_scan_pause() {
+  if (!localAgentGlobalScanController || localAgentGlobalScanController.signal.aborted) {
+    if (localAgentScanInFlight) {
+      localAgentScanPauseRequested = true
+      return { paused: true, indexing: true }
+    }
+    return { paused: false, indexing: false }
+  }
+  localAgentScanPauseRequested = true
+  localAgentGlobalScanPaused = true
+  return { paused: true, indexing: true }
+}
+
+async function local_agent_scan_resume(_payload = {}, event) {
+  if (localAgentGlobalScanController && !localAgentGlobalScanController.signal.aborted) {
+    localAgentScanPauseRequested = false
+    localAgentGlobalScanPaused = false
+    const waiters = localAgentGlobalScanPauseWaiters.splice(0)
+    for (const resolve of waiters) resolve()
+    return { paused: false, indexing: true }
+  }
+  if (localAgentScanInFlight) {
+    localAgentScanPauseRequested = false
+    return { paused: false, indexing: true }
+  }
+  const result = await local_agent_scan({}, event)
+  return { ...result, paused: false }
+}
+
+function waitWhileLocalAgentScanPaused(signal) {
+  if (!localAgentGlobalScanPaused || signal?.aborted) return Promise.resolve()
+  return new Promise((resolve) => {
+    const done = () => resolve()
+    localAgentGlobalScanPauseWaiters.push(done)
+    signal?.addEventListener('abort', done, { once: true })
+  })
+}
+
+async function performLocalAgentScan(sender) {
   const paths = await dockPaths()
   await ensurePersistenceLayout(paths)
+  const emptySnapshot = createLocalAgentScanSnapshot({ agents: [], scannedAt: new Date().toISOString(), index: { backend: 'full-scan-fallback', journalCursors: {} } })
+  await writeJsonAtomic(paths.localAgentScanPath, emptySnapshot)
   const result = await scanLocalAgents()
-  const snapshot = createLocalAgentScanSnapshot(result)
+  const snapshot = createLocalAgentScanSnapshot({ ...result, index: { backend: 'full-scan-fallback', journalCursors: {} } })
   await writeJsonAtomic(paths.localAgentScanPath, snapshot)
-  return localAgentSnapshotResponse(paths, snapshot)
+  localAgentGlobalScanController?.abort()
+  localAgentGlobalScanPaused = localAgentScanPauseRequested
+  for (const resolve of localAgentGlobalScanPauseWaiters.splice(0)) resolve()
+  const controller = new AbortController()
+  localAgentGlobalScanController = controller
+  const continuation = continueLocalAgentGlobalScan(paths, snapshot, sender, controller)
+  localAgentGlobalScanPromise = continuation
+  void continuation
+  return { ...(await localAgentSnapshotResponse(paths, snapshot)), indexing: process.platform === 'win32', indexMode: process.platform === 'win32' ? 'background-full-scan' : 'quick-scan' }
+}
+
+async function continueLocalAgentGlobalScan(paths, quickSnapshot, sender, controller) {
+  try {
+    const global = await scanLocalAgentsGlobal({
+      signal: controller.signal,
+      waitWhilePaused: () => waitWhileLocalAgentScanPaused(controller.signal),
+      onProgress: async (progress) => {
+        if (controller.signal.aborted || localAgentGlobalScanController !== controller) return
+        const checkpoint = await persistLocalAgentScanCheckpoint(paths, quickSnapshot, progress.agents || [])
+        if (controller.signal.aborted || localAgentGlobalScanController !== controller) return
+        sendLocalAgentScanEvent(sender, { type: 'scan_progress', found: checkpoint.agents.length, visitedDirectories: progress.visitedDirectories, volume: progress.volume, progress: progress.progress, snapshot: await localAgentSnapshotResponse(paths, checkpoint) })
+      },
+    })
+    if (controller.signal.aborted) return
+    const current = await readLocalAgentScanSnapshot(paths) || quickSnapshot
+    const merged = new Map(current.agents.map((agent) => [agent.installationId, agent]))
+    for (const agent of global.agents) {
+      const previous = merged.get(agent.installationId)
+      merged.set(agent.installationId, previous ? { ...agent, discoveredAt: previous.discoveredAt, ...(previous.verificationState === 'verified' && previous.fingerprint === agent.fingerprint ? {
+        status: previous.status, authState: previous.authState, version: previous.version, verificationState: previous.verificationState, lastVerifiedAt: previous.lastVerifiedAt,
+      } : {}) } : agent)
+    }
+    const snapshot = createLocalAgentScanSnapshot({ agents: [...merged.values()], scannedAt: global.scannedAt, index: global.index })
+    await writeJsonAtomic(paths.localAgentScanPath, snapshot)
+    sendLocalAgentScanEvent(sender, { type: 'scan_complete', snapshot: await localAgentSnapshotResponse(paths, snapshot), visitedDirectories: global.visitedDirectories || 0 })
+  } catch (error) {
+    if (!controller.signal.aborted) sendLocalAgentScanEvent(sender, { type: 'scan_failed', error: errorMessage(error) })
+  } finally {
+    if (localAgentGlobalScanController === controller) {
+      localAgentGlobalScanController = undefined
+      localAgentGlobalScanPromise = undefined
+      localAgentGlobalScanPaused = false
+      localAgentScanPauseRequested = false
+      for (const resolve of localAgentGlobalScanPauseWaiters.splice(0)) resolve()
+    }
+  }
+}
+
+async function persistLocalAgentScanCheckpoint(paths, fallbackSnapshot, discoveredAgents) {
+  const current = await readLocalAgentScanSnapshot(paths) || fallbackSnapshot
+  const merged = new Map(current.agents.map((agent) => [agent.installationId, agent]))
+  for (const agent of discoveredAgents) {
+    const previous = merged.get(agent.installationId)
+    merged.set(agent.installationId, previous ? { ...agent, discoveredAt: previous.discoveredAt, ...(previous.verificationState === 'verified' && previous.fingerprint === agent.fingerprint ? {
+      status: previous.status, authState: previous.authState, version: previous.version, verificationState: previous.verificationState, lastVerifiedAt: previous.lastVerifiedAt,
+    } : {}) } : agent)
+  }
+  const snapshot = createLocalAgentScanSnapshot({ agents: [...merged.values()].slice(0, 512), scannedAt: new Date().toISOString(), index: current.index })
+  await writeJsonAtomic(paths.localAgentScanPath, snapshot)
+  return snapshot
+}
+
+function sendLocalAgentScanEvent(sender, event) {
+  if (sender && !sender.isDestroyed()) sender.send('exora:local-agent-event', Object.freeze({ scope: 'local-agent-scan', ...event }))
 }
 
 async function localAgentSnapshotResponse(paths, providedSnapshot) {
   const snapshot = providedSnapshot || await readLocalAgentScanSnapshot(paths)
-  const storedBinding = await readLocalAgentBinding(paths)
+  const bindings = await readLocalAgentBindings(paths)
   const agents = (snapshot?.agents || []).map((agent) => ({
     ...agent,
-    bound: storedBinding?.driverId === agent.driverId,
+    bound: Object.values(bindings).some((binding) => binding?.installationId === agent.installationId),
+    boundRoles: ['buyer', 'seller'].filter((role) => bindings[role]?.installationId === agent.installationId),
   }))
-  const selectedAgent = storedBinding
-    ? agents.find((agent) => agent.driverId === storedBinding.driverId)
-    : undefined
   return {
     agents,
-    binding: presentLocalAgentBinding(storedBinding, selectedAgent),
+    binding: presentLocalAgentBinding(bindings.buyer, agents.find((agent) => agent.installationId === bindings.buyer?.installationId)),
+    bindings: Object.fromEntries(['buyer', 'seller'].map((role) => [role, presentLocalAgentBinding(bindings[role], agents.find((agent) => agent.installationId === bindings[role]?.installationId))])),
     scannedAt: snapshot?.scannedAt || null,
     hasSnapshot: Boolean(snapshot),
+    indexing: Boolean(localAgentGlobalScanController && !localAgentGlobalScanController.signal.aborted),
+    paused: Boolean(localAgentGlobalScanController && localAgentGlobalScanPaused),
   }
 }
 
-async function local_agent_binding() {
+async function local_agent_binding(payload = {}) {
+  const role = normalizeLocalAgentRole(objectOr(payload.input || payload).role || 'buyer')
   const paths = await dockPaths()
   await ensurePersistenceLayout(paths)
   const snapshot = await readLocalAgentScanSnapshot(paths)
-  const storedBinding = await readLocalAgentBinding(paths)
+  const bindings = await readLocalAgentBindings(paths)
+  const storedBinding = bindings[role]
   if (!storedBinding) {
-    return { binding: null, agent: null, checkedAt: snapshot?.scannedAt || null }
+    return { binding: null, bindings: presentLocalAgentBindings(bindings, snapshot), agent: null, checkedAt: snapshot?.scannedAt || null }
   }
-  const agent = snapshot?.agents.find((candidate) => candidate.driverId === storedBinding.driverId)
+  const agent = snapshot?.agents.find((candidate) => candidate.installationId === storedBinding.installationId)
   return {
     binding: presentLocalAgentBinding(storedBinding, agent),
+    bindings: presentLocalAgentBindings(bindings, snapshot),
     agent: agent ? { ...agent, bound: true } : null,
     checkedAt: snapshot?.scannedAt || null,
   }
@@ -741,40 +866,45 @@ async function local_agent_binding() {
 async function bind_local_agent(payload = {}) {
   const input = objectOr(payload.input || payload)
   const inputKeys = Object.keys(input)
-  if (inputKeys.some((key) => key !== 'driverId')) {
-    throw new Error('Local agent binding only accepts a built-in driver ID.')
+  if (inputKeys.some((key) => key !== 'installationId' && key !== 'role')) {
+    throw new Error('Local agent binding only accepts a role and discovered installation ID.')
   }
-  const driverId = String(input.driverId || '').trim()
-  const driver = localAgentDriver(driverId)
-  if (!driver) throw new Error('Unknown local agent driver.')
-  if (!driver.bindable) throw new Error(`${driver.name} can currently be detected but not bound.`)
+  const installationId = String(input.installationId || '').trim()
+  const role = normalizeLocalAgentRole(input.role)
 
   const paths = await dockPaths()
   await ensurePersistenceLayout(paths)
   const snapshot = await readLocalAgentScanSnapshot(paths)
   if (!snapshot) throw new Error('Scan local agents before choosing a binding.')
-  const agent = cachedLocalAgentForBinding(snapshot, driverId)
-  if (!agent?.installed) throw new Error(`${driver.name} was not found on this computer.`)
-  if (agent.status === 'login_required') {
-    throw new Error(`Sign in to ${driver.name}, then scan again.`)
-  }
-  if (!localAgentCanBind(agent)) {
-    throw new Error(`${driver.name} could not be verified and was not bound.`)
-  }
+  const discoveredAgent = cachedLocalAgentForBinding(snapshot, installationId)
+  if (!discoveredAgent) throw new Error('The selected local Agent installation was not found in the saved scan.')
+  const driver = localAgentDriver(discoveredAgent.driverId)
+  if (!driver?.bindable) throw new Error(`${driver?.name || discoveredAgent.driverId} can currently be detected but not bound.`)
+  const agent = await verifyLocalAgentInstallation(discoveredAgent)
+  const updatedSnapshot = createLocalAgentScanSnapshot({ ...snapshot, agents: snapshot.agents.map((candidate) => candidate.installationId === installationId ? agent : candidate), scannedAt: snapshot.scannedAt, index: snapshot.index })
+  await writeJsonAtomic(paths.localAgentScanPath, updatedSnapshot)
+  if (agent.status === 'login_required') throw new Error(`Sign in to ${driver.name}, then bind this installation again.`)
+  if (!localAgentCanBind(agent)) throw new Error(`${driver.name} could not be verified and was not bound.`)
 
-  const current = await readLocalAgentBinding(paths)
+  const current = await readLocalAgentBinding(paths, role)
   const selectedAt = new Date().toISOString()
   const binding = {
-    bindingId: current?.driverId === driverId ? current.bindingId : `local-agent-${crypto.randomUUID()}`,
-    driverId,
-    executablePath: agent.executablePath,
+    bindingId: current?.installationId === installationId ? current.bindingId : `local-agent-${crypto.randomUUID()}`,
+    installationId,
+    driverId: agent.driverId,
+    executablePath: agent.resolvedTargetPath || agent.executablePath,
+    resolvedTargetPath: agent.resolvedTargetPath || '',
+    fingerprint: agent.resolvedTargetFingerprint || agent.fingerprint,
+    source: agent.source,
     version: agent.version || '',
-    boundAt: current?.driverId === driverId ? current.boundAt : selectedAt,
-    lastVerifiedAt: snapshot.scannedAt,
+    boundAt: current?.installationId === installationId ? current.boundAt : selectedAt,
+    lastVerifiedAt: selectedAt,
   }
-  await writeLocalAgentBinding(paths, binding)
+  await writeLocalAgentBinding(paths, role, binding)
+  const bindings = await readLocalAgentBindings(paths)
   return {
     binding: presentLocalAgentBinding(binding, agent),
+    bindings: presentLocalAgentBindings(bindings, updatedSnapshot),
     agent: { ...agent, bound: true },
   }
 }
@@ -783,16 +913,78 @@ async function readLocalAgentScanSnapshot(paths) {
   return restoreLocalAgentScanSnapshot(await readJsonOr(paths.localAgentScanPath, null))
 }
 
-async function unbind_local_agent() {
+async function unbind_local_agent(payload = {}) {
+  const role = normalizeLocalAgentRole(objectOr(payload.input || payload).role)
   const paths = await dockPaths()
   await ensurePersistenceLayout(paths)
-  await fsp.rm(paths.localAgentBindingPath, { force: true })
-  return { unbound: true }
+  const bindings = await readLocalAgentBindings(paths)
+  delete bindings[role]
+  await writeLocalAgentBindings(paths, bindings)
+  return { unbound: true, role }
+}
+
+const localAgentModelCache = new Map()
+
+async function local_agent_models(payload = {}) {
+  const role = normalizeLocalAgentRole(objectOr(payload.input || payload).role || 'buyer')
+  const paths = await dockPaths()
+  const binding = await readLocalAgentBinding(paths, role)
+  if (!binding) throw new Error('Bind a local Agent before loading models.')
+  if (binding.driverId !== 'codex') return { driverId: binding.driverId, models: [], selectedModel: '' }
+  const key = `${binding.bindingId}:${binding.fingerprint}`
+  if (localAgentModelCache.has(key)) return localAgentModelCache.get(key)
+  const models = await codexAppServerModels(binding.executablePath)
+  const result = { driverId: binding.driverId, models, selectedModel: models.find((model) => model.isDefault)?.id || models[0]?.id || '' }
+  localAgentModelCache.set(key, result)
+  return result
+}
+
+function codexAppServerModels(executablePath) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(executablePath, ['app-server', '--stdio'], { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true, shell: false })
+    let buffer = ''
+    let settled = false
+    const finish = (error, value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      child.kill()
+      error ? reject(error) : resolve(value)
+    }
+    const send = (value) => child.stdin.write(`${JSON.stringify(value)}\n`)
+    child.on('error', (error) => finish(error))
+    child.stdout.on('data', (chunk) => {
+      buffer += chunk.toString('utf8')
+      let newline
+      while ((newline = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, newline).trim()
+        buffer = buffer.slice(newline + 1)
+        let message
+        try { message = JSON.parse(line) } catch { continue }
+        if (message.id === 1) {
+          if (message.error) return finish(new Error(message.error.message || 'Codex initialize failed.'))
+          send({ method: 'initialized', params: {} })
+          send({ id: 2, method: 'model/list', params: { includeHidden: false, limit: 100 } })
+        } else if (message.id === 2) {
+          if (message.error) return finish(new Error(message.error.message || 'Codex model/list failed.'))
+          const models = Array.isArray(message.result?.data) ? message.result.data.map((model) => ({
+            id: String(model.id || model.model || ''), displayName: String(model.displayName || model.id || ''),
+            description: String(model.description || ''), isDefault: Boolean(model.isDefault),
+            supportedReasoningEfforts: Array.isArray(model.supportedReasoningEfforts) ? model.supportedReasoningEfforts.map((item) => String(item?.reasoningEffort || '')).filter((value) => /^[a-z]{1,16}$/.test(value)) : [],
+            defaultReasoningEffort: String(model.defaultReasoningEffort || ''),
+          })).filter((model) => /^[A-Za-z0-9._-]{1,100}$/.test(model.id)) : []
+          finish(null, models)
+        }
+      }
+    })
+    const timer = setTimeout(() => finish(new Error('Codex model list timed out.')), 15000)
+    send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'exora-dock', title: 'Exora Dock', version: '2.0.0' } } })
+  })
 }
 
 async function local_agent_session_start(payload = {}) {
   const input = objectOr(payload.input || payload)
-  assertLocalAgentSessionInput(input, ['conversationId', 'role', 'purpose', 'workspace', 'permissionMode', 'transactionId', 'runId', 'workUid', 'idempotencyKey'])
+  assertLocalAgentSessionInput(input, ['conversationId', 'role', 'purpose', 'workspace', 'permissionMode', 'model', 'reasoningEffort', 'transactionId', 'runId', 'workUid', 'idempotencyKey'])
   const conversationId = cleanLocalAgentIdentifier(input.conversationId, 'conversationId')
   const role = String(input.role || '').trim().toLowerCase()
   if (role !== 'buyer' && role !== 'seller') throw new Error('Local agent session role must be buyer or seller.')
@@ -804,7 +996,7 @@ async function local_agent_session_start(payload = {}) {
   const paths = await dockPaths()
   await ensurePersistenceLayout(paths)
   await ensureDockReady()
-  const binding = await readLocalAgentBinding(paths)
+  const binding = await readLocalAgentBinding(paths, role)
   if (!binding) throw new Error('Bind a local Agent in Settings before connecting this chat.')
   const driver = localAgentDriver(binding.driverId)
   if (!driver?.bindable || driver.protocolState === 'unsupported' || driver.protocolState === 'limited') {
@@ -812,6 +1004,18 @@ async function local_agent_session_start(payload = {}) {
   }
   if (!binding.executablePath || !path.isAbsolute(binding.executablePath) || !fs.existsSync(binding.executablePath)) {
     throw new Error('The saved local Agent executable is unavailable. Scan and bind it again.')
+  }
+  const currentStat = fs.statSync(binding.executablePath)
+  if (binding.fingerprint && binding.fingerprint !== `${currentStat.size}:${Math.trunc(currentStat.mtimeMs)}`) {
+    throw new Error('The bound local Agent executable changed. Scan and bind this installation again.')
+  }
+  const requestedModel = String(input.model || '').trim()
+  const requestedReasoningEffort = String(input.reasoningEffort || '').trim().toLowerCase()
+  if (requestedModel) {
+    const catalog = await local_agent_models()
+    const selectedModel = catalog.models.find((model) => model.id === requestedModel)
+    if (!selectedModel) throw new Error('The selected model is not available for this bound Agent.')
+    if (requestedReasoningEffort && !selectedModel.supportedReasoningEfforts.includes(requestedReasoningEffort)) throw new Error('The selected reasoning effort is not supported by this model.')
   }
   const workspace = normalizeProjectPath(paths, input.workspace || '') || (await activeProjectFolder(paths)).path
   const allowedFolders = await readProjectFolders(paths)
@@ -833,6 +1037,8 @@ async function local_agent_session_start(payload = {}) {
     workspace,
     permissionMode: normalizeLocalAgentPermissionMode(input.permissionMode),
     permissionProfile: localAgentPermissionProfile(input.permissionMode),
+    model: requestedModel,
+    reasoningEffort: requestedReasoningEffort,
     transactionId,
     runId: String(input.runId || '').trim(),
     workUid: String(input.workUid || '').trim(),
@@ -899,6 +1105,15 @@ async function local_agent_session_subscribe(payload = {}, event) {
   return { subscribed: true, sessionId }
 }
 
+async function local_agent_session_events(payload = {}) {
+  const input = objectOr(payload.input || payload)
+  assertLocalAgentSessionInput(input, ['sessionId', 'after'])
+  const sessionId = cleanLocalAgentIdentifier(input.sessionId, 'sessionId')
+  const after = Math.max(0, Number.parseInt(String(input.after || '0'), 10) || 0)
+  const events = (localAgentSessionEventBacklogs.get(sessionId) || []).filter((item) => Number(item?.seq || 0) > after)
+  return { sessionId, events }
+}
+
 async function local_agent_session_unsubscribe(payload = {}) {
   const input = objectOr(payload.input || payload)
   assertLocalAgentSessionInput(input, ['sessionId'])
@@ -931,6 +1146,10 @@ async function forwardLocalAgentSessionStream(sessionId, after, controller, send
         if (!data) continue
         let parsed
         try { parsed = JSON.parse(data) } catch { continue }
+        const backlog = localAgentSessionEventBacklogs.get(sessionId) || []
+        backlog.push(parsed)
+        if (backlog.length > 2000) backlog.splice(0, backlog.length - 2000)
+        localAgentSessionEventBacklogs.set(sessionId, backlog)
         if (sender && !sender.isDestroyed()) sender.send('exora:local-agent-event', Object.freeze({ sessionId, event: parsed }))
       }
     }
@@ -983,36 +1202,91 @@ function localAgentCanBind(agent) {
   )
 }
 
-async function readLocalAgentBinding(paths) {
+function normalizeLocalAgentRole(value) {
+  const role = String(value || '').trim().toLowerCase()
+  if (role !== 'buyer' && role !== 'seller') throw new Error('Local Agent role must be buyer or seller.')
+  return role
+}
+
+async function readLocalAgentBindings(paths) {
   const document = objectOr(await readJsonOr(paths.localAgentBindingPath, {}))
-  const input = objectOr(document.binding || document)
+  const legacy = objectOr(document.binding || (document.driverId ? document : {}))
+  const inputs = document.bindings && typeof document.bindings === 'object'
+    ? objectOr(document.bindings)
+    : Object.keys(legacy).length ? { buyer: legacy, seller: legacy } : {}
+  const bindings = {}
+  for (const role of ['buyer', 'seller']) {
+    const binding = await normalizeStoredLocalAgentBinding(paths, objectOr(inputs[role]))
+    if (binding) bindings[role] = binding
+  }
+  return bindings
+}
+
+async function readLocalAgentBinding(paths, role = 'buyer') {
+  return (await readLocalAgentBindings(paths))[normalizeLocalAgentRole(role)]
+}
+
+async function normalizeStoredLocalAgentBinding(paths, input) {
   const driver = localAgentDriver(input.driverId)
   if (!driver) return undefined
   const executablePath = String(input.executablePath || '').trim()
+  let installationId = String(input.installationId || '').trim()
+  if (!/^agent-installation-[a-f0-9]{32}$/.test(installationId)) {
+    const snapshot = await readLocalAgentScanSnapshot(paths)
+    installationId = snapshot?.agents.find((agent) => sameResolvedPath(agent.executablePath, executablePath))?.installationId || ''
+  }
   return {
     bindingId: /^local-agent-[0-9a-f-]{36}$/i.test(String(input.bindingId || ''))
       ? String(input.bindingId)
       : `local-agent-${crypto.randomUUID()}`,
     driverId: driver.id,
+    installationId,
     executablePath: path.isAbsolute(executablePath) ? executablePath : '',
+    resolvedTargetPath: path.isAbsolute(String(input.resolvedTargetPath || '')) ? String(input.resolvedTargetPath) : '',
+    fingerprint: String(input.fingerprint || '').trim().slice(0, 128),
+    source: String(input.source || '').trim().slice(0, 80),
     version: String(input.version || '').trim().slice(0, 160),
     boundAt: validIsoOrNow(input.boundAt),
     lastVerifiedAt: validIsoOrNow(input.lastVerifiedAt || input.boundAt),
   }
 }
 
-async function writeLocalAgentBinding(paths, binding) {
-  await writeJsonAtomic(paths.localAgentBindingPath, {
-    version: 1,
-    binding: {
+async function writeLocalAgentBinding(paths, role, binding) {
+  const bindings = await readLocalAgentBindings(paths)
+  bindings[normalizeLocalAgentRole(role)] = binding
+  await writeLocalAgentBindings(paths, bindings)
+}
+
+async function writeLocalAgentBindings(paths, bindings) {
+  const persisted = {}
+  for (const role of ['buyer', 'seller']) {
+    const binding = bindings[role]
+    if (!binding) continue
+    persisted[role] = {
       bindingId: binding.bindingId,
+      installationId: binding.installationId,
       driverId: binding.driverId,
       executablePath: binding.executablePath,
+      resolvedTargetPath: binding.resolvedTargetPath || '',
+      fingerprint: binding.fingerprint || '',
+      source: binding.source || '',
       version: binding.version || '',
       boundAt: binding.boundAt,
       lastVerifiedAt: binding.lastVerifiedAt,
-    },
+    }
+  }
+  await writeJsonAtomic(paths.localAgentBindingPath, {
+    version: 3,
+    bindings: persisted,
   })
+}
+
+function presentLocalAgentBindings(bindings, snapshot) {
+  return Object.fromEntries(['buyer', 'seller'].map((role) => {
+    const binding = bindings[role]
+    const agent = snapshot?.agents?.find((candidate) => candidate.installationId === binding?.installationId)
+    return [role, presentLocalAgentBinding(binding, agent)]
+  }))
 }
 
 function presentLocalAgentBinding(binding, agent) {
@@ -1022,9 +1296,11 @@ function presentLocalAgentBinding(binding, agent) {
   return {
     bindingId: binding.bindingId,
     driverId: driver.id,
+    installationId: binding.installationId,
     name: driver.name,
     vendor: driver.vendor,
     executablePath: agent?.executablePath || binding.executablePath,
+    source: agent?.source || binding.source || '',
     version: agent?.version || binding.version || '',
     protocol: driver.protocol,
     protocolState: driver.protocolState,
@@ -1438,6 +1714,39 @@ async function list_order_plans() {
 
 async function workspace_snapshot() {
   return workspaceSnapshotService.snapshot()
+}
+
+async function buyer_flow_action(payload = {}) {
+  const input = objectOr(payload.input || payload)
+  const paths = await dockPaths()
+  await ensureLocalLayout(paths)
+  await ensureDockReady()
+  const token = await localOwnerToken(paths)
+  const flowId = encodeURIComponent(String(input.flowId || '').trim())
+  const quoteId = encodeURIComponent(String(input.quoteId || '').trim())
+  const questionId = encodeURIComponent(String(input.questionId || '').trim())
+  const routes = {
+    create: ['/v1/buyer-flows', input.body],
+    approve_plans: [`/v1/buyer-flows/${flowId}/plans/approve`, {}],
+    prepare: [`/v1/buyer-flows/${flowId}/preparation/start`, {}],
+    approve_bundle: [`/v1/buyer-flows/${flowId}/bundle/approve`, {}],
+    start_matching: [`/v1/buyer-flows/${flowId}/matching/start`, {}],
+    select_quote: [`/v1/buyer-flows/${flowId}/quotes/${quoteId}/select`, {}],
+    publish_quote: [`/v1/buyer-flows/${flowId}/quotes/${quoteId}/publish`, {}],
+    update_quote: [`/v1/buyer-flows/${flowId}/quotes/${quoteId}/update`, input.quote],
+    withdraw_quote: [`/v1/buyer-flows/${flowId}/quotes/${quoteId}/withdraw`, {}],
+    review_question: [`/v1/buyer-flows/${flowId}/review/questions`, { sellerId: input.sellerId, prompt: input.prompt, options: input.options }],
+    fund: [`/v1/buyer-flows/${flowId}/payment/fund`, { paymentPin: input.paymentPin || '' }],
+    answer_question: [`/v1/buyer-flows/${flowId}/execution/questions/${questionId}/answer`, { answer: input.answer || '' }],
+    simulate_question: [`/v1/buyer-flows/${flowId}/execution/questions`, { prompt: input.prompt || '请选择交付格式', options: input.options || [{ label: 'Markdown', value: 'markdown' }, { label: 'PDF', value: 'pdf' }] }],
+    simulate_delivery: [`/v1/buyer-flows/${flowId}/execution/deliver`, { artifacts: input.artifacts || ['delivery/report.md'], summary: input.summary || 'Local protocol seller completed the approved task.' }],
+    decide_acceptance: [`/v1/buyer-flows/${flowId}/acceptance/decide`, { decision: input.decision, note: input.note || '' }],
+    resolve_dispute: [`/v1/buyer-flows/${flowId}/dispute/resolve`, { resolution: input.resolution }],
+    rate: [`/v1/buyer-flows/${flowId}/rating`, { stars: input.stars, comment: input.comment || '' }],
+  }
+  const selected = routes[String(input.action || '')]
+  if (!selected) throw new Error('Unsupported buyer flow action')
+  return httpJson('POST', selected[0], selected[1], token)
 }
 
 async function create_work_mcp_uid(payload = {}) {
@@ -2220,6 +2529,18 @@ function normalizeConversationThread(thread) {
     status: String(value.status || '').trim() || undefined,
     participants: participants.length ? participants : undefined,
     providerPubkey: String(value.providerPubkey || '').trim() || undefined,
+    agentSessionId: String(value.agentSessionId || '').trim() || undefined,
+    agentDriverId: String(value.agentDriverId || '').trim() || undefined,
+    agentEventCursor: Math.max(0, Number(value.agentEventCursor || 0) || 0),
+    pendingBuyerQuestion: value.pendingBuyerQuestion && typeof value.pendingBuyerQuestion === 'object' && !Array.isArray(value.pendingBuyerQuestion)
+      ? value.pendingBuyerQuestion
+      : undefined,
+    buyerPlanReview: value.buyerPlanReview && typeof value.buyerPlanReview === 'object' && !Array.isArray(value.buyerPlanReview)
+      ? value.buyerPlanReview
+      : undefined,
+    buyerPlanReviewStatus: value.buyerPlanReviewStatus === 'confirmed'
+      ? 'confirmed'
+      : value.buyerPlanReview ? 'pending' : undefined,
   }
 }
 
@@ -2548,6 +2869,7 @@ function sellerSettingsFromYaml(raw) {
   return {
     enabled: boolAt(seller, 'enabled', false),
     autoQuote: boolAt(seller, 'auto_quote', true),
+    quotePublishMode: stringAt(seller,'quote_publish_mode',boolAt(seller,'auto_quote',true)?'auto':'manual_review'),
     autoAcceptLowRisk: boolAt(seller, 'auto_accept_low_risk', boolAt(seller, 'auto_complete_text_tasks', false)),
     autoCompleteTextTasks: boolAt(seller, 'auto_complete_text_tasks', false),
     llmBaseUrl,
@@ -2852,7 +3174,9 @@ function updateSellerSettingsYaml(raw, input) {
   const value = objectOr(YAML.parse(raw) || {})
   value.seller_agent = objectOr(value.seller_agent)
   value.seller_agent.enabled = Boolean(input.enabled)
-  value.seller_agent.auto_quote = Boolean(input.autoQuote)
+  const quotePublishMode = input.quotePublishMode === 'manual_review' ? 'manual_review' : 'auto'
+  value.seller_agent.quote_publish_mode = quotePublishMode
+  value.seller_agent.auto_quote = quotePublishMode === 'auto'
   value.seller_agent.auto_accept_low_risk = Boolean(input.autoAcceptLowRisk ?? input.autoCompleteTextTasks)
   delete value.seller_agent.auto_complete_text_tasks
   value.seller_agent.provider_pubkey = String(input.providerId || '').trim()
@@ -3183,6 +3507,7 @@ llm_model: "gpt-5.5"
 seller_agent:
   enabled: false
   auto_quote: true
+  quote_publish_mode: auto
   auto_accept_low_risk: false
   provider_pubkey: ""
   poll_interval_sec: 2
@@ -3227,6 +3552,117 @@ function authPathForConfig(paths) {
   }
   const authPath = stringAt(value, 'auth_token_path', '')
   return authPath.trim() ? authPath : path.join(paths.dataDir, 'auth.json')
+}
+
+async function catalog_products(payload = {}) {
+  const q = String(payload?.input?.query || '').trim()
+  return httpJson('GET', `/v3/catalog/products${q ? `?q=${encodeURIComponent(q)}` : ''}`, undefined, await localOwnerToken(await dockPaths()))
+}
+
+async function catalog_product(payload = {}) {
+  return httpJson('GET', `/v3/catalog/products/${encodeURIComponent(String(payload?.input?.id || ''))}`, undefined, await localOwnerToken(await dockPaths()))
+}
+
+async function v3Worker(command, input = {}) {
+  return httpJson('POST', `/v3/provider/worker/${encodeURIComponent(command)}`, input, await localOwnerToken(await dockPaths()), { timeoutMs: 180000 })
+}
+async function provider_vm_probe() { return v3Worker('probe_host') }
+async function provider_vm_domains() { return v3Worker('list_domains') }
+async function provider_vm_import(payload = {}) { return v3Worker('import_template', payload.input || {}) }
+async function provider_vm_validate(payload = {}) {
+  const input = payload.input || {}
+  const templateId = String(input.templateId || '')
+  const workspaceBytes = Math.max(1, Number(input.workspaceGiB || 100)) * 1024 * 1024 * 1024
+  mainWindow?.webContents.send('exora:v3-progress', { kind: 'vm_validation', phase: 'template' })
+  const checked = await v3Worker('validate_template', { templateId })
+  if (!checked?.result?.valid) throw new Error('Template validation failed')
+  mainWindow?.webContents.send('exora:v3-progress', { kind: 'vm_validation', phase: 'reserve_disk' })
+  const reservation = await v3Worker('reserve_disk', { slotId: `slot-${templateId}`, sizeBytes: workspaceBytes })
+  const cloneId = `validation-${Date.now()}`
+  mainWindow?.webContents.send('exora:v3-progress', { kind: 'vm_validation', phase: 'encrypted_clone' })
+  const clone = await v3Worker('create_test_clone', { templateId, cloneId })
+  const reset = await v3Worker('reset_test_clone', { cloneId })
+  return { result: { ...checked.result, reservation: reservation.result, testClone: clone.result, resetReceipt: reset.result, valid: true } }
+}
+async function provider_product_create(payload = {}) { return httpJson('POST', '/v3/provider/products', payload.input || {}, await localOwnerToken(await dockPaths())) }
+
+async function provider_asset_choose_files() {
+  const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile', 'multiSelections'] })
+  if (result.canceled) return { files: [] }
+  const files = []
+  for (const filePath of result.filePaths) {
+    const stat = await fsp.stat(filePath)
+    const token = crypto.randomUUID()
+    v3SelectedFiles.set(token, filePath)
+    files.push({ token, name: path.basename(filePath), sizeBytes: stat.size })
+  }
+  return { files }
+}
+
+async function provider_asset_create(payload = {}) {
+  return httpJson('POST', '/v3/provider/asset-bundles', payload.input || {}, await localOwnerToken(await dockPaths()))
+}
+
+async function provider_asset_upload(payload = {}) {
+  const input = payload.input || {}
+  const filePath = v3SelectedFiles.get(String(input.fileToken || ''))
+  if (!filePath) throw new Error('Selected file token is unavailable')
+  const stat = await fsp.stat(filePath)
+  const hash = crypto.createHash('sha256')
+  await new Promise((resolve, reject) => { const stream = fs.createReadStream(filePath); stream.on('data', chunk => hash.update(chunk)); stream.on('error', reject); stream.on('end', resolve) })
+  const sha256 = hash.digest('hex')
+  const started = await httpJson('POST', `/v3/provider/asset-bundles/${encodeURIComponent(String(input.bundleId))}/multipart`, { fileName: path.basename(filePath), sizeBytes: stat.size, sha256 }, await localOwnerToken(await dockPaths()))
+  const upload = started.upload
+  const partSize = 16 * 1024 * 1024
+  const partCount = Math.max(1, Math.ceil(stat.size / partSize))
+  const partNumbers = Array.from({ length: partCount }, (_, i) => i + 1)
+  const presigned = await httpJson('POST', `/v3/provider/uploads/${encodeURIComponent(upload.uploadSessionId)}/parts/presign`, { partNumbers }, await localOwnerToken(await dockPaths()))
+  const handle = await fsp.open(filePath, 'r')
+  const parts = []
+  try {
+    for (const partNumber of partNumbers) {
+      const offset = (partNumber - 1) * partSize
+      const length = Math.min(partSize, stat.size - offset)
+      const buffer = Buffer.alloc(length)
+      await handle.read(buffer, 0, length, offset)
+      const response = await fetch(presigned.urls[String(partNumber)], { method: 'PUT', body: buffer })
+      if (!response.ok) throw new Error(`S3 part ${partNumber} failed with ${response.status}`)
+      parts.push({ partNumber, etag: response.headers.get('etag') || '' })
+      mainWindow?.webContents.send('exora:v3-progress', { kind: 'asset_upload', uploadSessionId: upload.uploadSessionId, completed: partNumber, total: partCount })
+    }
+  } finally { await handle.close() }
+  const complete = await httpJson('POST', `/v3/provider/uploads/${encodeURIComponent(upload.uploadSessionId)}/complete`, { parts }, await localOwnerToken(await dockPaths()), { timeoutMs: 60000 })
+  v3SelectedFiles.delete(String(input.fileToken || ''))
+  return complete
+}
+async function provider_asset_cancel(payload = {}) {
+  const id = String(payload?.input?.uploadSessionId || '')
+  return httpJson('POST', `/v3/provider/uploads/${encodeURIComponent(id)}/abort`, {}, await localOwnerToken(await dockPaths()))
+}
+
+async function provider_openapi_choose() {
+  const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile'], filters: [{ name: 'OpenAPI', extensions: ['json', 'yaml', 'yml'] }] })
+  if (result.canceled || !result.filePaths[0]) return { document: '' }
+  const document = await fsp.readFile(result.filePaths[0], 'utf8')
+  if (Buffer.byteLength(document) > 5 * 1024 * 1024) throw new Error('OpenAPI document exceeds 5 MiB')
+  return { document, name: path.basename(result.filePaths[0]) }
+}
+async function provider_openapi_import(payload = {}) {
+  const input = { ...(payload.input || {}) }
+  if (typeof input.document === 'string') {
+    try { input.document = JSON.parse(input.document) } catch { input.document = YAML.parse(input.document) }
+  }
+  return httpJson('POST', '/v3/provider/api-imports', input, await localOwnerToken(await dockPaths()), { timeoutMs: 30000 })
+}
+async function provider_listings() { return httpJson('GET', '/v3/provider/listings', undefined, await localOwnerToken(await dockPaths())) }
+async function provider_listing_save(payload = {}) {
+  const input = payload.input || {}
+  const route = input.listingId ? `/v3/provider/listings/${encodeURIComponent(input.listingId)}` : '/v3/provider/listings'
+  return httpJson(input.listingId ? 'PUT' : 'POST', route, input, await localOwnerToken(await dockPaths()))
+}
+async function provider_listing_action(payload = {}) {
+  const input = payload.input || {}
+  return httpJson('POST', `/v3/provider/listings/${encodeURIComponent(String(input.listingId || ''))}/${encodeURIComponent(String(input.action || ''))}`, {}, await localOwnerToken(await dockPaths()))
 }
 
 async function httpJson(method, route, body, token, options = {}) {

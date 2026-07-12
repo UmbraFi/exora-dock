@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 	"github.com/exora-dock/exora-dock/internal/agentdriver"
 	"github.com/exora-dock/exora-dock/internal/agentsession"
 	"github.com/exora-dock/exora-dock/internal/approval"
+	"github.com/exora-dock/exora-dock/internal/buyerflow"
 	"github.com/exora-dock/exora-dock/internal/cache"
 	"github.com/exora-dock/exora-dock/internal/chat"
 	"github.com/exora-dock/exora-dock/internal/cloudlink"
@@ -65,6 +67,7 @@ type RuntimeStores struct {
 	CardDiagnostics agentcard.DiagnosticsConfig
 	CardPublisher   agentcard.CloudPublisher
 	WorkRuns        *workrun.Store
+	BuyerFlows      *buyerflow.Store
 	EscrowProgramID string
 	SolanaNetwork   string
 	USDCMint        string
@@ -106,6 +109,7 @@ type Handler struct {
 	codexProbe      func(context.Context) (agentdriver.CapabilityReport, error)
 	codexAgent      agentdriver.LocalAgentConfig
 	workRuns        *workrun.Store
+	buyerFlows      *buyerflow.Store
 	cardDiagnostics agentcard.DiagnosticsConfig
 	cardPublisher   agentcard.CloudPublisher
 	escrowProgramID string
@@ -173,6 +177,7 @@ func NewHandler(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub
 		codexProbe:      stores.CodexProbe,
 		codexAgent:      stores.CodexAgent,
 		workRuns:        stores.WorkRuns,
+		buyerFlows:      stores.BuyerFlows,
 		cardDiagnostics: stores.CardDiagnostics,
 		cardPublisher:   stores.CardPublisher,
 		escrowProgramID: strings.TrimSpace(stores.EscrowProgramID),
@@ -191,6 +196,9 @@ func NewHandler(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub
 	}
 	if h.workRuns == nil {
 		h.workRuns = workrun.NewStore(c)
+	}
+	if h.buyerFlows == nil {
+		h.buyerFlows = buyerflow.NewStore(c)
 	}
 	if h.automationRuns == nil {
 		h.automationRuns = supervisor.NewStore(c)
@@ -218,6 +226,21 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) DiscoveryManifest(w http.ResponseWriter, r *http.Request) {
 	if h.discovery != nil {
 		manifest := *h.discovery
+		base := strings.TrimRight(requestBaseURL(r), "/")
+		manifest.BaseURL = base
+		manifest.HealthURL = base + "/health"
+		manifest.ManifestURL = base + "/.well-known/exora-dock.json"
+		manifest.Endpoints = maps.Clone(h.discovery.Endpoints)
+		for key, endpoint := range manifest.Endpoints {
+			if endpoint.Path != "" && endpoint.Method != "STDIO" {
+				endpoint.URL = base + endpoint.Path
+				manifest.Endpoints[key] = endpoint
+			}
+		}
+		manifest.RESTFallback = maps.Clone(h.discovery.RESTFallback)
+		manifest.RESTFallback["baseUrl"] = base
+		manifest.RESTFallback["health"] = manifest.HealthURL
+		manifest.RESTFallback["manifest"] = manifest.ManifestURL
 		manifest.LastSeen = time.Now().UTC().Format(time.RFC3339)
 		writeJSON(w, http.StatusOK, manifest)
 		return

@@ -1,12 +1,14 @@
 const { execFile } = require('node:child_process')
+const crypto = require('node:crypto')
 const fs = require('node:fs')
+const fsp = require('node:fs/promises')
 const path = require('node:path')
 
 const DEFAULT_PROBE_TIMEOUT_MS = 5000
 const MAX_PROBE_OUTPUT_BYTES = 64 * 1024
-const LOCAL_AGENT_SNAPSHOT_VERSION = 1
-const LOCAL_AGENT_SNAPSHOT_LIMIT = 64
-const LOCAL_AGENT_STATUSES = new Set(['ready', 'available', 'login_required', 'not_installed', 'probe_failed', 'detected_only'])
+const LOCAL_AGENT_SNAPSHOT_VERSION = 2
+const LOCAL_AGENT_SNAPSHOT_LIMIT = 512
+const LOCAL_AGENT_STATUSES = new Set(['discovered', 'ready', 'available', 'login_required', 'probe_failed', 'detected_only'])
 const LOCAL_AGENT_AUTH_STATES = new Set(['authenticated', 'not_authenticated', 'configured', 'unknown'])
 
 const LOCAL_AGENT_DRIVERS = Object.freeze([
@@ -15,6 +17,7 @@ const LOCAL_AGENT_DRIVERS = Object.freeze([
     name: 'Codex',
     vendor: 'OpenAI',
     executableNames: Object.freeze(['codex']),
+    npmPackages: Object.freeze(['@openai/codex']),
     versionArgs: Object.freeze(['--version']),
     authProbe: Object.freeze({ kind: 'codex', args: Object.freeze(['login', 'status']) }),
     protocol: 'app-server',
@@ -27,7 +30,8 @@ const LOCAL_AGENT_DRIVERS = Object.freeze([
     id: 'claude-code',
     name: 'Claude Code',
     vendor: 'Anthropic',
-    executableNames: Object.freeze(['claude']),
+    executableNames: Object.freeze(['claude', 'claude-code', 'claudecode']),
+    npmPackages: Object.freeze(['@anthropic-ai/claude-code']),
     versionArgs: Object.freeze(['--version']),
     authProbe: Object.freeze({ kind: 'claude', args: Object.freeze(['auth', 'status']) }),
     protocol: 'stream-json',
@@ -41,6 +45,7 @@ const LOCAL_AGENT_DRIVERS = Object.freeze([
     name: 'OpenCode',
     vendor: 'SST',
     executableNames: Object.freeze(['opencode']),
+    npmPackages: Object.freeze(['opencode-ai', 'opencode']),
     versionArgs: Object.freeze(['--version']),
     authProbe: Object.freeze({ kind: 'opencode', args: Object.freeze(['auth', 'list']) }),
     protocol: 'http-sse',
@@ -54,6 +59,7 @@ const LOCAL_AGENT_DRIVERS = Object.freeze([
     name: 'GitHub Copilot CLI',
     vendor: 'GitHub',
     executableNames: Object.freeze(['copilot']),
+    npmPackages: Object.freeze(['@github/copilot']),
     versionArgs: Object.freeze(['--version']),
     protocol: 'copilot-sdk',
     protocolState: 'preview',
@@ -89,6 +95,7 @@ const LOCAL_AGENT_DRIVERS = Object.freeze([
     name: 'Gemini CLI',
     vendor: 'Google',
     executableNames: Object.freeze(['gemini']),
+    npmPackages: Object.freeze(['@google/gemini-cli']),
     versionArgs: Object.freeze(['--version']),
     protocol: 'acp',
     protocolState: 'preview',
@@ -151,7 +158,7 @@ function createLocalAgentScanSnapshot(scanResult) {
   const inputAgents = Array.isArray(scanResult?.agents) ? scanResult.agents : []
   if (inputAgents.length > LOCAL_AGENT_SNAPSHOT_LIMIT) throw new Error('Local agent scan returned too many entries.')
   const agents = inputAgents.map(normalizeCachedLocalAgent)
-  if (agents.some((agent) => !agent) || new Set(agents.map((agent) => agent.driverId)).size !== agents.length) {
+  if (agents.some((agent) => !agent) || new Set(agents.map((agent) => agent.installationId)).size !== agents.length) {
     throw new Error('Local agent scan returned an invalid catalog.')
   }
   return Object.freeze({
@@ -160,6 +167,7 @@ function createLocalAgentScanSnapshot(scanResult) {
     arch: process.arch,
     scannedAt,
     agents,
+    index: normalizeIndexMetadata(scanResult?.index),
   })
 }
 
@@ -169,41 +177,65 @@ function restoreLocalAgentScanSnapshot(value) {
   if (value.platform !== process.platform || value.arch !== process.arch) return undefined
   const scannedAt = validIso(value.scannedAt)
   if (!scannedAt || !Array.isArray(value.agents) || value.agents.length > LOCAL_AGENT_SNAPSHOT_LIMIT) return undefined
-  const agents = value.agents.map(normalizeCachedLocalAgent)
-  if (agents.some((agent) => !agent)) return undefined
-  if (new Set(agents.map((agent) => agent.driverId)).size !== agents.length) return undefined
+  const normalizedAgents = value.agents.filter((agent) => !isKnownDiscoveryNoise(String(agent?.executablePath || ''))).map(normalizeCachedLocalAgent)
+  if (normalizedAgents.some((agent) => !agent)) return undefined
+  if (new Set(normalizedAgents.map((agent) => agent.installationId)).size !== normalizedAgents.length) return undefined
+  const agents = collapseRuntimeDuplicates(normalizedAgents)
+  if (new Set(agents.map((agent) => agent.installationId)).size !== agents.length) return undefined
   return {
     version: LOCAL_AGENT_SNAPSHOT_VERSION,
     platform: process.platform,
     arch: process.arch,
     scannedAt,
     agents,
+    index: normalizeIndexMetadata(value.index),
   }
 }
 
-function cachedLocalAgentForBinding(snapshot, driverId) {
+function normalizeIndexMetadata(value) {
+  const cursors = {}
+  for (const [volume, cursor] of Object.entries(value?.journalCursors || {})) {
+    if (!/^[A-Za-z]:\\$/.test(volume) || !cursor || typeof cursor !== 'object') continue
+    const journalId = String(cursor.journalId || '').trim()
+    const nextUsn = String(cursor.nextUsn || '').trim()
+    if (/^0x[0-9a-f]+$/i.test(journalId) && /^0x[0-9a-f]+$/i.test(nextUsn)) cursors[volume.toUpperCase()] = { journalId, nextUsn }
+  }
+  return { backend: Object.keys(cursors).length ? 'ntfs-usn' : 'full-scan-fallback', journalCursors: cursors }
+}
+
+function cachedLocalAgentForBinding(snapshot, installationId) {
   const normalized = restoreLocalAgentScanSnapshot(snapshot)
   if (!normalized) return undefined
-  return normalized.agents.find((agent) => agent.driverId === String(driverId || '').trim())
+  return normalized.agents.find((agent) => agent.installationId === String(installationId || '').trim())
 }
 
 function normalizeCachedLocalAgent(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
   const driver = localAgentDriver(value.driverId)
   if (!driver) return undefined
-  const installed = value.installed === true
   const executablePath = String(value.executablePath || '').trim()
-  let status = LOCAL_AGENT_STATUSES.has(value.status) ? value.status : installed ? 'probe_failed' : 'not_installed'
-  if (!installed) status = 'not_installed'
-  if (installed && status === 'not_installed') return undefined
-  if (installed && (!safeAbsoluteExecutablePath(executablePath) || !executablePathMatchesDriver(executablePath, driver))) return undefined
+  if (!safeAbsoluteExecutablePath(executablePath) || !executablePathMatchesDriver(executablePath, driver)) return undefined
+  const installationId = String(value.installationId || '').trim()
+  if (!/^agent-installation-[a-f0-9]{32}$/.test(installationId)) return undefined
+  const status = LOCAL_AGENT_STATUSES.has(value.status) ? value.status : 'discovered'
   const authState = LOCAL_AGENT_AUTH_STATES.has(value.authState) ? value.authState : 'unknown'
   return {
     ...publicDriver(driver),
-    installed,
+    installationId,
+    installed: true,
     status,
     authState,
-    ...(installed ? { executablePath } : {}),
+    executablePath,
+    resolvedTargetPath: safeAbsoluteExecutablePath(value.resolvedTargetPath) ? String(value.resolvedTargetPath) : '',
+    resolvedTargetFingerprint: String(value.resolvedTargetFingerprint || '').trim().slice(0, 128),
+    source: cleanProbeText(!value.source || value.source === 'custom-path' ? classifyExecutableSource(executablePath) : value.source, 80),
+    publisher: cleanProbeText(value.publisher || '', 160),
+    signatureState: ['trusted', 'signed', 'unsigned', 'unknown'].includes(value.signatureState) ? value.signatureState : 'unknown',
+    verificationState: ['unverified', 'verified', 'failed', 'changed'].includes(value.verificationState) ? value.verificationState : 'unverified',
+    fingerprint: String(value.fingerprint || '').trim().slice(0, 128),
+    discoveredAt: validIso(value.discoveredAt) || validIso(value.lastSeenAt) || new Date(0).toISOString(),
+    lastSeenAt: validIso(value.lastSeenAt) || validIso(value.discoveredAt) || new Date(0).toISOString(),
+    modifiedAt: validIso(value.modifiedAt) || fileModifiedAt(safeAbsoluteExecutablePath(value.resolvedTargetPath) ? String(value.resolvedTargetPath) : executablePath),
     ...(String(value.version || '').trim() ? { version: cleanProbeText(value.version) } : {}),
     ...(String(value.detail || '').trim() ? { detail: cleanProbeText(value.detail) } : {}),
   }
@@ -212,6 +244,54 @@ function normalizeCachedLocalAgent(value) {
 function safeAbsoluteExecutablePath(value) {
   const text = String(value || '')
   return !/[\u0000-\u001f\u007f]/.test(text) && (path.isAbsolute(text) || path.win32.isAbsolute(text))
+}
+
+function isKnownDiscoveryNoise(executablePath) {
+  const value = String(executablePath || '').toLowerCase().replace(/\//g, '\\')
+  if (!value) return true
+  if (/\\appdata\\local\\openai\\codex\\bin(?:\\|$)/i.test(value)) return true
+  if (/\\appdata\\local\\packages\\/i.test(value)) return true
+  if (/\\localcache\\/i.test(value)) return true
+  if (/\\resources\\app\\/i.test(value)) return true
+  if (value.includes('\\node_modules\\')) return true
+  if (/\\(?:documents|desktop|downloads|onedrive)(?:\\|$)/i.test(value)) return true
+  if (/\\(?:work|fixtures|testdata|__tests__|target\\(?:debug|release)|appdata\\local\\temp)(?:\\|$)/i.test(value)) return true
+  return false
+}
+
+function plausibleGlobalInstallationPath(executablePath, driver) {
+  if (isKnownDiscoveryNoise(executablePath)) return false
+  const candidate = path.win32.resolve(executablePath).toLowerCase()
+  const user = String(process.env.USERPROFILE || 'C:\\Users\\malou').toLowerCase().replace(/\//g, '\\')
+  const local = String(process.env.LOCALAPPDATA || `${user}\\appdata\\local`).toLowerCase().replace(/\//g, '\\')
+  const roaming = String(process.env.APPDATA || `${user}\\appdata\\roaming`).toLowerCase().replace(/\//g, '\\')
+  const programFiles = [process.env.ProgramFiles || 'C:\\Program Files', process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)'].map((root) => path.win32.resolve(root).toLowerCase())
+  if (candidate.startsWith(`${roaming}\\npm\\`) && !candidate.slice(`${roaming}\\npm\\`.length).includes('\\')) return true
+  if (candidate.startsWith(`${user}\\.local\\bin\\`) && !candidate.slice(`${user}\\.local\\bin\\`.length).includes('\\')) return true
+  if (candidate.startsWith(`${user}\\.cargo\\bin\\`) && !candidate.slice(`${user}\\.cargo\\bin\\`.length).includes('\\')) return true
+  if (candidate.startsWith(`${user}\\scoop\\shims\\`) && !candidate.slice(`${user}\\scoop\\shims\\`.length).includes('\\')) return true
+  if (candidate.startsWith(`${local}\\programs\\`)) return true
+  if (programFiles.some((root) => candidate.startsWith(`${root}\\`))) return true
+  if (driver?.id === 'opencode' && candidate === `${local}\\opencode\\opencode.exe`) return true
+  return /^[a-z]:\\(?:tools|apps|bin)\\[^\\]+$/i.test(candidate)
+}
+
+function collapseRuntimeDuplicates(agents) {
+  const launcherGroups = new Map()
+  for (const agent of agents.filter(Boolean)) {
+    const key = `${agent.driverId}\0${path.win32.dirname(agent.executablePath).toLowerCase()}`
+    const existing = launcherGroups.get(key)
+    if (!existing || executableRank(agent.executablePath) < executableRank(existing.executablePath)) launcherGroups.set(key, agent)
+  }
+  agents = [...launcherGroups.values()]
+  const resolvedTargets = new Map()
+  for (const agent of agents) {
+    if (agent.resolvedTargetPath) resolvedTargets.set(path.win32.resolve(agent.resolvedTargetPath).toLowerCase(), agent)
+  }
+  return agents.filter((agent) => {
+    const owner = resolvedTargets.get(path.win32.resolve(agent.executablePath).toLowerCase())
+    return !owner || owner.installationId === agent.installationId
+  })
 }
 
 function executablePathMatchesDriver(executablePath, driver) {
@@ -234,16 +314,291 @@ function validIso(value) {
 
 async function scanLocalAgents(options = {}) {
   const findExecutables = options.findExecutables || defaultFindExecutables
-  const runProbe = options.runProbe || defaultRunProbe
   const onlyDriverId = String(options.onlyDriverId || '').trim()
   const drivers = onlyDriverId
     ? LOCAL_AGENT_DRIVERS.filter((driver) => driver.id === onlyDriverId)
     : LOCAL_AGENT_DRIVERS
-  const agents = await Promise.all(drivers.map((driver) => scanDriver(driver, { findExecutables, runProbe })))
+  const groups = await Promise.all(drivers.map((driver) => discoverDriverInstances(driver, { findExecutables, filterInstallPaths: findExecutables === defaultFindExecutables })))
+  const agents = await enrichDiscoveredVersions(groups.flat().sort(compareInstallations), drivers)
   return {
     agents,
     scannedAt: new Date().toISOString(),
   }
+}
+
+async function enrichDiscoveredVersions(agents, drivers = LOCAL_AGENT_DRIVERS) {
+  const driverMap = new Map(drivers.map((driver) => [driver.id, driver]))
+  return Promise.all(agents.map(async (agent) => {
+    const version = await readDiscoveredVersion(agent.resolvedTargetPath || agent.executablePath, driverMap.get(agent.driverId))
+    return version ? { ...agent, version } : agent
+  }))
+}
+
+async function readDiscoveredVersion(executablePath, driver) {
+  if (!driver || !safeAbsoluteExecutablePath(executablePath)) return ''
+  if (/\.(?:cmd|bat)$/i.test(executablePath)) {
+    for (const packageName of driver.npmPackages || []) {
+      const packagePath = path.join(path.dirname(executablePath), 'node_modules', ...packageName.split('/'), 'package.json')
+      try {
+        const value = JSON.parse(await fsp.readFile(packagePath, 'utf8'))
+        if (/^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$/.test(String(value.version || ''))) return String(value.version)
+      } catch {}
+    }
+    return ''
+  }
+  if (process.platform !== 'win32' || !/\.exe$/i.test(executablePath)) return ''
+  const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  const literalPath = executablePath.replace(/'/g, "''")
+  const script = `$item = Get-Item -LiteralPath '${literalPath}' -ErrorAction Stop; if ($item.VersionInfo.ProductVersion) { $item.VersionInfo.ProductVersion } else { $item.VersionInfo.FileVersion }`
+  const encoded = Buffer.from(script, 'utf16le').toString('base64')
+  const result = await runNativeExecutable(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], { timeout: 3000 })
+  const version = cleanProbeText(result.stdout || '', 80).split(/\r?\n/)[0].trim()
+  if (result.ok && version) return version
+  const windowsAppVersion = executablePath.match(/\\WindowsApps\\[^\\]+_([0-9]+(?:\.[0-9]+){1,3})_(?:x64|x86|arm64|neutral)_/i)
+  return windowsAppVersion?.[1] || ''
+}
+
+async function discoverDriverInstances(driver, dependencies) {
+  let candidates = []
+  try {
+    candidates = await dependencies.findExecutables(driver.executableNames, driver.fixedPathTemplates || [], driver.windowsDisplayNames || [])
+  } catch {}
+  const now = new Date().toISOString()
+  const filtered = process.platform === 'win32' && dependencies.filterInstallPaths ? candidates.filter((candidate) => plausibleGlobalInstallationPath(candidate, driver)) : candidates
+  return collapseLauncherCandidates(driver, preferExecutableCandidates(filtered)).map((executablePath) => discoveredInstallation(driver, executablePath, now))
+}
+
+function collapseLauncherCandidates(driver, candidates) {
+  const groups = new Map()
+  for (const candidate of candidates) {
+    const directory = path.dirname(candidate).toLowerCase()
+    const key = `${driver.id}\0${directory}`
+    const existing = groups.get(key)
+    if (!existing || executableRank(candidate) < executableRank(existing)) groups.set(key, candidate)
+  }
+  return [...groups.values()].sort((left, right) => executableRank(left) - executableRank(right) || left.localeCompare(right))
+}
+
+function discoveredInstallation(driver, executablePath, now = new Date().toISOString()) {
+  const normalizedPath = path.resolve(executablePath)
+  const source = classifyExecutableSource(normalizedPath)
+  const resolvedTargetPath = resolveLocalAgentTarget(normalizedPath, driver, source)
+  return {
+    ...publicDriver(driver),
+    installationId: installationIdFor(driver.id, normalizedPath),
+    installed: true,
+    status: driver.bindable ? 'discovered' : 'detected_only',
+    authState: 'unknown',
+    executablePath: normalizedPath,
+    resolvedTargetPath,
+    resolvedTargetFingerprint: resolvedTargetPath ? fileFingerprint(resolvedTargetPath) : '',
+    source,
+    publisher: '',
+    signatureState: source === 'desktop-bundled' ? 'trusted' : 'unknown',
+    verificationState: 'unverified',
+    fingerprint: fileFingerprint(normalizedPath),
+    modifiedAt: fileModifiedAt(resolvedTargetPath || normalizedPath),
+    discoveredAt: now,
+    lastSeenAt: now,
+  }
+}
+
+function resolveLocalAgentTarget(executablePath, driver, source) {
+  const shimTarget = resolveWindowsShimTarget(executablePath, driver)
+  if (shimTarget) return shimTarget
+  if (process.platform !== 'win32' || driver.id !== 'codex' || source !== 'desktop-bundled') return ''
+  const root = path.join(process.env.LOCALAPPDATA || '', 'OpenAI', 'Codex', 'bin')
+  try {
+    return fs.readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(root, entry.name, 'codex.exe'))
+      .filter((candidate) => fs.existsSync(candidate))
+      .sort((left, right) => fs.statSync(right).mtimeMs - fs.statSync(left).mtimeMs)[0] || ''
+  } catch {
+    return ''
+  }
+}
+
+function installationIdFor(driverId, executablePath) {
+  const normalized = process.platform === 'win32' ? path.resolve(executablePath).toLowerCase() : path.resolve(executablePath)
+  return `agent-installation-${crypto.createHash('sha256').update(`${driverId}\0${normalized}`).digest('hex').slice(0, 32)}`
+}
+
+function fileFingerprint(executablePath) {
+  try {
+    const stat = fs.statSync(executablePath)
+    return `${stat.size}:${Math.trunc(stat.mtimeMs)}`
+  } catch {
+    return ''
+  }
+}
+
+function fileModifiedAt(executablePath) {
+  try {
+    return fs.statSync(executablePath).mtime.toISOString()
+  } catch {
+    return ''
+  }
+}
+
+function classifyExecutableSource(executablePath) {
+  const value = String(executablePath).toLowerCase()
+  if (value.includes('\\windowsapps\\openai.codex_') && value.includes('\\resources\\codex')) return 'desktop-bundled'
+  if (value.includes('\\appdata\\roaming\\npm\\') || value.includes('/node_modules/')) return 'npm'
+  if (value.includes('\\.local\\bin\\')) return 'user-cli'
+  if (value.includes('\\scoop\\shims\\') || value.includes('\\.cargo\\bin\\') || value.includes('\\chocolatey\\bin\\')) return 'package-manager'
+  if (value.includes('\\program files\\') || value.includes('\\program files (x86)\\')) return 'system-install'
+  if (value.includes('\\appdata\\local\\programs\\')) return 'user-install'
+  if (value.includes('\\.cargo\\bin\\')) return 'cargo'
+  return 'custom-path'
+}
+
+function resolveWindowsShimTarget(executablePath, driver) {
+  if (process.platform !== 'win32' || !/\.(?:cmd|bat)$/i.test(executablePath)) return ''
+  try {
+    const data = fs.readFileSync(executablePath, 'utf8').slice(0, 32 * 1024)
+    const matches = [...data.matchAll(/(?:"([^"]+\.exe)"|([^\s"&|<>^]+\.exe))/ig)]
+    for (const match of matches) {
+      const candidate = String(match[1] || match[2] || '').replace(/%~dp0/ig, `${path.dirname(executablePath)}\\`)
+      const resolved = path.resolve(candidate)
+      if (fs.existsSync(resolved) && executablePathMatchesDriver(resolved, driver)) return resolved
+    }
+  } catch {}
+  return ''
+}
+
+function compareInstallations(left, right) {
+  return left.driverId.localeCompare(right.driverId) || left.source.localeCompare(right.source) || left.executablePath.localeCompare(right.executablePath)
+}
+
+async function verifyLocalAgentInstallation(agent, options = {}) {
+  const driver = localAgentDriver(agent?.driverId)
+  const fileExists = options.fileExists || fs.existsSync
+  const fingerprint = options.fileFingerprint || fileFingerprint
+  if (!driver || !driver.bindable || !safeAbsoluteExecutablePath(agent?.executablePath) || !fileExists(agent.executablePath)) {
+    throw new Error('The selected local Agent installation is unavailable.')
+  }
+  if (fingerprint(agent.executablePath) !== agent.fingerprint) throw new Error('The selected local Agent executable changed after scanning. Scan again before binding.')
+  const launchPath = safeAbsoluteExecutablePath(agent.resolvedTargetPath) && executablePathMatchesDriver(agent.resolvedTargetPath, driver) && fileExists(agent.resolvedTargetPath)
+    ? agent.resolvedTargetPath
+    : agent.executablePath
+  if (launchPath !== agent.executablePath && agent.resolvedTargetFingerprint && fingerprint(launchPath) !== agent.resolvedTargetFingerprint) {
+    throw new Error('The selected local Agent runtime changed after scanning. Scan again before binding.')
+  }
+  const runProbe = options.runProbe || defaultRunProbe
+  const versionResult = await runProbe(launchPath, driver.versionArgs || ['--version'])
+  if (!versionResult?.ok) return { ...agent, status: 'probe_failed', verificationState: 'failed', detail: probeFailureDetail(versionResult) }
+  let authState = 'unknown'
+  if (driver.authProbe) authState = interpretAuthState(driver.authProbe.kind, await runProbe(launchPath, driver.authProbe.args))
+  const status = authState === 'not_authenticated' ? 'login_required' : authState === 'authenticated' ? 'ready' : 'available'
+  return { ...agent, status, authState, version: cleanProbeText(versionResult.stdout || versionResult.stderr), verificationState: 'verified', lastSeenAt: new Date().toISOString() }
+}
+
+async function scanLocalAgentsGlobal(options = {}) {
+  const platform = options.platform || process.platform
+  if (platform !== 'win32') return { agents: [], scannedAt: new Date().toISOString(), volumes: [] }
+  const definitionsByName = new Map()
+  for (const driver of LOCAL_AGENT_DRIVERS) {
+    for (const name of driver.executableNames) {
+      for (const candidate of windowsExecutableAliases(name)) {
+        const list = definitionsByName.get(candidate) || []
+        list.push(driver)
+        definitionsByName.set(candidate, list)
+      }
+    }
+    for (const template of driver.fixedPathTemplates || []) {
+      const basename = path.win32.basename(template).toLowerCase()
+      const list = definitionsByName.get(basename) || []
+      list.push(driver)
+      definitionsByName.set(basename, list)
+    }
+  }
+  const volumes = options.volumes || await windowsFixedVolumes(options.runNativeExecutable || runNativeExecutable)
+  const readDirectory = options.readDirectory || fspDirectoryEntries
+  const found = new Map()
+  let visitedDirectories = 0
+  let reportedProgress = 0
+  for (let volumeIndex = 0; volumeIndex < volumes.length; volumeIndex++) {
+    const volume = volumes[volumeIndex]
+    const volumeVisitedStart = visitedDirectories
+    const queue = [volume]
+    while (queue.length) {
+      if (options.signal?.aborted) return { agents: [...found.values()].sort(compareInstallations), scannedAt: new Date().toISOString(), volumes, cancelled: true }
+      if (options.waitWhilePaused) await options.waitWhilePaused()
+      if (options.signal?.aborted) return { agents: [...found.values()].sort(compareInstallations), scannedAt: new Date().toISOString(), volumes, cancelled: true }
+      const directory = queue.shift()
+      if (excludedGlobalDirectory(directory)) continue
+      let entries
+      try { entries = await readDirectory(directory) } catch { continue }
+      visitedDirectories++
+      for (const entry of entries) {
+        const candidate = path.join(directory, entry.name)
+        if (entry.isDirectory() && !entry.isSymbolicLink()) queue.push(candidate)
+        if (!entry.isFile()) continue
+        const drivers = definitionsByName.get(entry.name.toLowerCase()) || []
+        for (const driver of drivers) {
+          if (!plausibleGlobalInstallationPath(candidate, driver)) continue
+          const installation = discoveredInstallation(driver, candidate)
+          found.set(installation.installationId, installation)
+        }
+      }
+      if (visitedDirectories % 250 === 0) {
+        const agents = collapseRuntimeDuplicates([...found.values()].sort(compareInstallations)).slice(0, LOCAL_AGENT_SNAPSHOT_LIMIT)
+        const visitedOnVolume = visitedDirectories - volumeVisitedStart
+        const volumeProgress = visitedOnVolume / Math.max(1, visitedOnVolume + queue.length)
+        const estimated = Math.min(99, Math.floor(((volumeIndex + volumeProgress) / Math.max(1, volumes.length)) * 100))
+        reportedProgress = Math.max(reportedProgress, estimated)
+        await options.onProgress?.({ visitedDirectories, found: agents.length, volume, agents, progress: reportedProgress })
+        await new Promise((resolve) => setImmediate(resolve))
+      }
+    }
+  }
+  const journalCursors = await queryWindowsJournalCursors(volumes, options.runNativeExecutable || runNativeExecutable)
+  const agents = await enrichDiscoveredVersions(collapseRuntimeDuplicates([...found.values()].sort(compareInstallations)))
+  return { agents, scannedAt: new Date().toISOString(), volumes, visitedDirectories, index: { backend: Object.keys(journalCursors).length ? 'ntfs-usn' : 'full-scan-fallback', journalCursors } }
+}
+
+async function queryWindowsJournalCursors(volumes, runNative = runNativeExecutable) {
+  if (!volumes) volumes = await windowsFixedVolumes(runNative)
+  const cursors = {}
+  const fsutil = process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'fsutil.exe') : 'fsutil'
+  for (const volume of volumes || []) {
+    const result = await runNative(fsutil, ['usn', 'queryjournal', volume.slice(0, 2)], { timeout: 5000 })
+    if (!result.ok) continue
+    const values = [...String(result.stdout || '').matchAll(/:\s*(0x[0-9a-f]+)/ig)].map((match) => match[1])
+    const journalId = values[0]
+    const nextUsn = values[2]
+    if (journalId && nextUsn) cursors[volume.toUpperCase()] = { journalId, nextUsn }
+  }
+  return cursors
+}
+
+function journalCursorsEqual(left, right) {
+  const leftEntries = Object.entries(left || {}).sort(([a], [b]) => a.localeCompare(b))
+  const rightEntries = Object.entries(right || {}).sort(([a], [b]) => a.localeCompare(b))
+  return JSON.stringify(leftEntries) === JSON.stringify(rightEntries) && leftEntries.length > 0
+}
+
+function windowsExecutableAliases(name) {
+  const value = String(name || '').toLowerCase()
+  if (!value) return []
+  if (/\.[a-z0-9]+$/.test(value)) return [value]
+  return [value, `${value}.exe`, `${value}.cmd`, `${value}.bat`]
+}
+
+async function windowsFixedVolumes(runNative) {
+  const result = await runNative('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | ForEach-Object { $_.DeviceID }"], { timeout: 5000 })
+  const volumes = String(result.stdout || '').split(/\r?\n/).map((value) => value.trim()).filter((value) => /^[A-Za-z]:$/.test(value)).map((value) => `${value}\\`)
+  return volumes.length ? volumes : [`${process.env.SystemDrive || 'C:'}\\`]
+}
+
+async function fspDirectoryEntries(directory) {
+  return fsp.readdir(directory, { withFileTypes: true })
+}
+
+function excludedGlobalDirectory(directory) {
+  const value = String(directory || '').toLowerCase().replace(/\//g, '\\')
+  return /\\(?:system volume information|\$recycle\.bin|recovery|windows\\winsxs|windows\\servicing)(?:\\|$)/i.test(value)
 }
 
 async function scanDriver(driver, dependencies) {
@@ -576,4 +931,10 @@ module.exports = {
   publicDriver,
   restoreLocalAgentScanSnapshot,
   scanLocalAgents,
+  scanLocalAgentsGlobal,
+  verifyLocalAgentInstallation,
+  installationIdFor,
+  journalCursorsEqual,
+  queryWindowsJournalCursors,
+  runNativeExecutable,
 }

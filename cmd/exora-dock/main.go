@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/exora-dock/exora-dock/internal/agentdriver"
 	"github.com/exora-dock/exora-dock/internal/agentsession"
 	"github.com/exora-dock/exora-dock/internal/approval"
+	"github.com/exora-dock/exora-dock/internal/buyerflow"
 	"github.com/exora-dock/exora-dock/internal/cache"
 	"github.com/exora-dock/exora-dock/internal/chat"
 	"github.com/exora-dock/exora-dock/internal/cloudlink"
@@ -41,6 +43,7 @@ import (
 	"github.com/exora-dock/exora-dock/internal/payment"
 	"github.com/exora-dock/exora-dock/internal/paymentpin"
 	"github.com/exora-dock/exora-dock/internal/product"
+	"github.com/exora-dock/exora-dock/internal/providerworker"
 	"github.com/exora-dock/exora-dock/internal/registry"
 	"github.com/exora-dock/exora-dock/internal/resource"
 	"github.com/exora-dock/exora-dock/internal/runcapability"
@@ -198,6 +201,7 @@ func main() {
 	paymentStore := payment.NewStore(c)
 	orderPlanStore := orderplan.NewStore(c)
 	negotiationStore := negotiation.NewStore(c)
+	buyerFlowStore := buyerflow.NewStore(c)
 	automationRunStore := supervisor.NewStore(c)
 	interactiveAgentStore := agentsession.NewStore(c)
 	runCapabilities, err := runcapability.LoadOrCreate(cfg.RunCapabilityPath)
@@ -301,6 +305,7 @@ func main() {
 			Approvals:       approvalStore,
 			OrderPlans:      orderPlanStore,
 			Negotiations:    negotiationStore,
+			BuyerFlows:      buyerFlowStore,
 			PaymentPIN:      paymentPINStore,
 			Payments:        paymentStore,
 			TaskExecutor:    taskExecutor,
@@ -363,6 +368,7 @@ func main() {
 		}
 	}()
 	startWakePoller(ctx, cfg, selfPubkey, automationSupervisor)
+	startProviderCapacitySupervisor(ctx, cfg)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -370,6 +376,76 @@ func main() {
 	log.Println("[server] shutting down...")
 	cancel()
 	srv.Shutdown(context.Background())
+}
+
+func startProviderCapacitySupervisor(ctx context.Context, cfg *config.Config) {
+	if runtime.GOOS != "linux" || strings.TrimSpace(cfg.CloudTokenPath) == "" {
+		return
+	}
+	token, err := cloudlink.LoadToken(cfg.CloudTokenPath)
+	if err != nil || strings.TrimSpace(token.CloudToken) == "" {
+		return
+	}
+	cloudURL := strings.TrimRight(firstNonEmptyString(cfg.CloudURL, token.CloudURL), "/")
+	if cloudURL == "" {
+		return
+	}
+	go func() {
+		light := time.NewTicker(30 * time.Second)
+		full := time.NewTicker(5 * time.Minute)
+		defer light.Stop()
+		defer full.Stop()
+		recoveryPasses := 0
+		report := func(level string) {
+			checkCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			defer cancel()
+			result, err := (providerworker.Client{}).Call(checkCtx, "capacity_check", map[string]any{"checkLevel": level})
+			if err != nil {
+				log.Printf("[provider-capacity] %s check failed: %v", level, err)
+				return
+			}
+			busy, _ := result["providerBusy"].(bool)
+			healthy := !busy
+			if level == "full" {
+				if healthy {
+					recoveryPasses++
+				} else {
+					recoveryPasses = 0
+				}
+			}
+			result["checkLevel"] = level
+			result["healthy"] = healthy
+			result["recoveryPasses"] = recoveryPasses
+			body, _ := json.Marshal(result)
+			req, err := http.NewRequestWithContext(checkCtx, http.MethodPost, cloudURL+"/v3/provider/capacity-snapshots", bytes.NewReader(body))
+			if err != nil {
+				return
+			}
+			req.Header.Set("Authorization", "Bearer "+token.CloudToken)
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+			if err != nil {
+				log.Printf("[provider-capacity] report failed: %v", err)
+				return
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode >= 300 {
+				message, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+				log.Printf("[provider-capacity] cloud status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(message)))
+			}
+		}
+		report("light")
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-light.C:
+				report("light")
+			case <-full.C:
+				report("full")
+			}
+		}
+	}()
 }
 
 func runCloudCommand(args []string) error {
@@ -995,14 +1071,29 @@ func newInteractiveDriverFactory(cfgPath, dockExecutable string) agentsession.Dr
 		}
 		switch session.Driver {
 		case "codex":
+			developerInstructions := "You are the user's bound Exora local agent. Use Exora MCP for every transaction fact, question, approval, offer, deliverable, progress update, or state proposal. Ordinary text cannot change transaction state. Never request payment PINs, wallet private keys, Dock owner tokens, model credentials, or arbitration authority."
+			if session.Role == "buyer" {
+				developerInstructions = "You are the user's bound Exora buyer requirement-interview agent. Before plan review, your only objective is to learn what the user wants to buy. End each turn with exactly one structured Exora MCP action: ask one fixed-schema question, or submit two linked plans when mature. localPreparationPlan prepares and sanitizes local files; remoteExecutionPlan may obtain files only by referencing localPreparationPlan file ids. Do not search sellers, request quotes, submit manifests, start remote work, request transaction approval, or discuss payment. Never request secrets or credentials."
+			}
 			params := map[string]any{
 				"cwd":                   session.Workspace,
-				"developerInstructions": "You are the user's bound Exora local agent. Use Exora MCP for every transaction fact, question, approval, offer, deliverable, progress update, or state proposal. Ordinary text cannot change transaction state. Never request payment PINs, wallet private keys, Dock owner tokens, model credentials, or arbitration authority.",
+				"developerInstructions": developerInstructions,
+			}
+			if session.Role == "buyer" && !sellerCardSetup {
+				// The pre-plan buyer surface exposes only a structured question and
+				// local two-plan submission. Neither tool grants transaction authority,
+				// so an app-server approval round-trip would be both redundant and, since
+				// this headless driver rejects host approval requests, guaranteed to fail.
+				params["approvalPolicy"] = "never"
 			}
 			if sellerCardSetup {
 				params["developerInstructions"] = "You are conducting a multi-turn Exora Seller Setup from seller-authored intent, pricing principles, a redacted environment snapshot, and seller answers. Stay read-only, do not inspect unrelated files, never request or accept real secret values, and return only the requested JSON envelope. Do not declare setup complete until allowed actions, approval cases, credential aliases, and network boundaries are explicit."
 			} else {
-				params["config"] = codexMCPConfig(mcpCommand[0], mcpCommand[1:], session.Workspace, mcpEnvironment, nil)
+				enabledTools := []string(nil)
+				if session.Role == "buyer" {
+					enabledTools = []string{"exora.session_request_user_input", "exora.session_submit_plan"}
+				}
+				params["config"] = codexMCPConfig(mcpCommand[0], mcpCommand[1:], session.Workspace, mcpEnvironment, enabledTools)
 			}
 			return agentdriver.NewCodex(agentdriver.CodexConfig{Command: command, RequestTimeout: 45 * time.Second, ProbeTimeout: 8 * time.Second, SessionParams: params, ResumeParams: params}), nil
 		case "claude-code":

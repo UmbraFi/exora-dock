@@ -1,94 +1,47 @@
 # Exora Dock
 
-Exora Dock is a lightweight transaction supervisor for user-owned Agents.
+Exora Dock is the local MCP and provider runtime for the Exora V3.2 AI-first resource market protocol.
 
-It receives durable transaction events, starts or resumes the user's local Agent,
-exposes authoritative state through MCP, enforces delegated authority, asks the
-human when required, and records structured evidence in Exora Cloud.
+Providers use Dock to register hosted files, publish one strictly exclusive VM per physical Linux host, or expose OpenAPI services through Exora Gateway. Consumers connect their own local Agent to Dock MCP to discover, lease, invoke, and settle those resources. Exora does not require a provider Agent and does not provide a separate chat interface.
 
-> Bring your own Agent. Exora wakes it, constrains it, asks you when authority is
-> required, and keeps a verifiable transaction record.
-
-## Product boundary
-
-- Exora does not provide model inference or resell model APIs/tokens.
-- Exora does not store model API keys.
-- V2 Alpha supports the locally authenticated Codex app-server Driver on Windows.
-- Seller discovery is a public seller Agent Card directory, not a product cart.
-- Wallet/Solana escrow and Docker remain separate, optional centers.
-- Payments are human-only in V2 Alpha.
-- Dispute decisions are always made by an authorized human arbitrator.
-
-## Architecture
+## V3.2 protocol direction
 
 ```text
-PWA / Electron human control surfaces
-                 │
-                 ▼
-Exora Cloud: transaction ledger, WakeJob, authority inbox, seller cards, evidence
-                 │
-                 ▼
-Local Dock Supervisor: Driver, run capability, workspace/tool policy, local evidence
-                 │
-                 ▼
-User Codex app-server ── transaction-scoped MCP ──> Dock
+Provider files / physical hosts / APIs
+                    ↓
+Provider Dock → Exora Cloud market, leases, metering, and ledger
+                              ↓
+Consumer Agent → Consumer Dock MCP
 ```
 
-Cloud is authoritative for shared business state. The chain is authoritative for
-funds. Dock is authoritative for local Agent sessions, execution, raw workspaces,
-and undisclosed evidence.
+The canonical specification is available in:
 
-## V2 transaction model
+- [中文 V3.2 白皮书](./docs/WHITEPAPER.md)
+- [English V3.2 whitepaper](./docs/WHITEPAPER.en.md)
+
+V3.2 centers on:
 
 ```text
-phase: intent → plan → offer → authorize → execute → deliver → verify → settle → closed
-condition: active | waiting_user | waiting_agent | waiting_counterparty | blocked
-           disputed | failed | completed | cancelled
+Resource → Listing → Lease → Usage → Settlement
 ```
 
-Mutations require an expected state version and idempotency key. An Agent proposes
-actions; Supervisor and Cloud validate them before committing state.
+- `file`: Exora-hosted multipart assets, downloadable or environment-only.
+- `AI-first`: one machine-readable AgentProductManifest for compute, download, and api_operation products.
+- `download`: AssetBundle purchase creates a seller-configured, time-limited DownloadGrant with free retry and resume.
+- `compute`: one Linux physical host, one InventorySlot, one KVM/libvirt Consumer VM, and no overcommit.
+- `availability`: automatic provider_busy delisting and verified relisting without a manual availability switch.
+- `pricing`: compute is prepurchased in integer minutes; voluntary early release does not refund unused minutes.
+- `storage`: verified Golden Image and fully reserved workspace disk before `availableNow`.
+- `reset`: per-Lease encrypted write layer, crypto erase, VM rebuild, verification, and ResetReceipt.
+- `api`: each OpenAPI operation becomes a product; external side effects require approval and Exora settles only capability fee.
+- `MCP`: Agent-native search, estimate, lease, transfer, execution, invocation, usage, and release.
+- `ledger`: budget reservation, usage settlement, refunds, refundable hold, and provider payout.
 
-## Local Agent setup
+## Repository implementation status
 
-1. Install Codex and sign in using your own account.
-2. Start Exora Dock Desktop.
-3. Open **Settings → Local Agents**.
-4. Scan Codex, assign buyer/seller roles, choose an automation level, and declare
-   allowed workspace roots.
-5. Keep Electron in the tray to receive and resume WakeJobs.
+The current Go daemon, Electron application, and Cloud integration are still primarily the legacy V2 transaction-supervisor implementation. V3.2 is an Alpha protocol specification and is not yet implemented. Legacy V2 integration documents remain for code maintenance and are explicitly marked as legacy.
 
-No model credential is entered into Exora.
-
-## MCP
-
-The bundled daemon provides a stdio MCP server. Electron shows the exact local
-command. V2 transaction tools include:
-
-```text
-claim_run
-get_transaction_state
-get_allowed_actions
-search_agent_cards
-report_progress
-request_user_input
-request_approval
-propose_transition
-submit_offer
-submit_deliverable
-report_blocked
-```
-
-Mutating calls use a short-lived run capability bound to transaction, role, action,
-workspace, and expiry. Owner and wallet credentials never enter the Agent process.
-
-## Privacy and evidence
-
-Cloud receives structured events, redacted summaries, hashes, authority decisions,
-and explicitly disclosed evidence. Full prompts, Codex thread content, local paths,
-workspaces, private keys, PINs, and raw files remain local by default.
-
-## Run locally
+## Current local development
 
 Daemon:
 
@@ -118,18 +71,3 @@ cd desktop
 npm run build:frontend
 npm run build:electron
 ```
-
-## Documentation
-
-- [V2 白皮书](./docs/WHITEPAPER.md)
-- [V2 whitepaper](./docs/WHITEPAPER.en.md)
-- [Agent integration specification](./docs/agent-whitepaper.md)
-- [Agent discovery](./docs/agent-discovery.md)
-
-## Current limits
-
-- Windows + Codex only for automatic Driver work.
-- Electron must remain running in the tray.
-- Funds cannot be delegated to an Agent.
-- PWA offline state is read-only.
-- Claude, ACP, and other Drivers are future adapters, not current promises.

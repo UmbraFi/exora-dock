@@ -43,6 +43,7 @@ func (h *Handler) ConsoleSnapshot(w http.ResponseWriter, r *http.Request) {
 		"wallet":             walletStatus,
 		"agentCards":         h.safeAgentCards(),
 		"buyerAgent":         h.buyerAgentSettings(),
+		"buyerFlows":         h.buyerFlows.List(),
 		"sellerAgent":        h.safeSellerSettings(),
 		"sellerMarketStatus": h.safeSellerMarketStatus(),
 		"localAgents":        []any{h.codexAgent},

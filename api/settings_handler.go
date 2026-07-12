@@ -25,6 +25,7 @@ type BuyerAgentSettings struct {
 type SellerAgentSettings struct {
 	Enabled               bool     `json:"enabled"`
 	AutoQuote             bool     `json:"autoQuote"`
+	QuotePublishMode      string   `json:"quotePublishMode"`
 	AutoAcceptLowRisk     bool     `json:"autoAcceptLowRisk"`
 	AutoCompleteTextTasks bool     `json:"autoCompleteTextTasks"`
 	ProviderID            string   `json:"providerId"`
@@ -87,6 +88,20 @@ func (h *Handler) SaveSellerAgentSettings(w http.ResponseWriter, r *http.Request
 	seller := mapAt(raw, "seller_agent")
 	seller["enabled"] = req.Enabled
 	seller["auto_quote"] = req.AutoQuote
+	mode := strings.TrimSpace(req.QuotePublishMode)
+	if mode == "" {
+		if req.AutoQuote {
+			mode = "auto"
+		} else {
+			mode = "manual_review"
+		}
+	}
+	if mode != "auto" && mode != "manual_review" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "quotePublishMode must be auto or manual_review"})
+		return
+	}
+	seller["quote_publish_mode"] = mode
+	seller["auto_quote"] = mode == "auto"
 	seller["auto_accept_low_risk"] = req.AutoAcceptLowRisk
 	seller["provider_pubkey"] = strings.TrimSpace(req.ProviderID)
 	seller["poll_interval_sec"] = 2
@@ -186,9 +201,11 @@ func sellerSettingsFromConfig(cfg *config.Config) SellerAgentSettings {
 	}
 	seller := cfg.SellerAgent
 	docker := cfg.Provider.Docker
+	publishMode := quotePublishMode(seller.QuotePublishMode, seller.AutoQuote)
 	return SellerAgentSettings{
 		Enabled:               seller.Enabled,
-		AutoQuote:             seller.AutoQuote,
+		AutoQuote:             publishMode == "auto",
+		QuotePublishMode:      publishMode,
 		AutoAcceptLowRisk:     seller.AutoAcceptLowRisk || seller.AutoCompleteTextTasks,
 		AutoCompleteTextTasks: seller.AutoCompleteTextTasks,
 		ProviderID:            firstNonEmpty(strings.TrimSpace(seller.ProviderPubkey), "local-dock"),
@@ -205,6 +222,17 @@ func sellerSettingsFromConfig(cfg *config.Config) SellerAgentSettings {
 		DockerMaxMemoryMB:     docker.MaxMemoryMB,
 		DockerPullPolicy:      docker.PullPolicy,
 	}
+}
+
+func quotePublishMode(mode string, auto bool) string {
+	mode = strings.TrimSpace(mode)
+	if mode == "auto" || mode == "manual_review" {
+		return mode
+	}
+	if auto {
+		return "auto"
+	}
+	return "manual_review"
 }
 
 func mapAt(parent map[string]any, key string) map[string]any {

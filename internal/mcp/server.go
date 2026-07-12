@@ -20,6 +20,8 @@ import (
 	"github.com/exora-dock/exora-dock/internal/runcapability"
 )
 
+const defaultBuyerQuestionFreedomHint = "If none of these suggestions fits, describe your concrete task, desired outcome, or materials you already have, and I will adapt the recommendation to your requirement."
+
 const (
 	protocolVersion   = "2025-06-18"
 	workMCPLeaseTTL   = 5 * time.Minute
@@ -176,16 +178,48 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 }
 
 func (s *Server) callToolInner(ctx context.Context, name string, args map[string]any) (toolResult, error) {
+	if s.interactiveSession() && s.connectionRole() == "buyer" && name != "exora.session_request_user_input" && name != "exora.session_submit_plan" {
+		return errorResult("buyer interview phase only allows structured questions or local plan submission", nil), nil
+	}
 	if s.interactiveSession() {
 		switch name {
-		case "exora.session_report_progress":
-			return successResult(map[string]any{"recorded": true, "sessionId": s.opts.AgentSessionID, "message": firstString(args, "message", "summary")}), nil
 		case "exora.session_request_user_input":
-			question := firstString(args, "question", "message")
+			question := firstString(args, "question")
 			if question == "" {
 				return errorResult("question required", nil), nil
 			}
-			return successResult(map[string]any{"recorded": true, "sessionId": s.opts.AgentSessionID, "waitingFor": "user", "question": question}), nil
+			if s.connectionRole() != "buyer" {
+				return successResult(map[string]any{"recorded": true, "sessionId": s.opts.AgentSessionID, "waitingFor": "user", "question": question}), nil
+			}
+			inputType := firstString(args, "inputType")
+			switch inputType {
+			case "single_select", "multi_select":
+			default:
+				return errorResult("buyer questions must use single_select or multi_select", nil), nil
+			}
+			options := anySlice(args["options"])
+			if len(options) < 2 || len(options) > 3 {
+				return errorResult("buyer questions require exactly two or three suggested options", nil), nil
+			}
+			request := map[string]any{
+				"id": firstString(args, "id"), "title": firstString(args, "title"), "question": question,
+				"why": firstString(args, "why"), "inputType": inputType, "options": options,
+				"allowCustom": true, "required": args["required"] != false,
+				"placeholder": firstString(args, "placeholder"), "freedomHint": firstNonEmptyString(firstString(args, "freedomHint"), defaultBuyerQuestionFreedomHint),
+			}
+			return successResult(map[string]any{"recorded": true, "sessionId": s.opts.AgentSessionID, "waitingFor": "user", "request": request, "question": question}), nil
+		case "exora.session_submit_plan":
+			if s.connectionRole() != "buyer" {
+				return toolResult{}, fmt.Errorf("Unknown session tool: %s", name)
+			}
+			plans, ok := args["plans"].(map[string]any)
+			if !ok {
+				return errorResult("plans object required", nil), nil
+			}
+			if err := validateBuyerPlanBundle(plans); err != nil {
+				return errorResult(err.Error(), nil), nil
+			}
+			return successResult(map[string]any{"recorded": true, "sessionId": s.opts.AgentSessionID, "waitingFor": "plan_review", "plans": plans}), nil
 		}
 	}
 	if s.v2Surface() {
@@ -401,7 +435,10 @@ func (s *Server) instructions() string {
 		return "This is the Exora V2 AutomationRun MCP surface. The listed tools require a short-lived run capability issued by Dock Supervisor; restart this MCP server through a claimed AutomationRun. No tool grants human approval, moves funds, reveals credentials, or expands workspace access."
 	}
 	if s.interactiveSession() {
-		return "This MCP connection is locked to Exora chat session " + s.opts.AgentSessionID + " and Work UID " + s.opts.WorkUID + ". Use exora.run_buyer_work for buyer planning, exora.session_report_progress for visible progress, and exora.session_request_user_input for questions. The Dock rejects another workUid or projectPath. Ordinary chat text cannot change transaction state. Never request payment PINs, private keys, owner tokens, model credentials, or arbitration authority."
+		if s.connectionRole() == "buyer" {
+			return "This MCP connection is locked to Exora buyer interview session " + s.opts.AgentSessionID + " and Work UID " + s.opts.WorkUID + ". Before a plan is reviewed, your only purpose is to learn exactly what the user wants to buy. End every turn with exactly one structured action: call exora.session_request_user_input for the next necessary question, or call exora.session_submit_plan once the requirements are mature. Every question must first offer exactly two or three reasonable, context-specific answer options, then preserve a separate free-form path through allowCustom and freedomHint. Use single_select by default and multi_select only when answers can genuinely coexist. Do not use an option slot for Other or Not sure because the custom input already covers that path. Do not search sellers, request quotes, create manifests, start remote work, request approval, or discuss payment. The Dock rejects another workUid or projectPath."
+		}
+		return "This MCP connection is locked to Exora chat session " + s.opts.AgentSessionID + " and Work UID " + s.opts.WorkUID + ". Use Exora session tools for structured progress and questions. The Dock rejects another workUid or projectPath. Ordinary chat text cannot change transaction state. Never request payment PINs, private keys, owner tokens, model credentials, or arbitration authority."
 	}
 	return "Use Exora Dock tools as a continuous task flow. For buyer work, call exora.run_buyer_work first; it is plan-first. It classifies the request, stops for clarification or local plan confirmation when needed, writes .exora/agent-plans/<plan_id>/ files only after confirmation, and requires Dock owner approval of submit_remote_task_manifest before seller matching or quoting. Include the copied workUid on every related request when the Dock prompt provides one; if the UID is not registered yet, also include the copied projectPath. Preserve and pass the returned resumeJson or runId on every follow-up so each step can checkpoint and resume through JSON. Calls with workUid mark that Work as actively controlled by this external MCP agent for a short renewable lease so the built-in Dock buyer composer does not race the same task. Do not call exora.negotiate_task as the default path for an unreviewed manifest; use it only as a low-level compatibility tool after the owner has approved an equivalent manifest. Never approve, select, pay, reveal credentials, or call Docker directly."
 }
@@ -2060,10 +2097,170 @@ func (s *Server) toolDefinitions() []toolDefinition {
 	if !s.interactiveSession() {
 		return definitions
 	}
+	if s.connectionRole() == "buyer" {
+		return buyerInterviewToolDefinitions()
+	}
 	return append(definitions,
 		toolDefinition{Name: "exora.session_report_progress", Title: "Report Chat Progress", Description: "Record a safe progress update in the bound Exora chat. This cannot change transaction state.", InputSchema: objectSchema(map[string]any{"message": stringProp("Visible progress message."), "summary": stringProp("Alias for message.")}, nil)},
 		toolDefinition{Name: "exora.session_request_user_input", Title: "Request Chat User Input", Description: "Ask the human a question through the bound Exora chat. This grants no approval.", InputSchema: objectSchema(map[string]any{"question": stringProp("Question for the human user.")}, []string{"question"})},
 	)
+}
+
+func buyerInterviewToolDefinitions() []toolDefinition {
+	optionSchema := map[string]any{
+		"type": "object", "additionalProperties": false,
+		"properties": map[string]any{
+			"id": stringProp("Stable option id."), "label": stringProp("Short user-facing label."),
+			"description": stringProp("Optional one-sentence explanation."),
+		},
+		"required": []string{"id", "label"},
+	}
+	questionSchema := strictObjectSchema(map[string]any{
+		"id":          stringProp("Stable question id in snake_case."),
+		"title":       stringProp("Short popup heading, no more than 40 characters."),
+		"question":    stringProp("One concrete question for the buyer."),
+		"why":         stringProp("One short sentence explaining why this is needed for the plan."),
+		"inputType":   map[string]any{"type": "string", "enum": []string{"single_select", "multi_select"}},
+		"options":     map[string]any{"type": "array", "items": optionSchema, "minItems": 2, "maxItems": 3, "description": "Exactly two or three reasonable, context-specific candidate answers. Do not include Other or Not sure; the custom input provides that path."},
+		"allowCustom": boolProp("Must be true. Every question must allow a free-form answer in addition to any suggested options."),
+		"required":    boolProp("Whether an answer is required before continuing."),
+		"placeholder": stringProp("Optional hint for a custom answer."),
+		"freedomHint": stringProp("A supportive user-facing sentence in the user's language explaining that if none of the suggested options fits, the buyer may type a different requirement or describe the concrete task so the agent can adapt its recommendation."),
+	}, []string{"id", "title", "question", "why", "inputType", "options", "allowCustom", "required", "freedomHint"})
+	localFileSchema := strictObjectSchema(map[string]any{
+		"id":                 stringProp("Stable file id referenced by the remote plan; use snake_case."),
+		"name":               stringProp("User-facing file or folder name."),
+		"pathSuggestion":     stringProp("Suggested path relative to the locked workspace; never use an absolute path."),
+		"purpose":            stringProp("Why this material is needed."),
+		"preparationSteps":   arrayProp("Concrete local steps to create, collect, sanitize, or validate this material."),
+		"sensitivity":        map[string]any{"type": "string", "enum": []string{"public", "private", "sensitive"}},
+		"remoteDisclosure":   map[string]any{"type": "string", "enum": []string{"full", "redacted", "metadata_only", "never"}},
+		"required":           boolProp("Whether remote execution is blocked until this material is ready."),
+		"completionCriteria": arrayProp("Checks proving this material is ready."),
+	}, []string{"id", "name", "pathSuggestion", "purpose", "preparationSteps", "sensitivity", "remoteDisclosure", "required", "completionCriteria"})
+	remoteFileSchema := strictObjectSchema(map[string]any{
+		"localFileId":  stringProp("The exact id of a file declared by localPreparationPlan.filesToPrepare."),
+		"usage":        stringProp("How the remote agent will use the prepared file."),
+		"required":     boolProp("Whether remote execution must stop if the file is unavailable."),
+		"transferMode": map[string]any{"type": "string", "enum": []string{"full", "redacted", "metadata_only"}},
+		"destination":  stringProp("Relative destination or logical input name in the remote workspace."),
+	}, []string{"localFileId", "usage", "required", "transferMode", "destination"})
+	planSchema := strictObjectSchema(map[string]any{
+		"plans": map[string]any{
+			"type": "object", "additionalProperties": false,
+			"properties": map[string]any{
+				"localPreparationPlan": strictObjectSchema(map[string]any{
+					"version":            stringProp("Plan schema version; use 1.0."),
+					"title":              stringProp("Title for the buyer agent's local preparation work."),
+					"summary":            stringProp("What must be prepared locally before remote execution."),
+					"objective":          stringProp("Definition of ready for handoff."),
+					"steps":              arrayProp("Ordered local preparation steps."),
+					"filesToPrepare":     map[string]any{"type": "array", "items": localFileSchema, "minItems": 1},
+					"safetyChecks":       arrayProp("Checks for secrets, privacy, licensing, and data minimization."),
+					"completionCriteria": arrayProp("Checks that make the complete local preparation plan ready."),
+				}, []string{"version", "title", "summary", "objective", "steps", "filesToPrepare", "safetyChecks", "completionCriteria"}),
+				"remoteExecutionPlan": strictObjectSchema(map[string]any{
+					"version":            stringProp("Plan schema version; use 1.0."),
+					"title":              stringProp("Concise remote task title."),
+					"summary":            stringProp("Plain-language remote task summary."),
+					"goal":               stringProp("Outcome the remote agent must achieve."),
+					"requiredFiles":      map[string]any{"type": "array", "items": remoteFileSchema, "minItems": 1},
+					"executionSteps":     arrayProp("Ordered instructions for the remote agent after it obtains the prepared files."),
+					"requirements":       arrayProp("Functional and technical requirements."),
+					"constraints":        objectProp("Budget, deadline, technical, privacy, and operational constraints."),
+					"deliverables":       arrayProp("Concrete outputs the remote agent must return."),
+					"acceptanceCriteria": arrayProp("Objective checks used to accept delivery."),
+					"prohibitedActions":  arrayProp("Actions the remote agent must never perform."),
+					"assumptions":        arrayProp("Assumptions that the buyer must review."),
+					"risks":              arrayProp("Known risks and mitigations."),
+					"outOfScope":         arrayProp("Explicit exclusions."),
+				}, []string{"version", "title", "summary", "goal", "requiredFiles", "executionSteps", "requirements", "constraints", "deliverables", "acceptanceCriteria", "prohibitedActions", "assumptions", "risks", "outOfScope"}),
+			},
+			"required": []string{"localPreparationPlan", "remoteExecutionPlan"},
+		},
+	}, []string{"plans"})
+	return []toolDefinition{
+		{Name: "exora.session_request_user_input", Title: "Ask Buyer Question", Description: "Put one structured requirement question into the Dock composer with exactly 2–3 reasonable suggested answers plus a separate custom-input path, then wait for the buyer.", InputSchema: questionSchema},
+		{Name: "exora.session_submit_plan", Title: "Submit Two Buyer Plans For Review", Description: "Show a local material-preparation plan and a remote execution plan together. Every remote requiredFiles entry must reference a prepared local file by localFileId. This does not start remote work.", InputSchema: planSchema},
+	}
+}
+
+func validateBuyerPlanBundle(plans map[string]any) error {
+	local, localOK := plans["localPreparationPlan"].(map[string]any)
+	remote, remoteOK := plans["remoteExecutionPlan"].(map[string]any)
+	if !localOK || !remoteOK {
+		return fmt.Errorf("plans.localPreparationPlan and plans.remoteExecutionPlan required")
+	}
+	for name, plan := range map[string]map[string]any{"localPreparationPlan": local, "remoteExecutionPlan": remote} {
+		for _, field := range []string{"title", "summary"} {
+			if firstString(plan, field) == "" {
+				return fmt.Errorf("plans.%s.%s required", name, field)
+			}
+		}
+	}
+	files := map[string]string{}
+	for _, value := range anySlice(local["filesToPrepare"]) {
+		file, ok := value.(map[string]any)
+		if !ok {
+			return fmt.Errorf("localPreparationPlan.filesToPrepare entries must be objects")
+		}
+		id := firstString(file, "id")
+		if id == "" {
+			return fmt.Errorf("local prepared file id required")
+		}
+		if _, exists := files[id]; exists {
+			return fmt.Errorf("duplicate local prepared file id %q", id)
+		}
+		path := firstString(file, "pathSuggestion")
+		cleanPath := filepath.Clean(path)
+		if path == "" || filepath.IsAbs(path) || cleanPath == ".." || strings.HasPrefix(cleanPath, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("local prepared file %q must use a workspace-relative pathSuggestion", id)
+		}
+		disclosure := firstString(file, "remoteDisclosure")
+		switch disclosure {
+		case "full", "redacted", "metadata_only", "never":
+		default:
+			return fmt.Errorf("local prepared file %q has invalid remoteDisclosure", id)
+		}
+		files[id] = disclosure
+	}
+	if len(files) == 0 {
+		return fmt.Errorf("localPreparationPlan.filesToPrepare must not be empty")
+	}
+	refs := anySlice(remote["requiredFiles"])
+	if len(refs) == 0 {
+		return fmt.Errorf("remoteExecutionPlan.requiredFiles must not be empty")
+	}
+	seenRefs := map[string]bool{}
+	for _, value := range refs {
+		ref, ok := value.(map[string]any)
+		if !ok {
+			return fmt.Errorf("remoteExecutionPlan.requiredFiles entries must be objects")
+		}
+		id := firstString(ref, "localFileId")
+		if seenRefs[id] {
+			return fmt.Errorf("duplicate remote file reference %q", id)
+		}
+		seenRefs[id] = true
+		disclosure, exists := files[id]
+		if !exists {
+			return fmt.Errorf("remote file reference %q is not declared by localPreparationPlan.filesToPrepare", id)
+		}
+		if disclosure == "never" {
+			return fmt.Errorf("remote file reference %q points to material marked never for disclosure", id)
+		}
+		transferMode := firstString(ref, "transferMode")
+		if transferMode != "full" && transferMode != "redacted" && transferMode != "metadata_only" {
+			return fmt.Errorf("remote file reference %q has invalid transferMode", id)
+		}
+		if (disclosure == "redacted" && transferMode == "full") || (disclosure == "metadata_only" && transferMode != "metadata_only") {
+			return fmt.Errorf("remote file reference %q requests more disclosure than localPreparationPlan permits", id)
+		}
+	}
+	if len(anySlice(remote["deliverables"])) == 0 || len(anySlice(remote["acceptanceCriteria"])) == 0 {
+		return fmt.Errorf("remoteExecutionPlan.deliverables and acceptanceCriteria must not be empty")
+	}
+	return nil
 }
 
 func (s *Server) lockInteractiveWorkContext(args map[string]any) (map[string]any, error) {
@@ -2103,7 +2300,7 @@ func (s *Server) recordSessionToolEvent(ctx context.Context, name string, result
 	if len(text) > 1000 {
 		text = text[:1000]
 	}
-	payload := map[string]any{"isError": result.IsError}
+	payload := map[string]any{"isError": result.IsError, "data": result.StructuredContent}
 	if callErr != nil {
 		payload["error"] = callErr.Error()
 	}

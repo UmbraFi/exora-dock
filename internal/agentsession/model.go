@@ -32,6 +32,8 @@ type Session struct {
 	Workspace         string            `json:"workspace,omitempty"`
 	PermissionMode    string            `json:"permissionMode"`
 	PermissionProfile string            `json:"permissionProfile,omitempty"`
+	Model             string            `json:"model,omitempty"`
+	ReasoningEffort   string            `json:"reasoningEffort,omitempty"`
 	WorkUID           string            `json:"workUid,omitempty"`
 	TransactionID     string            `json:"transactionId,omitempty"`
 	RunID             string            `json:"runId,omitempty"`
@@ -80,6 +82,8 @@ type StartRequest struct {
 	Workspace         string          `json:"workspace,omitempty"`
 	PermissionMode    string          `json:"permissionMode,omitempty"`
 	PermissionProfile string          `json:"permissionProfile,omitempty"`
+	Model             string          `json:"model,omitempty"`
+	ReasoningEffort   string          `json:"reasoningEffort,omitempty"`
 	WorkUID           string          `json:"workUid,omitempty"`
 	TransactionID     string          `json:"transactionId,omitempty"`
 	RunID             string          `json:"runId,omitempty"`

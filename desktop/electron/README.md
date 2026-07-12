@@ -23,7 +23,7 @@ This folder owns the desktop shell around the local Exora Dock daemon.
 The renderer calls one channel, `exora:invoke`, and passes a command string.
 `main.cjs` groups commands by domain:
 
-- `window`: minimize, close, maximize, and manual drag.
+- `window`: minimize, close, and maximize.
 - `dockRuntime`: daemon lifecycle, health, logs, MCP prompt/config strings.
 - `localWork`: workspace snapshots, work MCP leases, project folder operations.
 - `persistence`: desktop settings, locale, chat, archives, transactions.
