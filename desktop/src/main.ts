@@ -161,6 +161,32 @@ type ActiveView = 'work' | 'market' | 'chat' | 'settings'
 type ChatMode = 'expanded' | 'compact'
 type OrderSide = 'buyer' | 'seller'
 type SellerWorkspaceMode = 'transactions' | 'monitor'
+type V3SellerTab = 'vm' | 'resources' | 'openapi' | 'listings'
+
+type V3Product = {
+  productId: string
+  productKind: 'compute' | 'download' | 'api_operation' | string
+  title: string
+  description?: string
+  status: string
+  providerDockId?: string
+  manifest?: Record<string, unknown>
+  version?: number
+  updatedAt?: string
+}
+
+type V3Listing = {
+  listingId: string
+  productId: string
+  status: string
+  price?: Record<string, unknown>
+  availability?: Record<string, unknown>
+  validation?: Record<string, unknown>
+  version?: number
+  updatedAt?: string
+}
+
+type V3SelectedFile = { token: string; name: string; sizeBytes: number; status?: string }
 type SettingsView = 'api' | 'local-agents' | 'buyer-agent' | 'seller-card' | 'seller' | 'pwa' | 'wallet' | 'archives'
 type AppTheme = 'light' | 'dark'
 type LLMTestStatus = 'passed' | 'failed'
@@ -2039,6 +2065,23 @@ const state: {
   seenApprovalIds: Set<string>
   statusLoading: boolean
   workspaceLoading: boolean
+  v3Products: V3Product[]
+  v3CatalogQuery: string
+  v3CatalogLoading: boolean
+  v3CatalogLoaded: boolean
+  v3CatalogError?: string
+  v3SelectedProduct?: V3Product
+  v3SellerTab: V3SellerTab
+  v3Listings: V3Listing[]
+  v3ListingsLoading: boolean
+  v3ListingsLoaded: boolean
+  v3SellerError?: string
+  v3VMProbe?: Record<string, unknown>
+  v3VMDomains: Array<Record<string, unknown>>
+  v3VMTemplate?: Record<string, unknown>
+  v3Files: V3SelectedFile[]
+  v3OpenAPIDocument: string
+  v3OpenAPIName: string
 } = {
   busy: false,
   profileMenuOpen: false,
@@ -2121,6 +2164,18 @@ const state: {
   seenApprovalIds: new Set(),
   statusLoading: false,
   workspaceLoading: false,
+  v3Products: [],
+  v3CatalogQuery: '',
+  v3CatalogLoading: false,
+  v3CatalogLoaded: false,
+  v3SellerTab: 'vm',
+  v3Listings: [],
+  v3ListingsLoading: false,
+  v3ListingsLoaded: false,
+  v3VMDomains: [],
+  v3Files: [],
+  v3OpenAPIDocument: '',
+  v3OpenAPIName: '',
 }
 
 let pwaLinkPollTimer: number | undefined
@@ -8906,14 +8961,152 @@ function renderTransactionProgressForSelection(selected: ReturnType<typeof selec
   return thread ? renderTransactionProgressPanel(thread, thread.side || state.workOrderSide) : ''
 }
 
+function v3FormatBytes(value: unknown) {
+  const bytes = Number(value || 0)
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`
+  return `${bytes} B`
+}
+
+function v3PriceLabel(value?: Record<string, unknown>) {
+  if (!value) return 'Price in manifest'
+  const amount = value.amount ?? value.pricePerMinute ?? '—'
+  return `${amount} ${value.currency || ''}${value.unit ? ` / ${value.unit}` : ''}`.trim()
+}
+
+async function loadV3Catalog() {
+  if (state.v3CatalogLoading) return
+  state.v3CatalogLoading = true
+  state.v3CatalogError = undefined
+  renderDecisionPanel()
+  try {
+    const response = await invoke<{ products?: V3Product[] }>('catalog_products', { input: { query: state.v3CatalogQuery } })
+    state.v3Products = response.products || []
+    state.v3CatalogLoaded = true
+  } catch (error) {
+    state.v3CatalogError = humanizeError(error)
+  } finally {
+    state.v3CatalogLoading = false
+    renderDecisionPanel()
+  }
+}
+
+async function loadV3Listings() {
+  if (state.v3ListingsLoading) return
+  state.v3ListingsLoading = true
+  state.v3SellerError = undefined
+  renderDecisionPanel()
+  try {
+    const response = await invoke<{ listings?: V3Listing[] }>('provider_listings')
+    state.v3Listings = response.listings || []
+    state.v3ListingsLoaded = true
+  } catch (error) {
+    state.v3SellerError = humanizeError(error)
+  } finally {
+    state.v3ListingsLoading = false
+    renderDecisionPanel()
+  }
+}
+
+function ensureV3SurfaceData() {
+  if (state.workOrderSide === 'buyer' && !state.v3CatalogLoading && !state.v3CatalogLoaded && !state.v3CatalogError) void loadV3Catalog()
+  if (state.workOrderSide === 'seller' && !state.v3ListingsLoading && !state.v3ListingsLoaded && !state.v3SellerError) void loadV3Listings()
+}
+
+function renderV3BuyerSurface() {
+  if (state.v3SelectedProduct) {
+    const product = state.v3SelectedProduct
+    return `<section class="v3-market-surface v3-product-detail">
+      <button class="ghost v3-back-button" type="button" data-v3-action="catalog-back">${toolbarIcons.back}<span>Back to products</span></button>
+      <header class="v3-product-hero"><span>${escapeHTML(product.productKind)}</span><h2>${escapeHTML(product.title)}</h2><p>${escapeHTML(product.description || 'Machine-readable Exora product.')}</p></header>
+      <div class="v3-detail-grid"><section class="v3-console-panel"><div class="section-title"><strong>AgentProductManifest</strong><span>v${product.version || 1}</span></div><pre>${escapeHTML(JSON.stringify(product.manifest || {}, null, 2))}</pre></section>
+      <aside class="v3-console-panel"><dl class="detail-grid"><div><dt>Status</dt><dd>${escapeHTML(product.status)}</dd></div><div><dt>Provider</dt><dd>${escapeHTML(product.providerDockId || 'Exora')}</dd></div><div><dt>Delivery</dt><dd>${escapeHTML(product.productKind)}</dd></div></dl><button type="button" disabled>Agent purchase coming next</button><p class="muted">This release supports discovery and structured preview only.</p></aside></div>
+    </section>`
+  }
+  const cards = state.v3Products.map((product) => {
+    const manifest = product.manifest || {}
+    const price = (manifest.price || {}) as Record<string, unknown>
+    return `<button class="agent-card v3-product-card" type="button" data-v3-product="${escapeAttr(product.productId)}">
+      <div class="market-card-topline"><span class="v3-kind-chip">${escapeHTML(product.productKind)}</span><span class="status-dot" data-state="healthy">${escapeHTML(product.status)}</span></div>
+      <div class="market-card-titleblock"><h3>${escapeHTML(product.title)}</h3><small>${escapeHTML(product.description || 'Machine-readable product')}</small></div>
+      <div class="market-card-details"><span><small>Price</small><strong>${escapeHTML(v3PriceLabel(price))}</strong></span><span><small>Provider</small><strong>${escapeHTML(product.providerDockId || 'Exora')}</strong></span></div>
+      <div class="market-card-footer"><span>Open structured manifest</span>${toolbarIcons.forward}</div>
+    </button>`
+  }).join('')
+  return `<section class="v3-market-surface">
+    <div class="v3-surface-heading"><div><span>AI-FIRST MARKET</span><h2>Agent-ready products</h2><p>Compute minutes, licensed resources, and normalized OpenAPI operations.</p></div><button class="ghost" type="button" data-v3-action="catalog-refresh">${toolbarIcons.refresh}<span>Refresh</span></button></div>
+    <form class="card-market-form v3-catalog-search" data-v3-catalog-search><input name="query" value="${escapeAttr(state.v3CatalogQuery)}" placeholder="Search compute, downloads, or API operations"/><button class="card-market-search-button" type="submit">${toolbarIcons.search}</button></form>
+    ${state.v3CatalogError ? `<div class="v3-error">${escapeHTML(state.v3CatalogError)}</div>` : ''}
+    ${state.v3CatalogLoading ? '<div class="market-rail-empty"><strong>Loading V3 catalog</strong><span>Reading published and currently available listings.</span></div>' : cards ? `<div class="market-rail-grid v3-product-grid">${cards}</div>` : '<div class="market-rail-empty"><strong>No available products</strong><span>Validated provider listings will appear here.</span></div>'}
+  </section>`
+}
+
+function renderV3SellerTabs() {
+  const labels: Array<[V3SellerTab, string]> = [['vm', 'VM'], ['resources', 'Resources'], ['openapi', 'OpenAPI'], ['listings', 'Listings']]
+  return `<nav class="v3-seller-tabs">${labels.map(([id, label], index) => `<button type="button" data-v3-seller-tab="${id}" class="${state.v3SellerTab === id ? 'active' : ''}"><span>${index + 1}</span>${label}</button>`).join('')}</nav>`
+}
+
+function renderV3VMPage() {
+  const probe = state.v3VMProbe
+  const domains = state.v3VMDomains.map((domain) => `<label class="v3-domain-row"><input type="radio" name="domain" value="${escapeAttr(domain.name)}" ${domain.eligible ? '' : 'disabled'}/><span><strong>${escapeHTML(domain.name)}</strong><small>${escapeHTML(domain.state)}</small></span></label>`).join('')
+  return `<div class="v3-seller-grid"><section class="v3-console-panel"><div class="section-title"><strong>Linux KVM host</strong><button class="ghost" type="button" data-v3-action="vm-probe">Scan host</button></div>${probe ? `<div class="v3-metric-grid"><span><small>KVM</small><strong>${escapeHTML(probe.kvm)}</strong></span><span><small>IOMMU</small><strong>${escapeHTML(probe.iommu)}</strong></span><span><small>GPUs</small><strong>${Array.isArray(probe.gpus) ? probe.gpus.length : 0}</strong></span><span><small>OS</small><strong>${escapeHTML(probe.os)}</strong></span></div>` : '<p class="empty-copy">Scan a Linux provider host. Windows and macOS return unsupported_host.</p>'}<div class="v3-domain-list">${domains}</div></section>
+    <form class="v3-console-panel v3-provider-form" data-v3-form="vm"><div class="section-title"><strong>1:1 disposable VM listing</strong><span>Golden Image</span></div><label>Title<input name="title" required placeholder="H100 CUDA environment"/></label><label>Text description<textarea name="description" required></textarea></label><div class="v3-form-grid"><label>Price / minute<input name="price" type="number" min="1" required/></label><label>Currency<input name="currency" value="USD"/></label><label>Minimum minutes<input name="minMinutes" type="number" min="1" value="1"/></label><label>Maximum minutes<input name="maxMinutes" type="number" min="1" value="240"/></label><label>Workspace GiB<input name="workspaceGiB" type="number" min="1" value="100"/></label><label>Region<input name="region" placeholder="ap-east"/></label></div><div class="v3-form-actions"><button type="button" class="ghost" data-v3-action="vm-import">Import</button><button type="button" class="ghost" data-v3-action="vm-validate">Run validation</button><button type="submit">Save draft</button></div>${state.v3VMTemplate ? `<pre>${escapeHTML(JSON.stringify(state.v3VMTemplate, null, 2))}</pre>` : ''}</form></div>`
+}
+
+function renderV3ResourcesPage() {
+  const files = state.v3Files.map((file) => `<div class="v3-file-row"><span><strong>${escapeHTML(file.name)}</strong><small>${v3FormatBytes(file.sizeBytes)}</small></span><em>${escapeHTML(file.status || 'selected')}</em></div>`).join('')
+  return `<form class="v3-console-panel v3-provider-form" data-v3-form="resources"><div class="v3-file-picker"><button class="ghost" type="button" data-v3-action="choose-files">Choose files</button><span>${state.v3Files.length ? `${state.v3Files.length} selected` : 'Paths remain in the Electron main process'}</span></div><div class="v3-file-list">${files}</div><label>Bundle title<input name="title" required/></label><label>Text summary<textarea name="description" required></textarea></label><div class="v3-form-grid"><label>Version<input name="version" value="1.0.0"/></label><label>License<input name="license" value="commercial"/></label><label>Price / download<input name="price" type="number" min="1" required/></label><label>Grant hours<input name="grantHours" type="number" min="1" max="720" value="24"/></label><label>Delivery<select name="delivery"><option>downloadable</option><option>environment_only</option><option>downloadable_and_environment</option></select></label></div><button type="submit">Create AssetBundle and upload</button></form>`
+}
+
+function renderV3OpenAPIPage() {
+  return `<form class="v3-console-panel v3-provider-form" data-v3-form="openapi"><div class="v3-file-picker"><button class="ghost" type="button" data-v3-action="choose-openapi">Choose OpenAPI</button><span>${escapeHTML(state.v3OpenAPIName || 'OpenAPI 3.x JSON or YAML')}</span></div><label>Product title<input name="title" required/></label><label>Description<textarea name="description"></textarea></label><label>Public HTTPS Base URL<input name="baseUrl" type="url" required placeholder="https://api.example.com"/></label><div class="v3-form-grid"><label>Authentication<select name="authType"><option value="bearer">Bearer token</option><option value="api_key">API key</option><option value="none">None</option></select></label><label>Secret<input name="secret" type="password" autocomplete="off"/></label></div><label>OpenAPI document<textarea class="v3-code-input" name="document" required>${escapeHTML(state.v3OpenAPIDocument)}</textarea></label><button type="submit">Validate and import operations</button></form>`
+}
+
+function renderV3ListingsPage() {
+  const rows = state.v3Listings.map((listing) => `<article class="v3-listing-row"><span class="transaction-record-rail"></span><div><strong>${escapeHTML(listing.listingId)}</strong><small>${escapeHTML(listing.productId)} · ${escapeHTML(listing.updatedAt || '')}</small></div><span class="status-dot" data-state="${listing.status === 'published' ? 'healthy' : 'starting'}">${escapeHTML(listing.status)}</span><div>${listing.status === 'draft' ? `<button type="button" data-v3-listing-action="publish" data-listing-id="${escapeAttr(listing.listingId)}">Publish</button>` : ''}${listing.status === 'published' ? `<button class="ghost" type="button" data-v3-listing-action="pause" data-listing-id="${escapeAttr(listing.listingId)}">Pause</button>` : ''}${listing.status === 'paused' ? `<button type="button" data-v3-listing-action="resume" data-listing-id="${escapeAttr(listing.listingId)}">Resume</button>` : ''}<button class="danger ghost" type="button" data-v3-listing-action="retire" data-listing-id="${escapeAttr(listing.listingId)}">Retire</button></div></article>`).join('')
+  return `<section><div class="v3-listings-head"><span>draft / validating / published / paused / provider_busy / unhealthy / retired</span><button class="ghost" type="button" data-v3-action="listings-refresh">${toolbarIcons.refresh}<span>Refresh</span></button></div>${state.v3ListingsLoading ? '<p class="empty-copy">Loading listings…</p>' : rows || '<div class="market-rail-empty"><strong>No listings</strong><span>Create a VM, resource bundle, or OpenAPI import first.</span></div>'}</section>`
+}
+
+function renderV3SellerSurface() {
+  const page = state.v3SellerTab === 'vm' ? renderV3VMPage() : state.v3SellerTab === 'resources' ? renderV3ResourcesPage() : state.v3SellerTab === 'openapi' ? renderV3OpenAPIPage() : renderV3ListingsPage()
+  return `<section class="v3-market-surface"><div class="v3-surface-heading"><div><span>PROVIDER CONTROL</span><h2>Seller workbench</h2><p>Install Dock, package idle capacity, and publish machine-readable products.</p></div></div>${renderV3SellerTabs()}${state.v3SellerError ? `<div class="v3-error">${escapeHTML(state.v3SellerError)}</div>` : ''}<div class="v3-seller-page">${page}</div></section>`
+}
+
+async function v3CreateProductAndListing(productInput: Record<string, unknown>, price: Record<string, unknown>, valid: boolean) {
+  const created = await invoke<{ product: V3Product }>('provider_product_create', { input: productInput })
+  await invoke('provider_listing_save', { input: { productId: created.product.productId, price, validation: { valid }, availability: { availableNow: true } } })
+  state.v3SellerTab = 'listings'
+  await loadV3Listings()
+}
+
+function attachV3SurfaceHandlers() {
+  fields.actionView.querySelector<HTMLFormElement>('[data-v3-catalog-search]')?.addEventListener('submit', (event) => { event.preventDefault(); const form = event.currentTarget as HTMLFormElement; state.v3CatalogQuery = String(new FormData(form).get('query') || ''); void loadV3Catalog() })
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-product]').forEach((button) => button.addEventListener('click', () => { state.v3SelectedProduct = state.v3Products.find((item) => item.productId === button.dataset.v3Product); renderDecisionPanel() }))
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-seller-tab]').forEach((button) => button.addEventListener('click', () => { state.v3SellerTab = button.dataset.v3SellerTab as V3SellerTab; renderDecisionPanel() }))
+  const action = (name: string, handler: () => void) => fields.actionView.querySelector<HTMLButtonElement>(`[data-v3-action="${name}"]`)?.addEventListener('click', handler)
+  action('catalog-back', () => { state.v3SelectedProduct = undefined; renderDecisionPanel() })
+  action('catalog-refresh', () => void loadV3Catalog())
+  action('listings-refresh', () => void loadV3Listings())
+  action('vm-probe', () => void run(async () => { const probe = await invoke<{ result: Record<string, unknown> }>('provider_vm_probe'); state.v3VMProbe = probe.result; const domains = await invoke<{ result: { domains?: Array<Record<string, unknown>> } }>('provider_vm_domains'); state.v3VMDomains = domains.result.domains || []; renderDecisionPanel() }))
+  action('vm-import', () => void run(async () => { const domain = fields.actionView.querySelector<HTMLInputElement>('input[name="domain"]:checked')?.value; if (!domain) throw new Error('Choose an eligible powered-off libvirt domain.'); const response = await invoke<{ result: Record<string, unknown> }>('provider_vm_import', { input: { domain, templateId: `template-${Date.now()}` } }); state.v3VMTemplate = response.result; renderDecisionPanel() }))
+  action('vm-validate', () => void run(async () => { if (!state.v3VMTemplate) throw new Error('Import a Golden Image first.'); const workspaceGiB = Number(fields.actionView.querySelector<HTMLInputElement>('input[name="workspaceGiB"]')?.value || 100); const response = await invoke<{ result: Record<string, unknown> }>('provider_vm_validate', { input: { templateId: state.v3VMTemplate.templateId, workspaceGiB } }); state.v3VMTemplate = { ...state.v3VMTemplate, ...response.result }; renderDecisionPanel() }))
+  action('choose-files', () => void run(async () => { const response = await invoke<{ files?: V3SelectedFile[] }>('provider_asset_choose_files'); state.v3Files = response.files || []; renderDecisionPanel() }))
+  action('choose-openapi', () => void run(async () => { const response = await invoke<{ document: string; name: string }>('provider_openapi_choose'); state.v3OpenAPIDocument = response.document; state.v3OpenAPIName = response.name; renderDecisionPanel() }))
+  fields.actionView.querySelector<HTMLFormElement>('[data-v3-form="vm"]')?.addEventListener('submit', (event) => { event.preventDefault(); const form = event.currentTarget as HTMLFormElement; void run(async () => { if (!state.v3VMTemplate || !state.v3VMTemplate.valid) throw new Error('Import and validate the Golden Image first.'); const data = Object.fromEntries(new FormData(form)); const price = { amount: Number(data.price), currency: data.currency, unit: 'minute' }; await v3CreateProductAndListing({ productKind: 'compute', title: data.title, description: data.description, manifest: { template: state.v3VMTemplate, price, limits: { minMinutes: Number(data.minMinutes), maxMinutes: Number(data.maxMinutes) }, workspaceGiB: Number(data.workspaceGiB), region: data.region } }, price, true) }) })
+  fields.actionView.querySelector<HTMLFormElement>('[data-v3-form="resources"]')?.addEventListener('submit', (event) => { event.preventDefault(); const form = event.currentTarget as HTMLFormElement; void run(async () => { if (!state.v3Files.length) throw new Error('Choose at least one file.'); const data = Object.fromEntries(new FormData(form)); const price = { amount: Number(data.price), currency: 'USD', unit: 'download' }; const created = await invoke<{ product: V3Product }>('provider_asset_create', { input: { productKind: 'download', title: data.title, description: data.description, manifest: { version: data.version, license: data.license, grantHours: Number(data.grantHours), delivery: data.delivery, price } } }); for (const file of state.v3Files) { file.status = 'uploading'; renderDecisionPanel(); await invoke('provider_asset_upload', { input: { bundleId: created.product.productId, fileToken: file.token } }); file.status = 'verified' } await invoke('provider_listing_save', { input: { productId: created.product.productId, price, validation: { valid: true }, availability: { availableNow: true } } }); state.v3SellerTab = 'listings'; await loadV3Listings() }) })
+  fields.actionView.querySelector<HTMLFormElement>('[data-v3-form="openapi"]')?.addEventListener('submit', (event) => { event.preventDefault(); const form = event.currentTarget as HTMLFormElement; void run(async () => { const data = Object.fromEntries(new FormData(form)); const imported = await invoke<{ product: V3Product }>('provider_openapi_import', { input: { title: data.title, description: data.description, baseUrl: data.baseUrl, authType: data.authType, secret: data.secret, document: data.document } }); const secret = form.querySelector<HTMLInputElement>('input[name="secret"]'); if (secret) secret.value = ''; await invoke('provider_listing_save', { input: { productId: imported.product.productId, price: { amount: 0, currency: 'USD', unit: 'invocation' }, validation: { valid: true }, availability: { availableNow: true } } }); state.v3SellerTab = 'listings'; await loadV3Listings() }) })
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-listing-action]').forEach((button) => button.addEventListener('click', () => void run(async () => { await invoke('provider_listing_action', { input: { listingId: button.dataset.listingId, action: button.dataset.v3ListingAction } }); await loadV3Listings() })))
+}
+
 function renderDecisionPanel() {
   renderViewTabs()
   const selected = selectedObjectForActiveView()
   const gpuDemoPanel = activeGpuDemoPanel()
 
-  const showingChat = (state.activeView === 'chat' || state.activeView === 'work') && !state.pinStep && !gpuDemoPanel
+  const showingResourceConsole = (state.activeView === 'chat' || state.activeView === 'work') && !state.pinStep && !gpuDemoPanel
+  const showingChat = false
   const showingSettings = state.activeView === 'settings' && !state.pinStep
-  const hideMainHeading = showingChat || (state.activeView === 'market' && !state.pinStep)
+  const hideMainHeading = showingResourceConsole || (state.activeView === 'market' && !state.pinStep)
   if (!showingChat) renderTransactionDetailSidebar()
   fields.chatView.classList.toggle('hidden', !showingChat)
   fields.actionView.classList.toggle('hidden', showingChat || showingSettings)
@@ -8921,6 +9114,19 @@ function renderDecisionPanel() {
   fields.mainKicker.classList.toggle('hidden', hideMainHeading)
   fields.decisionTitle.classList.toggle('hidden', hideMainHeading)
   fields.decisionStep.classList.toggle('hidden', state.activeView === 'market' || showingChat || showingSettings)
+
+  if (showingResourceConsole) {
+    fields.actionView.classList.remove('hidden')
+    fields.mainKicker.textContent = state.workOrderSide === 'buyer' ? 'AI-first catalog' : 'Provider control'
+    fields.decisionTitle.textContent = state.workOrderSide === 'buyer' ? 'Resource Market' : 'Seller Workbench'
+    fields.decisionStep.textContent = state.workOrderSide === 'buyer' ? 'catalog' : state.v3SellerTab
+    fields.decisionContent.innerHTML = state.workOrderSide === 'buyer' ? renderV3BuyerSurface() : renderV3SellerSurface()
+    attachV3SurfaceHandlers()
+    ensureV3SurfaceData()
+    renderContextStrip()
+    localize(fields.actionView)
+    return
+  }
 
   if (showingChat) {
     renderChat()
@@ -11619,14 +11825,11 @@ function renderViewTabs() {
     ? 'Settings'
     : `${sideLabel} Transactions`
   fields.projectFolderHead.classList.add('hidden')
-  const showBuyerStart = state.activeView !== 'settings' && side === 'buyer'
-  fields.newChatButton.classList.remove('hidden')
-  fields.newChatButton.style.visibility = showBuyerStart ? '' : 'hidden'
-  fields.newChatButton.disabled = !showBuyerStart
-  fields.newChatButton.setAttribute('aria-hidden', String(!showBuyerStart))
-  fields.newChatButton.tabIndex = showBuyerStart ? 0 : -1
-  fields.newChatButton.setAttribute('aria-label', 'Start transaction')
-  fields.newChatButton.setAttribute('title', 'Start transaction')
+  fields.newChatButton.classList.add('hidden')
+  fields.newChatButton.style.visibility = 'hidden'
+  fields.newChatButton.disabled = true
+  fields.newChatButton.setAttribute('aria-hidden', 'true')
+  fields.newChatButton.tabIndex = -1
   app.querySelectorAll<HTMLButtonElement>('[data-order-side-tab]').forEach((button) => {
     const tabSide = button.dataset.orderSideTab as OrderSide
     const isActive = tabSide === side
@@ -14123,14 +14326,15 @@ function openCartView() {
   closePermissionMenu(false)
   closeLLMProfileMenu()
   closeMarketProjectPicker()
-  state.cartOpen = true
+  state.cartOpen = false
+  state.workOrderSide = 'buyer'
+  state.activeView = 'chat'
   state.marketDetailProvider = undefined
   state.marketRailDetailId = undefined
   state.activeCardEditor = undefined
-  void refreshMarketRailCards()
-  renderCartModal()
-  renderChromeControls()
-  window.setTimeout(() => fields.cartModal.querySelector<HTMLElement>('[data-action="close-cart"]')?.focus(), 0)
+  state.v3SelectedProduct = undefined
+  void loadV3Catalog()
+  renderAll()
 }
 
 app.querySelector<HTMLButtonElement>('[data-action="refresh-workspace"]')!.addEventListener('click', () => {
