@@ -8734,8 +8734,17 @@ function renderV3BuyerSurface() {
 }
 
 function renderV3SellerTabs() {
-  const labels: Array<[V3SellerTab, string]> = [['vm', 'VM'], ['resources', 'Resources'], ['openapi', 'OpenAPI'], ['listings', 'Listings']]
-  return `<nav class="v3-seller-tabs">${labels.map(([id, label], index) => `<button type="button" data-v3-seller-tab="${id}" class="${state.v3SellerTab === id ? 'active' : ''}"><span>${index + 1}</span>${label}</button>`).join('')}</nav>`
+  const tabs: Array<[V3SellerTab, string, IconNode]> = [
+    ['vm', 'VM', Activity],
+    ['resources', 'Resources', Folder],
+    ['openapi', 'OpenAPI', Network],
+    ['listings', 'Listings', SquareKanban],
+  ]
+  const activeIndex = Math.max(0, tabs.findIndex(([id]) => state.v3SellerTab === id))
+  return `<nav class="v3-seller-tabs" role="tablist" aria-label="Seller workbench" style="--v3-seller-active-offset: ${activeIndex * 116}px">
+    <span class="v3-seller-active-bar" aria-hidden="true"></span>
+    ${tabs.map(([id, label, tabIcon]) => `<button type="button" role="tab" aria-selected="${state.v3SellerTab === id}" data-v3-seller-tab="${id}" class="${state.v3SellerTab === id ? 'active' : ''}">${icon(tabIcon)}<span>${label}</span></button>`).join('')}
+  </nav>`
 }
 
 function renderV3VMPage() {

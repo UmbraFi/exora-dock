@@ -11354,26 +11354,81 @@ label span {
 }
 
 .v3-seller-tabs {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 4px;
-  padding: 4px;
-  border-radius: 9px;
-  background: var(--color-switch-track);
+  --v3-seller-tab-width: 112px;
+  --v3-seller-tab-gap: 4px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-self: center;
+  gap: var(--v3-seller-tab-gap);
+  width: max-content;
+  height: 44px;
+  margin: 0 auto;
+  padding-top: 6px;
+  background: transparent;
+}
+
+.v3-seller-active-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--v3-seller-tab-width);
+  height: 3px;
+  border-radius: 999px;
+  background: var(--color-primary);
+  box-shadow:
+    0 0 13px rgb(102 92 255 / 0.34),
+    0 7px 16px rgb(102 92 255 / 0.14);
+  transform: translateX(var(--v3-seller-active-offset, 0));
+  transition: transform 240ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  pointer-events: none;
 }
 
 .v3-seller-tabs button {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  border: 0;
+  gap: 6px;
+  width: var(--v3-seller-tab-width);
+  height: 34px;
+  min-width: 0;
+  padding: 0 9px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 8px;
   color: var(--color-text-secondary);
   background: transparent;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease, box-shadow 160ms ease;
 }
-.v3-seller-tabs button span { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--color-surface); font-size: 10px; }
-.v3-seller-tabs button.active { color: var(--color-primary); background: var(--color-surface); }
-.v3-seller-tabs button.active span { color: white; background: var(--color-primary); }
+
+.v3-seller-tabs button svg.app-icon {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+}
+
+.v3-seller-tabs button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v3-seller-tabs button:hover {
+  border-color: var(--color-border);
+  color: var(--color-text-primary);
+  background: var(--color-surface-soft);
+}
+
+.v3-seller-tabs button.active {
+  border-color: rgb(102 92 255 / 0.22);
+  color: var(--color-primary);
+  background: var(--color-surface-tint);
+  box-shadow: inset 0 0 0 1px rgb(102 92 255 / 0.04), 0 4px 14px rgb(102 92 255 / 0.06);
+}
 .v3-seller-grid { display: grid; grid-template-columns: minmax(280px, .78fr) minmax(430px, 1.22fr); gap: 14px; align-items: start; }
 
 .v3-provider-form label { display: grid; gap: 6px; color: var(--color-text-secondary); font-size: 11px; font-weight: 650; }
@@ -11415,6 +11470,4 @@ label span {
 @media (max-width: 1100px) {
   .v3-seller-grid,
   .v3-detail-grid { grid-template-columns: 1fr; }
-  .v3-seller-tabs button { font-size: 0; }
-  .v3-seller-tabs button span { font-size: 10px; }
 }
