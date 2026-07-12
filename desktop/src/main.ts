@@ -1134,18 +1134,14 @@ const windowControlButtons = isMacPlatform
     <button type="button" data-window-action="close" aria-label="Close">${windowIcons.close}</button>
   `
 
-const transactionDetailOpenButton = `
-  <button class="transaction-detail-panel-popout" type="button" data-action="open-transaction-detail" aria-label="Select a transaction to inspect details" aria-disabled="true" title="Select a transaction to inspect details" disabled>${toolbarIcons.detailExpand}</button>
-`
-
 app.innerHTML = `
   <main class="app-shell">
     <div class="window-control-rail global-window-controls" data-global-window-controls aria-label="Window controls">
-      ${transactionDetailOpenButton}
       <div class="window-controls ${isMacPlatform ? 'traffic-lights' : ''}" aria-label="Window controls">
         ${windowControlButtons}
       </div>
     </div>
+    <div class="seller-surface-tabs hidden" data-seller-surface-tabs></div>
     <div class="sidebar-chrome">
       <div class="workspace-toolbar" aria-label="Workspace tools">
         <button type="button" data-toolbar-action="search" aria-label="Search" title="Search">${toolbarIcons.search}</button>
@@ -1227,7 +1223,7 @@ app.innerHTML = `
           <h2 data-decision-title>Ask Exora Dock</h2>
         </div>
         <div class="main-head-actions">
-          <span class="mode-pill" data-decision-step>work</span>
+          <span data-decision-step hidden aria-hidden="true"></span>
         </div>
       </header>
       <div class="context-strip" data-context-strip>
@@ -1353,7 +1349,6 @@ app.innerHTML = `
     </header>
 
     <div class="window-control-rail transaction-detail-popout-controls" data-transaction-detail-popout-controls aria-hidden="true">
-      ${transactionDetailOpenButton}
       <div class="window-controls ${isMacPlatform ? 'traffic-lights' : ''}" aria-label="Window controls">
         ${windowControlButtons}
       </div>
@@ -1427,6 +1422,7 @@ const fields = {
   transactionDetailResizeHandle: app.querySelector<HTMLElement>('[data-transaction-detail-resize-handle]')!,
   chatFeed: app.querySelector<HTMLElement>('[data-chat-feed]')!,
   contextStrip: app.querySelector<HTMLElement>('[data-context-strip]')!,
+  sellerSurfaceTabs: app.querySelector<HTMLElement>('[data-seller-surface-tabs]')!,
   mainKicker: app.querySelector<HTMLElement>('[data-main-kicker]')!,
   decisionTitle: app.querySelector<HTMLElement>('[data-decision-title]')!,
   decisionStep: app.querySelector<HTMLElement>('[data-decision-step]')!,
@@ -1473,6 +1469,23 @@ const llmSettingsForm = app.querySelector<HTMLFormElement>('[data-llm-form]')!
 const agentChatForm = app.querySelector<HTMLFormElement>('[data-agent-chat-form]')!
 const agentQuery = app.querySelector<HTMLTextAreaElement>('[data-agent-query]')!
 const agentSendButton = app.querySelector<HTMLButtonElement>('[data-agent-send]')!
+
+fields.sellerSurfaceTabs.addEventListener('click', (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-v3-seller-tab]')
+  if (!button) return
+  event.preventDefault()
+  event.stopPropagation()
+  const nextTab = button.dataset.v3SellerTab as V3SellerTab
+  if (!nextTab || nextTab === state.v3SellerTab) return
+  state.v3SellerTab = nextTab
+  renderDecisionPanel()
+})
+
+fields.sellerSurfaceTabs.addEventListener('pointerdown', (event) => {
+  if (!(event.target as HTMLElement).closest('[data-v3-seller-tab]')) return
+  event.preventDefault()
+  event.stopPropagation()
+})
 
 function hasDesktopBridge() {
   return Boolean(window.exora?.invoke)
@@ -6846,56 +6859,14 @@ function transactionDetailRenderKey(
 }
 
 function renderTransactionDetailSidebar() {
-  const thread = selectedWorkThread()
-  const canInspect = canInspectTransactionDetail(thread)
-  const visible = Boolean(state.transactionStageInspectorOpen && canInspect)
-  const canPopout = Boolean(!visible && canInspect)
-  fields.appShell.classList.toggle('transaction-detail-dockable', canInspect)
-  fields.appShell.classList.toggle('transaction-detail-open', visible)
-  fields.appShell.classList.toggle('transaction-detail-popout-available', canPopout)
-  fields.transactionDetailSidebar.setAttribute('aria-hidden', String(!visible))
-  fields.transactionDetailSidebar.toggleAttribute('inert', !visible)
-  fields.transactionDetailPopoutControls.setAttribute('aria-hidden', String(!canPopout))
-  fields.transactionDetailPopoutControls.toggleAttribute('inert', !canPopout)
-  updateTransactionDetailOpenButtons(canInspect, visible)
-  if (!canInspect || !thread) {
-    fields.transactionDetailContent.innerHTML = ''
-    lastTransactionDetailRenderKey = ''
-    return
-  }
-  // Keep detail content warm while the rail is closed, so opening only toggles chrome classes.
-  const side = thread.side || state.workOrderSide
-  const chatThread = thread.chatId ? state.chatThreads.find((item) => item.id === thread.chatId) : undefined
-  const messages = chatThread?.messages || []
-  const snapshot = buildTransactionProgressSnapshot(thread, side)
-  const explicitStageId = normalizeTransactionStageId(state.transactionStageSelections[thread.id])
-  const data = transactionProgressData(thread)
-  if (!explicitStageId || !snapshot.stages.some((stage) => stage.id === explicitStageId)) {
-    const emptyKey = transactionDetailRenderKey(thread, side, 'empty', snapshot, data, messages)
-    if (lastTransactionDetailRenderKey === emptyKey) return
-    lastTransactionDetailRenderKey = emptyKey
-    fields.transactionDetailContent.innerHTML = renderTransactionDetailEmpty()
-    return
-  }
-  const stageId = explicitStageId as TransactionStageId
-  const stage = snapshot.stages.find((item) => item.id === stageId) || snapshot.stages[0]
-  const renderKey = transactionDetailRenderKey(thread, side, stageId, snapshot, data, messages)
-  if (lastTransactionDetailRenderKey === renderKey) return
-  lastTransactionDetailRenderKey = renderKey
-  const body = renderTransactionStageBodyForSide(side, stageId, data, thread, chatThread, messages, snapshot)
-  fields.transactionDetailContent.innerHTML = `
-    <section class="transaction-detail-stage" data-selected-transaction-stage="${escapeAttr(stageId)}">
-      <header class="transaction-detail-stage-head">
-        <span>${escapeHTML(stage?.id === snapshot.currentStageId ? progressStateLabel(snapshot.state) : `Viewing ${stage?.title || 'stage'}`)}</span>
-        <p>${escapeHTML(stage?.detail || '')}</p>
-      </header>
-      ${renderTransactionSupervision(thread)}
-      ${renderStageTopline(snapshot)}
-      ${body}
-    </section>
-  `
-  attachDecisionHandlers(fields.transactionDetailSidebar)
-  localize(fields.transactionDetailSidebar)
+  state.transactionStageInspectorOpen = false
+  fields.appShell.classList.remove('transaction-detail-dockable', 'transaction-detail-open', 'transaction-detail-popout-available')
+  fields.transactionDetailSidebar.setAttribute('aria-hidden', 'true')
+  fields.transactionDetailSidebar.toggleAttribute('inert', true)
+  fields.transactionDetailPopoutControls.setAttribute('aria-hidden', 'true')
+  fields.transactionDetailPopoutControls.toggleAttribute('inert', true)
+  fields.transactionDetailContent.innerHTML = ''
+  lastTransactionDetailRenderKey = ''
 }
 
 function renderTransactionDetailEmpty() {
@@ -8747,6 +8718,20 @@ function renderV3SellerTabs() {
   </nav>`
 }
 
+function syncV3SellerTabs() {
+  if (!fields.sellerSurfaceTabs.querySelector('.v3-seller-tabs')) {
+    fields.sellerSurfaceTabs.innerHTML = renderV3SellerTabs()
+  }
+  const tabs = Array.from(fields.sellerSurfaceTabs.querySelectorAll<HTMLButtonElement>('[data-v3-seller-tab]'))
+  const activeIndex = Math.max(0, tabs.findIndex((button) => button.dataset.v3SellerTab === state.v3SellerTab))
+  fields.sellerSurfaceTabs.querySelector<HTMLElement>('.v3-seller-tabs')?.style.setProperty('--v3-seller-active-offset', `${activeIndex * 116}px`)
+  tabs.forEach((button) => {
+    const active = button.dataset.v3SellerTab === state.v3SellerTab
+    button.classList.toggle('active', active)
+    button.setAttribute('aria-selected', String(active))
+  })
+}
+
 function renderV3VMPage() {
   const probe = state.v3VMProbe
   const domains = state.v3VMDomains.map((domain) => `<label class="v3-domain-row"><input type="radio" name="domain" value="${escapeAttr(domain.name)}" ${domain.eligible ? '' : 'disabled'}/><span><strong>${escapeHTML(domain.name)}</strong><small>${escapeHTML(domain.state)}</small></span></label>`).join('')
@@ -8770,7 +8755,7 @@ function renderV3ListingsPage() {
 
 function renderV3SellerSurface() {
   const page = state.v3SellerTab === 'vm' ? renderV3VMPage() : state.v3SellerTab === 'resources' ? renderV3ResourcesPage() : state.v3SellerTab === 'openapi' ? renderV3OpenAPIPage() : renderV3ListingsPage()
-  return `<section class="v3-market-surface"><div class="v3-surface-heading"><div><span>PROVIDER CONTROL</span><h2>Seller workbench</h2><p>Install Dock, package idle capacity, and publish machine-readable products.</p></div></div>${renderV3SellerTabs()}${state.v3SellerError ? `<div class="v3-error">${escapeHTML(state.v3SellerError)}</div>` : ''}<div class="v3-seller-page">${page}</div></section>`
+  return `<section class="v3-market-surface"><div class="v3-surface-heading"><div><span>PROVIDER CONTROL</span><h2>Seller workbench</h2><p>Install Dock, package idle capacity, and publish machine-readable products.</p></div></div>${state.v3SellerError ? `<div class="v3-error">${escapeHTML(state.v3SellerError)}</div>` : ''}<div class="v3-seller-page">${page}</div></section>`
 }
 
 async function v3CreateProductAndListing(productInput: Record<string, unknown>, price: Record<string, unknown>, valid: boolean) {
@@ -8787,7 +8772,6 @@ function attachV3SurfaceHandlers() {
     card.addEventListener('click', open)
     card.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open() } })
   })
-  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-seller-tab]').forEach((button) => button.addEventListener('click', () => { state.v3SellerTab = button.dataset.v3SellerTab as V3SellerTab; renderDecisionPanel() }))
   const action = (name: string, handler: () => void) => fields.actionView.querySelector<HTMLButtonElement>(`[data-v3-action="${name}"]`)?.addEventListener('click', handler)
   action('catalog-back', () => { state.v3SelectedProduct = undefined; renderDecisionPanel() })
   action('catalog-refresh', () => void loadV3Catalog())
@@ -8812,6 +8796,10 @@ function renderDecisionPanel() {
   const showingChat = false
   const showingSettings = state.activeView === 'settings' && !state.pinStep
   const hideMainHeading = showingResourceConsole || (state.activeView === 'market' && !state.pinStep)
+  const showingSellerSurfaceTabs = showingResourceConsole && state.workOrderSide === 'seller'
+  fields.appShell.classList.toggle('seller-surface-mode', showingSellerSurfaceTabs)
+  fields.sellerSurfaceTabs.classList.toggle('hidden', !showingSellerSurfaceTabs)
+  if (showingSellerSurfaceTabs) syncV3SellerTabs()
   if (!showingChat) renderTransactionDetailSidebar()
   fields.chatView.classList.toggle('hidden', !showingChat)
   fields.actionView.classList.toggle('hidden', showingChat || showingSettings)
@@ -10647,9 +10635,7 @@ function attachTransactionStageHandlers(container: ParentNode = fields.chatFeed)
       const stageId = normalizeTransactionStageId(button.dataset.transactionStageCard)
       if (!thread || !stageId) return
       state.transactionStageSelections[thread.id] = stageId
-      state.transactionStageInspectorOpen = true
       updateTransactionStageSelectionDom(stageId)
-      renderTransactionDetailSidebar()
     })
   })
   container.querySelectorAll<HTMLButtonElement>('[data-transaction-stage-detail-toggle]').forEach((button) => {
