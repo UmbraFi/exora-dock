@@ -187,7 +187,7 @@ type V3Listing = {
 }
 
 type V3SelectedFile = { token: string; name: string; sizeBytes: number; status?: string }
-type SettingsView = 'api' | 'local-agents' | 'buyer-agent' | 'seller-card' | 'seller' | 'pwa' | 'wallet' | 'archives'
+type SettingsView = 'pwa' | 'wallet' | 'archives'
 type AppTheme = 'light' | 'dark'
 type LLMTestStatus = 'passed' | 'failed'
 type ProfileSubmenu = 'language' | 'theme'
@@ -966,11 +966,6 @@ const profileIcons = {
 }
 
 const settingsNavIcons: Record<SettingsView, string> = {
-  api: icon(KeyRound),
-  'local-agents': icon(Network),
-  'buyer-agent': icon(ShoppingCart),
-  'seller-card': icon(BadgeCheck),
-  seller: icon(ShoppingBag),
   pwa: icon(QrCode),
   wallet: icon(WalletCards),
   archives: icon(Archive),
@@ -1269,66 +1264,6 @@ app.innerHTML = `
 
       <section class="workspace-view settings-view hidden" data-view-panel="settings">
         <section class="settings-detail">
-          <section class="settings-page" data-settings-page="api">
-            <div class="api-profiles-section">
-              <div class="section-title">
-                <strong>API Settings</strong>
-                <span data-key-state>No API key saved.</span>
-              </div>
-              <div class="api-profiles-layout">
-                <section class="api-profile-sidebar">
-                  <div class="api-profile-list" data-llm-profile-list></div>
-                </section>
-                <form class="api-settings-form agent-card-form card-setup-list api-profile-config-form" data-llm-form>
-                  <label class="card-setup-row card-field-row"><span class="field-label">API name</span><small class="field-help">Display name for this saved API profile.</small><input data-chat-api-field="profileName" placeholder="New API Setting" /></label>
-                  <div class="card-setup-row api-check-row api-status-check-row">
-                    <span class="field-label">Status</span>
-                    <div class="api-check-control api-status-check-control">
-                      <strong class="diagnostic-value api-profile-status" data-llm-profile-status>No profile loaded.</strong>
-                      <button class="api-form-button" type="button" data-action="test-llm"><span>Check</span></button>
-                      <strong class="diagnostic-value test-note api-check-status" data-llm-test-note>Not checked</strong>
-                    </div>
-                  </div>
-                  <label class="card-setup-row card-field-row"><span class="field-label">API key</span><small class="field-help">Leave blank to keep the saved key.</small><input data-chat-api-field="apiKey" type="password" autocomplete="off" placeholder="Leave blank to keep saved key" /></label>
-                  <label class="card-setup-row card-field-row inline-check-row">
-                    <span class="field-label">Clear key</span>
-                    <small class="field-help">Remove the saved key from this profile.</small>
-                    <span class="inline-check-control"><input data-chat-api-field="clearApiKey" type="checkbox" /> Clear saved API key</span>
-                  </label>
-                  <label class="card-setup-row card-field-row"><span class="field-label">API website</span><small class="field-help">OpenAI-compatible endpoint, for example https://api.openai.com/v1.</small><input data-chat-api-field="llmBaseUrl" placeholder="https://api.openai.com/v1" /></label>
-                  <div class="api-model-grid">
-                    <label class="card-setup-row card-field-row"><span class="field-label">Main model</span><small class="field-help">Used for planning and harder work.</small><input data-chat-api-field="researchModel" list="llm-model-options" placeholder="gpt-5.5" /><datalist id="llm-model-options"></datalist></label>
-                    <label class="card-setup-row card-field-row"><span class="field-label">Secondary model</span><small class="field-help">Blank means same as main model.</small><input data-chat-api-field="utilityModel" list="llm-model-options" placeholder="same as main" /></label>
-                  </div>
-                  <div class="card-setup-row card-field-row inline-check-row">
-                    <span class="field-label">Use this setting for</span>
-                    <small class="field-help">One setting can serve buyer, seller, or both.</small>
-                    <span class="api-role-controls">
-                      <label class="api-role-choice"><span class="api-role-text">Buyer</span><input class="api-role-input" data-chat-api-field="useForBuyer" type="checkbox" /><span class="api-role-dot" aria-hidden="true"></span></label>
-                      <label class="api-role-choice"><span class="api-role-text">Seller</span><input class="api-role-input" data-chat-api-field="useForSeller" type="checkbox" /><span class="api-role-dot" aria-hidden="true"></span></label>
-                    </span>
-                  </div>
-                  <input data-chat-api-field="providerPreset" type="hidden" />
-                  <input data-chat-api-field="wireApi" type="hidden" />
-                  <input data-chat-api-field="researchReasoningEffort" type="hidden" value="high" />
-                  <input data-chat-api-field="utilityReasoningEffort" type="hidden" value="low" />
-                  <input data-chat-api-field="disableResponseStorage" type="checkbox" class="hidden" checked />
-                  <span class="hidden" data-provider-note></span>
-                  <span class="hidden" data-capability-note></span>
-                  <div class="api-form-actions">
-                    <button class="api-form-button" type="button" data-action="new-llm-profile">${toolbarIcons.plus}<span>New</span></button>
-                    <button class="api-form-button" type="button" data-action="delete-llm-profile"><span>Delete</span></button>
-                    <button class="api-form-button primary" type="submit"><span>Save</span></button>
-                  </div>
-                </form>
-              </div>
-            </div>
-          </section>
-
-          <section class="settings-page hidden" data-settings-page="local-agents">
-            <div class="settings-section agent-card-settings-shell" data-local-agents-content aria-live="polite"></div>
-          </section>
-
           <section class="settings-page hidden" data-settings-page="pwa">
             <div class="settings-section">
               <div class="section-title">
@@ -1353,82 +1288,6 @@ app.innerHTML = `
                   </div>
                 </div>
               </div>
-            </div>
-          </section>
-
-          <section class="settings-page hidden" data-settings-page="buyer-agent">
-            <div class="settings-section">
-              <div class="section-title">
-                <strong>Buyer agent</strong>
-                <span data-buyer-agent-chip>enabled</span>
-              </div>
-              <form class="agent-card-form card-setup-list" data-buyer-agent-form>
-                <label class="card-setup-row card-field-row inline-check-row">
-                  <span class="field-label">Enabled</span>
-                  <small class="field-help">Controls the bound local Agent used by this chat.</small>
-                  <span class="inline-check-control"><input data-buyer-field="enabled" type="checkbox" /> Enable buyer agent</span>
-                </label>
-                <label class="card-setup-row card-field-row">
-                  <span class="field-label">Agent ID</span>
-                  <small class="field-help">Written into plans, negotiations, tasks, and approvals.</small>
-                  <input data-buyer-field="agentId" placeholder="exora-desktop-agent" />
-                </label>
-                <div class="card-setup-row card-setup-section-row"><strong>Local MCP entry</strong><span>Use the transaction prompt controls to connect Codex, Claude Code, OpenCode, or another local agent.</span></div>
-                <button type="submit">Save Buyer Agent</button>
-              </form>
-            </div>
-          </section>
-
-          <section class="settings-page hidden" data-settings-page="seller-card">
-            <div class="settings-section agent-card-settings-shell" data-settings-card-content="seller"></div>
-          </section>
-
-          <section class="settings-page hidden" data-settings-page="seller">
-            <div class="settings-section">
-              <div class="section-title">
-                <strong>Seller agent</strong>
-                <span data-seller-market-chip>checking</span>
-              </div>
-              <form class="agent-card-form card-setup-list seller-agent-form" data-seller-form>
-                <label class="card-setup-row card-field-row inline-check-row">
-                  <span class="field-label">Enabled</span>
-                  <small class="field-help">Lets this dock receive requests and quote work as a provider.</small>
-                  <span class="inline-check-control"><input type="checkbox" data-field="enabled" /> Enable seller agent</span>
-                </label>
-                <label class="card-setup-row card-field-row">
-                  <span class="field-label">Provider ID</span>
-                  <small class="field-help">Public provider identity used in quotes, tasks, and market records.</small>
-                  <input data-field="providerId" placeholder="local-dev-miner" />
-                </label>
-                <div class="card-setup-row card-setup-section-row"><strong>Quote defaults</strong><span>Fallback terms used when the seller agent prepares a quote</span></div>
-                <label class="card-setup-row card-field-row">
-                  <span class="field-label">ETA seconds</span>
-                  <small class="field-help">Default estimated execution time for lightweight tasks.</small>
-                  <input data-field="estimatedSeconds" type="number" min="1" step="1" />
-                </label>
-                <label class="card-setup-row card-field-row">
-                  <span class="field-label">Quote price</span>
-                  <small class="field-help">Default amount offered before task-specific adjustments.</small>
-                  <input data-field="quotePrice" type="number" min="0" step="0.01" />
-                </label>
-                <label class="card-setup-row card-field-row">
-                  <span class="field-label">Currency</span>
-                  <small class="field-help">Currency label used in seller quotes.</small>
-                  <input data-field="currency" />
-                </label>
-                <label class="card-setup-row card-field-row inline-check-row">
-                  <span class="field-label">Auto quote</span>
-                  <small class="field-help">Let the seller agent answer new negotiations without opening this screen.</small>
-                  <span class="inline-check-control"><input type="checkbox" data-field="autoQuote" /> Auto quote new tasks</span>
-                </label>
-                <label class="card-setup-row card-field-row inline-check-row">
-                  <span class="field-label">Low-risk auto accept</span>
-                  <small class="field-help">Allow automatic acceptance and completion only for low-risk, text-only work.</small>
-                  <span class="inline-check-control"><input type="checkbox" data-field="autoAcceptLowRisk" /> Auto accept low-risk work</span>
-                </label>
-                <button type="submit">Save Seller Agent</button>
-              </form>
-              <p class="muted">Seller agent uses the LLM provider configured in the API category.</p>
             </div>
           </section>
 
@@ -1521,192 +1380,6 @@ app.innerHTML = `
 
     <div class="toast" data-message role="status" aria-live="polite" aria-atomic="true"></div>
 
-    <template data-legacy-settings-overlay>
-      <button class="settings-scrim" data-action="close-settings" aria-label="Close settings"></button>
-      <aside class="settings-drawer">
-        <nav class="settings-nav">
-          <header class="settings-brand">
-            <span class="profile-avatar">EX</span>
-            <div>
-              <p class="eyebrow">Personal Settings</p>
-              <h2>Dock Control</h2>
-            </div>
-          </header>
-          <button class="settings-nav-item" data-settings-tab="api" type="button"><span>API</span><small>LLM providers</small></button>
-          <button class="settings-nav-item" data-settings-tab="seller" type="button"><span>Seller</span><small>market listing agent</small></button>
-          <button class="settings-nav-item" data-settings-tab="wallet" type="button"><span>Wallet</span><small>identity and local access</small></button>
-        </nav>
-
-        <section class="settings-detail">
-          <header class="settings-head">
-            <div>
-              <p class="eyebrow" data-settings-kicker>API</p>
-              <h2 data-settings-title>LLM Provider</h2>
-            </div>
-            <button class="icon-button" data-action="close-settings" aria-label="Close settings">x</button>
-          </header>
-
-          <section class="settings-page" data-settings-page="api">
-            <div class="settings-section">
-              <div class="section-title">
-                <strong>LLM API</strong>
-                <span data-key-state>No API key saved.</span>
-              </div>
-              <form class="api-settings-form" data-llm-form>
-                <label>
-                  <span>API name</span>
-                  <input data-chat-api-field="profileName" placeholder="New API Setting" />
-                </label>
-                <label>
-                  <span>Provider</span>
-                  <select data-chat-api-field="providerPreset">
-                    ${llmPresets.map((item) => `<option value="${escapeHTML(item.id)}">${escapeHTML(item.label)}</option>`).join('')}
-                  </select>
-                </label>
-                <p class="provider-note" data-provider-note></p>
-                <label>
-                  <span>API key</span>
-                  <input data-chat-api-field="apiKey" type="password" autocomplete="off" placeholder="Leave blank to keep saved key" />
-                </label>
-                <label class="toggle">
-                  <input data-chat-api-field="clearApiKey" type="checkbox" />
-                  <span>Clear saved API key</span>
-                </label>
-                <div class="two">
-                  <label>
-                    <span>Base URL</span>
-                    <input data-chat-api-field="llmBaseUrl" placeholder="https://api.openai.com/v1" />
-                  </label>
-                  <label>
-                    <span>Wire API</span>
-                    <select data-chat-api-field="wireApi">
-                      <option value="responses">Responses</option>
-                      <option value="chat_completions">Chat completions</option>
-                    </select>
-                  </label>
-                </div>
-                <div class="two">
-                  <label>
-                    <span>Chat / research model</span>
-                    <input data-chat-api-field="researchModel" list="llm-model-options" placeholder="gpt-5.5" />
-                  </label>
-                  <label>
-                    <span>Research effort</span>
-                    <input data-chat-api-field="researchReasoningEffort" placeholder="high" />
-                  </label>
-                </div>
-                <div class="two">
-                  <label>
-                    <span>Utility model</span>
-                    <input data-chat-api-field="utilityModel" list="llm-model-options" placeholder="gpt-5.5" />
-                    <datalist id="llm-model-options"></datalist>
-                  </label>
-                  <label>
-                    <span>Utility effort</span>
-                    <input data-chat-api-field="utilityReasoningEffort" placeholder="low" />
-                  </label>
-                </div>
-                <label class="toggle">
-                  <input data-chat-api-field="disableResponseStorage" type="checkbox" />
-                  <span>Disable response storage</span>
-                </label>
-                <p class="capability-note" data-capability-note></p>
-                <p class="test-note hidden" data-llm-test-note></p>
-                <div class="settings-actions two-col">
-                  <button class="secondary" type="button" data-action="test-llm">Test Connection</button>
-                  <button class="secondary" type="button" data-action="load-models">Load Models</button>
-                </div>
-                <button type="submit">Save API Settings</button>
-              </form>
-            </div>
-          </section>
-
-          <section class="settings-page hidden" data-settings-page="seller">
-            <div class="settings-section">
-              <div class="section-title">
-                <strong>Seller agent</strong>
-                <span data-seller-market-chip>checking</span>
-              </div>
-              <form class="agent-card-form card-setup-list seller-agent-form" data-seller-form>
-                <label class="card-setup-row card-field-row inline-check-row">
-                  <span class="field-label">Enabled</span>
-                  <small class="field-help">Lets this dock receive requests and quote work as a provider.</small>
-                  <span class="inline-check-control"><input type="checkbox" data-field="enabled" /> Enable seller agent</span>
-                </label>
-                <label class="card-setup-row card-field-row">
-                  <span class="field-label">Provider ID</span>
-                  <small class="field-help">Public provider identity used in quotes, tasks, and market records.</small>
-                  <input data-field="providerId" placeholder="local-dev-miner" />
-                </label>
-                <div class="card-setup-row card-setup-section-row"><strong>Quote defaults</strong><span>Fallback terms used when the seller agent prepares a quote</span></div>
-                <label class="card-setup-row card-field-row">
-                  <span class="field-label">ETA seconds</span>
-                  <small class="field-help">Default estimated execution time for lightweight tasks.</small>
-                  <input data-field="estimatedSeconds" type="number" min="1" step="1" />
-                </label>
-                <label class="card-setup-row card-field-row">
-                  <span class="field-label">Quote price</span>
-                  <small class="field-help">Default amount offered before task-specific adjustments.</small>
-                  <input data-field="quotePrice" type="number" min="0" step="0.01" />
-                </label>
-                <label class="card-setup-row card-field-row">
-                  <span class="field-label">Currency</span>
-                  <small class="field-help">Currency label used in seller quotes.</small>
-                  <input data-field="currency" />
-                </label>
-                <label class="card-setup-row card-field-row inline-check-row">
-                  <span class="field-label">Auto quote</span>
-                  <small class="field-help">Let the seller agent answer new negotiations without opening this screen.</small>
-                  <span class="inline-check-control"><input type="checkbox" data-field="autoQuote" /> Auto quote new tasks</span>
-                </label>
-                <label class="card-setup-row card-field-row inline-check-row">
-                  <span class="field-label">Low-risk auto accept</span>
-                  <small class="field-help">Allow automatic acceptance and completion only for low-risk, text-only work.</small>
-                  <span class="inline-check-control"><input type="checkbox" data-field="autoAcceptLowRisk" /> Auto accept low-risk work</span>
-                </label>
-                <button type="submit">Save Seller Agent</button>
-              </form>
-              <p class="muted">Seller agent uses the LLM provider configured in the API category.</p>
-            </div>
-          </section>
-
-          <section class="settings-page hidden" data-settings-page="wallet">
-            <div class="settings-section">
-              <div class="section-title">
-                <strong>USDC receive wallet</strong>
-                <span data-wallet-state>checking</span>
-              </div>
-              <p class="muted">Your Exora account wallet receives USDC on Solana.</p>
-              <div class="wallet-receive wallet-dashboard settings-qr-layout" data-wallet-receive>
-                <div class="wallet-visual">
-                  <div class="wallet-qr settings-qr-frame" data-wallet-qr><span>QR</span></div>
-                  <div class="wallet-token-row">
-                    <span>USDC</span>
-                    <span>Solana</span>
-                  </div>
-                </div>
-                <div class="wallet-details settings-qr-details">
-                  <dl class="wallet-metadata settings-qr-meta">
-                    <div><dt>Asset</dt><dd>USDC</dd></div>
-                    <div><dt>Network</dt><dd>Solana</dd></div>
-                    <div><dt>Custody</dt><dd>Account wallet</dd></div>
-                  </dl>
-                  <div class="wallet-address-card">
-                    <span>Deposit address</span>
-                    <code data-wallet-address>not configured</code>
-                  </div>
-                  <div class="settings-actions two-col wallet-actions">
-                    <button type="button" data-action="wallet-copy-address">${toolbarIcons.copy}<span>Copy Address</span></button>
-                    <button class="secondary" type="button" data-action="wallet-refresh">${toolbarIcons.refresh}<span>Refresh</span></button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-
-        </section>
-      </aside>
-    </template>
   </main>
 `
 
@@ -2113,7 +1786,7 @@ const state: {
   sellerCardGeneration: undefined,
   cartOpen: false,
   llmTestStatus: undefined,
-  activeSettingsView: 'api',
+  activeSettingsView: 'pwa',
   localAgents: [],
   localAgentSessions: {},
   chatAgentMenuOpen: false,
@@ -2233,12 +1906,10 @@ function isOrderSide(value: unknown): value is OrderSide {
 
 function normalizeSettingsView(value: unknown): SettingsView | undefined {
   if (value === 'security') return 'wallet'
-  if (value === 'diagnostics' || value === 'runtime') return 'api'
-  if (value === 'buyer-card') return 'seller-card'
-  if (value === 'api' || value === 'local-agents' || value === 'buyer-agent' || value === 'seller-card' || value === 'seller' || value === 'pwa' || value === 'wallet' || value === 'archives') {
+  if (value === 'pwa' || value === 'wallet' || value === 'archives') {
     return value
   }
-  return undefined
+  return 'pwa'
 }
 
 function isSettingsView(value: unknown): value is SettingsView {
@@ -6128,7 +5799,6 @@ async function hydrateLocalAgentChatSessions() {
     }
   }
   renderChatAgentControl()
-  if (state.activeView === 'settings' && state.activeSettingsView === 'seller-card') renderDecisionPanel()
 }
 
 function appendAgentSessionMessage(thread: ChatThread, input: Omit<ChatMessage, 'id'>) {
@@ -6216,7 +5886,6 @@ async function submitAgentMessage() {
     } catch (error) {
       const message = humanizeError(error)
       showToast(message)
-      if (/Bind a local Agent|Scan and bind/i.test(message)) openSettings('local-agents')
       return
     }
     if (!agentSessionCanReceiveMessage(session)) {
@@ -8851,11 +8520,6 @@ async function searchCardMarket(query: string) {
 }
 
 const settingsNavItems: Array<{ view: SettingsView; titleKey: string }> = [
-  { view: 'api', titleKey: 'settings.api.nav' },
-  { view: 'local-agents', titleKey: 'settings.localAgents.nav' },
-  { view: 'seller-card', titleKey: 'settings.sellerCard.nav' },
-  { view: 'buyer-agent', titleKey: 'settings.buyerAgent.nav' },
-  { view: 'seller', titleKey: 'settings.seller.nav' },
   { view: 'pwa', titleKey: 'settings.pwa.nav' },
   { view: 'wallet', titleKey: 'settings.wallet.nav' },
   { view: 'archives', titleKey: 'settings.archives.nav' },
@@ -8895,9 +8559,6 @@ function renderSettingsSidebar() {
       state.activeSettingsView = button.dataset.settingsTab as SettingsView
       scheduleSaveAppSettings()
       renderAll()
-      if (state.activeSettingsView === 'local-agents') {
-        void loadLocalAgentSnapshot()
-      }
       if (state.activeSettingsView === 'wallet') {
         refreshSettingsStatus()
       }
@@ -10756,7 +10417,6 @@ function attachCardHandlers(root: ParentNode = fields.decisionContent) {
         generateSellerCardWithAgent(root).catch((error) => {
           failSellerCardGeneration(humanizeError(error))
           showToast(humanizeError(error))
-          if (/Bind and verify|Bind a local Agent|Scan and bind/i.test(humanizeError(error))) openSettings('local-agents')
         })
       } else if (action === 'continue-seller-card') {
         continueSellerCardSetup(root).catch((error) => {
@@ -10790,7 +10450,7 @@ function attachCardHandlers(root: ParentNode = fields.decisionContent) {
       } else if (action === 'publish' && role) {
         run(() => publishAgentCard(role, root))
       } else if (action === 'seller-settings') {
-        openSettings('seller')
+        selectOrderSide('seller')
       } else if (action === 'cancel-edit') {
         state.activeCardEditor = undefined
         state.cardMessage = ''
@@ -11890,9 +11550,10 @@ function attachSellerStoreSummaryHandlers(root: ParentNode = fields.ledgerList) 
       event.preventDefault()
       event.stopPropagation()
       const action = button.dataset.sellerStoreAction
-      if (action === 'api') openSettings('api')
-      if (action === 'seller') openSettings('seller')
-      if (action === 'card') openSettings('seller-card')
+      if (action === 'api') state.v3SellerTab = 'openapi'
+      if (action === 'seller') state.v3SellerTab = 'listings'
+      if (action === 'card') state.v3SellerTab = 'listings'
+      selectOrderSide('seller')
     })
   })
 }
@@ -12644,7 +12305,6 @@ function renderAll() {
   applyUserPreferences()
   renderProfileSummary()
   renderPermissionControl()
-  renderBuyerAgentSettings()
   renderLedger()
   renderContextStrip()
   renderDecisionPanel()
@@ -12657,7 +12317,7 @@ function renderAll() {
 }
 
 function renderSeller(settings: SellerSettings) {
-  renderLLMSettings(settings)
+  if (!sellerForm) return
   setChecked('enabled', settings.enabled)
   setValue('providerId', settings.providerId)
   setValue('quotePrice', String(settings.quotePrice))
@@ -12688,6 +12348,7 @@ function setBuyerAgentChecked(name: string, next: boolean) {
 }
 
 function renderBuyerAgentSettings() {
+  if (!buyerAgentForm || !fields.buyerAgentChip) return
   const settings = state.buyerAgentSettings
   setBuyerAgentChecked('enabled', settings.enabled)
   setBuyerAgentValue('agentId', settings.agentId)
@@ -12746,6 +12407,7 @@ function currentLLMProfile(settings?: SellerSettings): LLMProfile {
 }
 
 function renderLLMSettings(settings?: SellerSettings) {
+  if (!llmSettingsForm || !fields.llmProfileList) return
   const profile = currentLLMProfile(settings)
   const preset = presetById(profile.providerPreset || inferProviderPreset(profile.llmBaseUrl))
   const draftApiKey = isDraftLLMProfileId(profile.id)
@@ -12877,6 +12539,7 @@ function renderLLMProfileMeta(profile: LLMProfile) {
 }
 
 function renderLLMTestNote() {
+  if (!fields.llmTestNote) return
   fields.llmTestNote.classList.remove('passed', 'failed')
   fields.llmTestNote.removeAttribute('title')
   fields.llmTestNote.classList.remove('hidden')
@@ -12967,6 +12630,7 @@ function handleLLMApiKeyClearChange(event: Event) {
 }
 
 function renderSellerMarketStatus(status: SellerMarketStatus) {
+  if (!fields.sellerMarketChip) return
   fields.sellerMarketChip.textContent = uiText(status.discoverable ? 'market searchable' : 'not discoverable')
   fields.sellerMarketChip.dataset.state = status.discoverable ? 'ok' : 'warn'
 }
@@ -13902,11 +13566,6 @@ function showToast(message: string) {
 
 function settingsTitles(): Record<SettingsView, { kicker: string; title: string }> {
   return {
-    api: { kicker: t('settings.api.kicker'), title: t('settings.api.title') },
-    'local-agents': { kicker: t('settings.localAgents.kicker'), title: t('settings.localAgents.title') },
-    'buyer-agent': { kicker: t('settings.buyerAgent.kicker'), title: t('settings.buyerAgent.title') },
-    'seller-card': { kicker: t('settings.sellerCard.kicker'), title: t('settings.sellerCard.title') },
-    seller: { kicker: t('settings.seller.kicker'), title: t('settings.seller.title') },
     pwa: { kicker: t('settings.pwa.kicker'), title: t('settings.pwa.title') },
     wallet: { kicker: t('settings.wallet.kicker'), title: t('settings.wallet.title') },
     archives: { kicker: t('settings.archives.kicker'), title: t('settings.archives.title') },
@@ -13914,7 +13573,7 @@ function settingsTitles(): Record<SettingsView, { kicker: string; title: string 
 }
 
 function settingsViewForCardRole(role: AgentCardRole): SettingsView {
-  return 'seller-card'
+  return 'pwa'
 }
 
 function renderSettingsAgentCardPages() {
@@ -13927,6 +13586,7 @@ function renderSettingsAgentCardPages() {
 }
 
 function renderLocalAgentsSettings() {
+  if (!fields.localAgentsContent) return
   const binding = state.localAgentBinding
   const defaultValue = binding
     ? `${binding.vendor} ${binding.name}${binding.valid ? '' : ` · ${t('localAgents.needsAttention')}`}`
@@ -14115,10 +13775,6 @@ function renderSettingsPanel() {
   app.querySelectorAll<HTMLElement>('[data-settings-page]').forEach((page) => {
     page.classList.toggle('hidden', page.dataset.settingsPage !== state.activeSettingsView)
   })
-  if (state.activeSettingsView === 'api') renderLLMSettings(state.sellerSettings)
-  if (state.activeSettingsView === 'local-agents') renderLocalAgentsSettings()
-  renderSettingsAgentCardPages()
-  renderLLMTestNote()
   renderPwaLinkStatus()
   renderWalletStatus()
   renderArchiveRecords()
@@ -14231,7 +13887,6 @@ function openSettings(view?: SettingsView) {
   refreshSeller({ market: true })
   refreshAgentCards()
   refreshSettingsStatus()
-  if (state.activeSettingsView === 'local-agents') void loadLocalAgentSnapshot()
 }
 
 function returnFromSettings() {
@@ -14518,9 +14173,10 @@ app.addEventListener('click', (event) => {
       event.preventDefault()
       event.stopPropagation()
       const action = sellerStoreAction.dataset.sellerStoreAction
-      if (action === 'api') openSettings('api')
-      if (action === 'seller') openSettings('seller')
-      if (action === 'card') openSettings('seller-card')
+      if (action === 'api') state.v3SellerTab = 'openapi'
+      if (action === 'seller') state.v3SellerTab = 'listings'
+      if (action === 'card') state.v3SellerTab = 'listings'
+      selectOrderSide('seller')
       return
     }
     const activeElement = document.activeElement
@@ -14799,7 +14455,7 @@ app.querySelectorAll<HTMLButtonElement>('[data-action="open-api-settings"]').for
       returnFromSettings()
       return
     }
-    openSettings('api')
+    openSettings('pwa')
   })
 })
 
@@ -14820,20 +14476,8 @@ fields.externalWorkTakeoverButton.addEventListener('click', () => {
   takeOverExternalWork().catch((error) => showToast(humanizeError(error)))
 })
 
-llmSettingsForm.querySelector<HTMLSelectElement>('[data-chat-api-field="providerPreset"]')?.addEventListener('change', (event) => {
-  applyPresetToForm(llmSettingsForm, presetById((event.currentTarget as HTMLSelectElement).value))
-})
-llmSettingsForm.addEventListener('focusin', handleLLMApiKeyFocus)
-llmSettingsForm.addEventListener('beforeinput', handleLLMApiKeyBeforeInput)
-llmSettingsForm.addEventListener('input', handleLLMApiKeyInput)
-llmSettingsForm.addEventListener('input', handleLLMSettingsDraftSync)
-llmSettingsForm.addEventListener('input', handleLLMSettingsTestInvalidation)
-llmSettingsForm.addEventListener('focusout', handleLLMApiKeyBlur)
-llmSettingsForm.addEventListener('change', handleLLMApiKeyClearChange)
-llmSettingsForm.addEventListener('change', handleLLMSettingsDraftSync)
-llmSettingsForm.addEventListener('change', handleLLMSettingsTestInvalidation)
-
 function setLLMProfileMenuOpen(open: boolean) {
+  if (!fields.llmProfileList) return
   const menu = fields.llmProfileList.querySelector<HTMLElement>('[data-llm-profile-menu]')
   const toggle = fields.llmProfileList.querySelector<HTMLButtonElement>('[data-llm-profile-toggle]')
   const list = fields.llmProfileList.querySelector<HTMLElement>('[data-llm-profile-menu-list]')
@@ -14847,99 +14491,6 @@ function closeLLMProfileMenu() {
   setLLMProfileMenuOpen(false)
 }
 
-fields.llmProfileList.addEventListener('click', (event) => {
-  const target = event.target
-  if (!(target instanceof Element)) return
-  const toggle = target.closest<HTMLButtonElement>('[data-llm-profile-toggle]')
-  if (toggle) {
-    event.preventDefault()
-    event.stopPropagation()
-    setLLMProfileMenuOpen(toggle.getAttribute('aria-expanded') !== 'true')
-    return
-  }
-  const option = target.closest<HTMLButtonElement>('[data-llm-profile-option]')
-  if (!option) return
-  event.preventDefault()
-  event.stopPropagation()
-  const profileId = option.dataset.llmProfileOption
-  if (!profileId) return
-  state.llmDraftProfile = undefined
-  state.editingLLMProfileId = profileId
-  state.llmTestMessage = undefined
-  state.llmTestStatus = undefined
-  renderLLMSettings(state.sellerSettings)
-})
-
-app.querySelector<HTMLButtonElement>('[data-action="new-llm-profile"]')!.addEventListener('click', () => {
-  run(() => newLLMProfile())
-})
-
-llmSettingsForm.querySelector<HTMLButtonElement>('[data-action="duplicate-llm-profile"]')?.addEventListener('click', () => {
-  run(() => saveLLMProfile({ duplicate: true }))
-})
-
-llmSettingsForm.querySelector<HTMLButtonElement>('[data-action="delete-llm-profile"]')?.addEventListener('click', () => {
-  run(() => deleteLLMProfile())
-})
-
-llmSettingsForm.querySelector<HTMLButtonElement>('[data-action="save-llm-profile"]')?.addEventListener('click', () => {
-  run(() => saveLLMProfile())
-})
-
-llmSettingsForm.querySelector<HTMLButtonElement>('[data-action="test-llm"]')!.addEventListener('click', () => {
-  run(async () => {
-    try {
-      const result = await invoke<{ ok: boolean; status: string; message: string; route: string; llmBaseUrl?: string; wireApi?: LLMProfile['wireApi']; providerPreset?: string; capabilities?: LLMCapabilities; models?: string[] }>('test_llm_connection', {
-        input: apiSettingsPayload(llmSettingsForm),
-      })
-      if (result.ok) {
-        if (result.llmBaseUrl) setLLMValue('llmBaseUrl', result.llmBaseUrl)
-        if (result.wireApi) setLLMValue('wireApi', result.wireApi)
-        if (result.providerPreset) setLLMValue('providerPreset', result.providerPreset)
-        if (result.models?.length) state.llmModels = result.models
-        syncLLMDraftProfileFromForm()
-      }
-      state.llmTestStatus = result.ok ? 'passed' : 'failed'
-      state.llmTestMessage = result.message
-      const datalist = llmSettingsForm.querySelector<HTMLDataListElement>('#llm-model-options')
-      if (datalist) datalist.innerHTML = state.llmModels.map((model) => `<option value="${escapeHTML(model)}"></option>`).join('')
-      renderLLMTestNote()
-    } catch (error) {
-      state.llmTestStatus = 'failed'
-      state.llmTestMessage = humanizeError(error)
-      renderLLMTestNote()
-      throw error
-    }
-  })
-})
-
-llmSettingsForm.querySelector<HTMLButtonElement>('[data-action="load-models"]')?.addEventListener('click', () => {
-  run(async () => {
-    const result = await invoke<{ ok: boolean; models: string[]; message: string; llmBaseUrl?: string }>('list_llm_models', {
-      input: apiSettingsPayload(llmSettingsForm),
-    })
-    if (result.ok && result.llmBaseUrl) setLLMValue('llmBaseUrl', result.llmBaseUrl)
-    syncLLMDraftProfileFromForm()
-    state.llmModels = result.models || []
-    state.llmTestStatus = result.ok ? 'passed' : 'failed'
-    state.llmTestMessage = result.message
-    const datalist = llmSettingsForm.querySelector<HTMLDataListElement>('#llm-model-options')
-    if (datalist) datalist.innerHTML = state.llmModels.map((model) => `<option value="${escapeHTML(model)}"></option>`).join('')
-    renderLLMTestNote()
-  })
-})
-
-llmSettingsForm.addEventListener('submit', (event) => {
-  event.preventDefault()
-  run(async () => {
-    await saveLLMProfile({ apply: true })
-    state.chatMode = 'expanded'
-    state.llmTestMessage = undefined
-    state.llmTestStatus = undefined
-    renderAll()
-  })
-})
-
 app.querySelector<HTMLButtonElement>('[data-action="wallet-refresh"]')!.addEventListener('click', () => {
   run(() => refreshSettingsStatus())
 })
@@ -14952,7 +14503,6 @@ fields.chatAgentButton.addEventListener('click', (event) => {
     connectCurrentChatAgent().catch((error) => {
       const message = humanizeError(error)
       showToast(message)
-      if (/Bind a local Agent|Scan and bind/i.test(message)) openSettings('local-agents')
     })
     return
   }
@@ -14980,27 +14530,6 @@ document.addEventListener('click', (event) => {
   renderChatAgentControl()
 })
 
-fields.localAgentsContent.addEventListener('click', (event) => {
-  const target = event.target
-  if (!(target instanceof Element)) return
-  const button = target.closest<HTMLButtonElement>('[data-local-agent-action]')
-  if (!button) return
-  const action = button.dataset.localAgentAction
-  if (action === 'scan') {
-    void scanLocalAgentsNow()
-    return
-  }
-  if (action === 'bind') {
-    const driverId = button.dataset.localAgentDriver
-    if (!driverId) return
-    void run(() => bindLocalAgent(driverId), t('localAgents.boundToast'))
-    return
-  }
-  if (action === 'unbind') {
-    void run(() => unbindLocalAgent(), t('localAgents.unboundToast'))
-  }
-})
-
 app.querySelector<HTMLButtonElement>('[data-action="wallet-copy-address"]')!.addEventListener('click', () => {
   run(async () => {
     const address = state.walletStatus?.address
@@ -15015,16 +14544,6 @@ app.querySelector<HTMLButtonElement>('[data-action="pwa-link-start"]')!.addEvent
 
 app.querySelector<HTMLButtonElement>('[data-action="pwa-link-check"]')!.addEventListener('click', () => {
   run(() => checkPwaLink()).catch(() => undefined)
-})
-
-buyerAgentForm.addEventListener('submit', (event) => {
-  event.preventDefault()
-  saveBuyerAgentSettings()
-})
-
-sellerForm.addEventListener('submit', (event) => {
-  event.preventDefault()
-  run(() => invoke('save_seller_settings', { input: sellerPayload() }), 'Seller agent saved.')
 })
 
 agentChatForm.addEventListener('submit', (event) => {

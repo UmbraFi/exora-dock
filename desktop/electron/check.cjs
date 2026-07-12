@@ -18,6 +18,9 @@ for (const marker of ['function renderV3BuyerSurface', 'function renderV3SellerS
 for (const preserved of ['class="app-shell"', 'class="task-sidebar"', 'data-ledger-list', 'data-order-side-tab="buyer"']) {
   if (!renderer.includes(preserved)) throw new Error(`existing purple Dock shell was replaced: ${preserved}`)
 }
+for (const removedSettingsPage of ['data-settings-page="api"', 'data-settings-page="local-agents"', 'data-settings-page="seller-card"', 'data-settings-page="buyer-agent"', 'data-settings-page="seller"']) {
+  if (renderer.includes(removedSettingsPage)) throw new Error(`removed settings component remains mounted: ${removedSettingsPage}`)
+}
 
 function electronScripts(root) {
   const files = []
