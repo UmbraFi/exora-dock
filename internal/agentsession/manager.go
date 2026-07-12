@@ -74,7 +74,69 @@ func (m *Manager) RecordMCPEvent(id, tool, text string, payload map[string]any) 
 	if len(text) > 2000 {
 		text = text[:2000]
 	}
-	return m.store.AddEvent(id, Event{Kind: "mcp.event", Text: strings.TrimSpace(text), Payload: map[string]any{"tool": tool, "result": payload}})
+	text = strings.TrimSpace(text)
+	if tool == "exora.session_request_user_input" {
+		data := sessionToolData(text, payload)
+		request, _ := data["request"].(map[string]any)
+		question, _ := request["question"].(string)
+		question = strings.TrimSpace(question)
+		if question == "" {
+			question = sessionToolResultText(text, "question")
+		}
+		if question == "" {
+			question = "The local Agent needs more information before it can continue."
+		}
+		if _, err := m.store.Update(id, func(record *Session) error {
+			record.Status = StatusWaitingUser
+			return nil
+		}); err != nil {
+			return Session{}, err
+		}
+		return m.store.AddEvent(id, Event{Kind: "human.request", Text: question, Payload: map[string]any{"tool": tool, "request": request}})
+	}
+	if tool == "exora.session_submit_plan" {
+		data := sessionToolData(text, payload)
+		plans, _ := data["plans"].(map[string]any)
+		if len(plans) == 0 {
+			return Session{}, fmt.Errorf("structured local and remote plans required")
+		}
+		remote, _ := plans["remoteExecutionPlan"].(map[string]any)
+		title, _ := remote["title"].(string)
+		if _, err := m.store.Update(id, func(record *Session) error {
+			record.Status = StatusWaitingUser
+			return nil
+		}); err != nil {
+			return Session{}, err
+		}
+		return m.store.AddEvent(id, Event{Kind: "plan.review_requested", Text: strings.TrimSpace(title), Payload: map[string]any{"tool": tool, "plans": plans}})
+	}
+	message := sessionToolResultText(text, "message", "summary", "question")
+	if message == "" {
+		message = strings.TrimPrefix(tool, "exora.")
+	}
+	return m.store.AddEvent(id, Event{Kind: "mcp.event", Text: message, Payload: map[string]any{"tool": tool, "result": payload}})
+}
+
+func sessionToolData(text string, payload map[string]any) map[string]any {
+	if data, ok := payload["data"].(map[string]any); ok {
+		return data
+	}
+	var data map[string]any
+	_ = json.Unmarshal([]byte(text), &data)
+	return data
+}
+
+func sessionToolResultText(text string, keys ...string) string {
+	var value map[string]any
+	if json.Unmarshal([]byte(text), &value) != nil {
+		return ""
+	}
+	for _, key := range keys {
+		if candidate, ok := value[key].(string); ok && strings.TrimSpace(candidate) != "" {
+			return strings.TrimSpace(candidate)
+		}
+	}
+	return ""
 }
 
 func (m *Manager) Send(ctx context.Context, id string, req MessageRequest) (Session, error) {
@@ -263,7 +325,14 @@ func (m *Manager) open(ctx context.Context, id string) (Session, error) {
 	if record.VendorSessionID != "" {
 		vendor, err = driver.ResumeSession(ctx, agentdriver.ResumeRequest{ThreadID: record.VendorSessionID, PermissionProfile: record.PermissionProfile, AdditionalParams: map[string]any{"cwd": record.Workspace}})
 	} else {
-		vendor, err = driver.StartSession(ctx, agentdriver.SessionRequest{CWD: record.Workspace, PermissionProfile: record.PermissionProfile})
+		params := map[string]any{}
+		if record.Model != "" {
+			params["model"] = record.Model
+		}
+		if record.ReasoningEffort != "" {
+			params["config"] = map[string]any{"model_reasoning_effort": record.ReasoningEffort}
+		}
+		vendor, err = driver.StartSession(ctx, agentdriver.SessionRequest{CWD: record.Workspace, PermissionProfile: record.PermissionProfile, AdditionalParams: params})
 	}
 	if err != nil {
 		_ = driver.Close()
@@ -343,6 +412,10 @@ func (m *Manager) dispatch(id string) {
 
 func (m *Manager) handleDriverEvent(id, messageID string, incoming agentdriver.Event) {
 	event, terminal, failed := normalizeDriverEvent(messageID, incoming)
+	if terminal && !failed && event.Kind == "turn.completed" && !m.turnProducedOutput(id, messageID) {
+		event.Kind = "turn.empty"
+		event.Text = "The Agent completed without a visible reply or required Exora question/plan action. The session remains ready; retry this message."
+	}
 	if event.Kind != "" {
 		_, _ = m.store.AddEvent(id, event)
 	}
@@ -365,6 +438,34 @@ func (m *Manager) handleDriverEvent(id, messageID string, incoming agentdriver.E
 	}
 }
 
+func (m *Manager) turnProducedOutput(id, messageID string) bool {
+	events, err := m.store.Events(id, 0)
+	if err != nil {
+		return false
+	}
+	start := -1
+	for index := len(events) - 1; index >= 0; index-- {
+		if events[index].Kind == "turn.started" && events[index].MessageID == messageID {
+			start = index
+			break
+		}
+	}
+	if start < 0 {
+		return false
+	}
+	for _, event := range events[start+1:] {
+		switch event.Kind {
+		case "human.request", "plan.review_requested", "mcp.event":
+			return true
+		case "agent.message.delta", "agent.message.completed":
+			if strings.TrimSpace(event.Text) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (m *Manager) fail(id string, cause error) (Session, error) {
 	updated, _ := m.store.Update(id, func(record *Session) error {
 		record.Status = StatusFailed
@@ -385,6 +486,14 @@ func normalizeStartRequest(req *StartRequest) error {
 	req.Workspace = filepath.Clean(strings.TrimSpace(req.Workspace))
 	req.PermissionMode = strings.ToLower(strings.TrimSpace(req.PermissionMode))
 	req.PermissionProfile = strings.ToLower(strings.TrimSpace(req.PermissionProfile))
+	req.Model = strings.TrimSpace(req.Model)
+	if req.Model != "" && !validModelID(req.Model) {
+		return fmt.Errorf("invalid model")
+	}
+	req.ReasoningEffort = strings.ToLower(strings.TrimSpace(req.ReasoningEffort))
+	if req.ReasoningEffort != "" && !validReasoningEffort(req.ReasoningEffort) {
+		return fmt.Errorf("invalid reasoning effort")
+	}
 	req.TransactionID = strings.TrimSpace(req.TransactionID)
 	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
 	if req.ConversationID == "" || len(req.ConversationID) > 240 || req.Role == "" || req.IdempotencyKey == "" {
@@ -418,6 +527,28 @@ func normalizeStartRequest(req *StartRequest) error {
 		req.PermissionMode = "ask"
 	}
 	return nil
+}
+
+func validModelID(value string) bool {
+	if len(value) < 1 || len(value) > 100 {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validReasoningEffort(value string) bool {
+	switch value {
+	case "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
+		return true
+	default:
+		return false
+	}
 }
 
 func supportedDriver(driver string) bool {
@@ -463,11 +594,33 @@ func sessionPrompt(record Session, userText string) string {
 	if record.TransactionID != "" {
 		transaction = "Attached transaction: " + record.TransactionID + ". Read authoritative state and allowed actions through Exora MCP before proposing a transition."
 	}
+	if record.Role != "buyer" {
+		return strings.Join([]string{
+			"Exora Dock local-agent session instructions:",
+			"You are the user's bound local agent in an Exora " + record.Role + " conversation.",
+			"Use Exora MCP for progress, questions, approvals, offers, deliverables, blocking reasons, and every transaction-state proposal. Ordinary assistant text is visible to the user but cannot change transaction state.",
+			"If the user's intent is unclear, call exora.session_request_user_input with a concrete question, then end the turn and wait for the user's next chat message.",
+			"Work UID: " + record.WorkUID + ". Workspace: " + record.Workspace + ". " + transaction,
+			"Never request, read, reveal, or infer payment PINs, wallet private keys, Dock owner tokens, model credentials, or arbitration authority. A chat reply or MCP call is never payment consent.",
+			"Permission mode: " + record.PermissionMode + ". Stay inside the declared workspace and ask through Exora MCP whenever authority is absent or ambiguous.",
+			"", "User message:", userText,
+		}, "\n")
+	}
+	buyerContext := "No remote transaction is started during this interview."
+	if record.TransactionID != "" {
+		buyerContext = "Attached transaction identifier: " + record.TransactionID + ". It is context only during this interview; do not read or mutate transaction state before plan review."
+	}
 	return strings.Join([]string{
-		"Exora Dock local-agent session instructions:",
-		"You are the user's bound local agent in an Exora " + record.Role + " conversation.",
-		"Use Exora MCP for progress, questions, approvals, offers, deliverables, blocking reasons, and every transaction-state proposal. Ordinary assistant text is visible to the user but cannot change transaction state.",
-		"Work UID: " + record.WorkUID + ". Workspace: " + record.Workspace + ". " + transaction,
+		"Exora Dock buyer requirement-interview instructions:",
+		"You are the user's bound local buyer-planning agent. Before the user reviews a plan, your one and only objective is to learn precisely what they want to buy.",
+		"Interview the user iteratively. Ask one high-value question at a time. Cover the desired outcome, deliverables, inputs and disclosure boundaries, functional and technical requirements, budget, deadline, quality bar, acceptance criteria, constraints, assumptions, risks, and explicit exclusions.",
+		"Make every question easy to answer. First infer exactly two or three reasonable candidate answers from the user's context and present those as options. Then preserve a separate custom-input path so the user can describe their own requirement, concrete task, desired outcome, current materials or environment instead.",
+		"Do not search for sellers, request quotes, create or submit a remote manifest, start work, request transaction approval, or discuss payment during this phase.",
+		"Do not put a question or plan only in ordinary assistant text. End every turn with exactly one MCP action and then stop: exora.session_request_user_input when information is missing, or exora.session_submit_plan when the requirements are mature.",
+		"For questions, follow the tool schema exactly so Dock can put the question into its special composer state. Ask only one concrete question. Use single_select by default; use multi_select only when two answers can genuinely apply together. Supply exactly 2 or 3 context-specific options with short labels and useful descriptions. Options must be plausible answers, mutually exclusive for single_select, and must not include Other, Custom, Not sure, or Ask me—those are handled by the separate custom input. Set allowCustom to true and always provide freedomHint in the user's language, naturally inviting the user to type a different requirement or describe the specific task so you can recommend a suitable answer. Never ask for secrets or credentials.",
+		"The final result must contain two linked plans: localPreparationPlan tells this buyer agent how to prepare and sanitize local files; remoteExecutionPlan tells the remote agent how to execute the task. Every remoteExecutionPlan.requiredFiles item must reference exactly one localPreparationPlan.filesToPrepare item by localFileId. Never invent an absolute path or let the remote plan request an undeclared file.",
+		"The two-plan bundle is mature only when it is internally consistent, contains no material unanswered question, has objective acceptance criteria, and every remote file dependency resolves to locally prepared material whose disclosure policy permits transfer. Submit both plans together for local user review. Submitting them does not authorize any remote action.",
+		"Work UID: " + record.WorkUID + ". Workspace: " + record.Workspace + ". " + buyerContext,
 		"Never request, read, reveal, or infer payment PINs, wallet private keys, Dock owner tokens, model credentials, or arbitration authority. A chat reply or MCP call is never payment consent.",
 		"Permission mode: " + record.PermissionMode + ". Stay inside the declared workspace and ask through Exora MCP whenever authority is absent or ambiguous.",
 		"",
@@ -488,9 +641,9 @@ func normalizeDriverEvent(messageID string, incoming agentdriver.Event) (Event, 
 		event.Kind = "agent.message.completed"
 		event.Text = eventText(incoming.Params)
 	case strings.Contains(method, "mcp") || strings.Contains(eventText(incoming.Params), "exora."):
-		event.Kind = "mcp.event"
-		event.Text = eventText(incoming.Params)
-		event.Payload = decodePayload(incoming.Params)
+		// Codex emits several lifecycle notifications for one MCP call. The MCP
+		// server records the single authoritative semantic event separately.
+		return Event{}, false, false
 	case method == "turn/completed" || method == "session/prompt/completed":
 		event.Kind, terminal = "turn.completed", true
 		event.Text = eventText(incoming.Params)
@@ -516,20 +669,23 @@ func findText(value any) string {
 	case string:
 		return typed
 	case map[string]any:
-		for _, key := range []string{"delta", "text", "message", "result", "error"} {
-			if candidate := strings.TrimSpace(findText(typed[key])); candidate != "" {
-				return candidate
+		// App-server notifications contain IDs, item types, status values, and
+		// other protocol strings next to the assistant text. Only traverse known
+		// content-bearing fields; walking every map value leaks item/message UUIDs
+		// into the visible chat when a notification shape changes.
+		for _, key := range []string{"delta", "text", "output_text", "outputText", "content", "message", "parts", "item", "result", "error", "data", "output"} {
+			child, ok := typed[key]
+			if !ok {
+				continue
 			}
-		}
-		for _, child := range typed {
-			if candidate := strings.TrimSpace(findText(child)); candidate != "" {
+			if candidate := findText(child); strings.TrimSpace(candidate) != "" {
 				return candidate
 			}
 		}
 	case []any:
 		var out []string
 		for _, child := range typed {
-			if candidate := strings.TrimSpace(findText(child)); candidate != "" {
+			if candidate := findText(child); strings.TrimSpace(candidate) != "" {
 				out = append(out, candidate)
 			}
 		}

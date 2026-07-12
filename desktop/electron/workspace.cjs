@@ -16,6 +16,7 @@ function createWorkspaceSnapshot(deps) {
           approvals: [],
           tasks: [],
           payments: [],
+          buyerFlows: [],
           mcpConnections: [],
           workMcpLeases,
           workRuns: [],
@@ -31,6 +32,7 @@ function createWorkspaceSnapshot(deps) {
         approvals,
         tasks,
         payments,
+        buyerFlows,
         mcpConnections,
         workRuns,
       ] = await Promise.all([
@@ -38,6 +40,7 @@ function createWorkspaceSnapshot(deps) {
         snapshotArray(deps.httpJson('GET', '/v1/approvals?status=pending', undefined, token), 'approvals', errors, deps.errorMessage),
         snapshotArray(deps.httpJson('GET', '/v1/tasks', undefined, token), 'tasks', errors, deps.errorMessage),
         snapshotArray(deps.httpJson('GET', '/v1/payments', undefined, token), 'payments', errors, deps.errorMessage),
+        snapshotArray(deps.httpJson('GET', '/v1/buyer-flows', undefined, token), 'buyerFlows', errors, deps.errorMessage),
         snapshotArray(deps.httpJson('GET', '/v1/mcp/connections', undefined, token), 'mcpConnections', errors, deps.errorMessage),
         snapshotArray(deps.httpJson('GET', '/v1/work-runs', undefined, token), 'workRuns', errors, deps.errorMessage),
       ])
@@ -51,6 +54,7 @@ function createWorkspaceSnapshot(deps) {
         approvals,
         tasks,
         payments,
+        buyerFlows,
         mcpConnections,
         workMcpLeases,
         workRuns,
@@ -65,6 +69,7 @@ function createWorkspaceSnapshot(deps) {
 async function snapshotArray(promise, key, errors, errorMessage) {
   try {
     const value = await promise
+    if (Array.isArray(value)) return value
     return Array.isArray(value?.[key]) ? value[key] : []
   } catch (error) {
     errors.push(`${key}: ${errorMessage(error)}`)

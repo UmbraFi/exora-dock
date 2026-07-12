@@ -1,5 +1,7 @@
 # Exora Supervisor / Agent Integration Specification
 
+> **Legacy V2 document.** Exora V3.2 replaces the provider-Agent transaction model with an AI-first market for prepaid compute minutes, downloadable assets, and OpenAPI operations. This file documents the existing V2 implementation only and is not the current product protocol. See [WHITEPAPER.md](./WHITEPAPER.md).
+
 **Protocol:** V2 Alpha
 **Initial Driver:** Codex app-server on Windows
 

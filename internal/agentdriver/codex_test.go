@@ -160,6 +160,36 @@ func TestCodexDriverRejectsUnnegotiatedRuntimeWorkspaceRoots(t *testing.T) {
 	}
 }
 
+func TestCodexDriverDropsPreviousTurnEventsWhileStartingNextTurn(t *testing.T) {
+	d := NewCodex(CodexConfig{})
+	var mu sync.Mutex
+	var events []Event
+	sinkID := d.addSink(sinkRegistration{
+		threadID: "thread-1",
+		sink: EventSinkFunc(func(event Event) {
+			mu.Lock()
+			defer mu.Unlock()
+			events = append(events, event)
+		}),
+	})
+
+	d.handleLine([]byte(`{"method":"item/agentMessage/completed","params":{"threadId":"thread-1","turnId":"old-turn","text":"previous answer"}}`))
+	d.handleLine([]byte(`{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"new-turn","delta":"new answer"}}`))
+
+	mu.Lock()
+	if len(events) != 0 {
+		t.Fatalf("events were delivered before turn activation: %#v", events)
+	}
+	mu.Unlock()
+
+	d.activateSink(sinkID, "new-turn")
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) != 1 || events[0].TurnID != "new-turn" {
+		t.Fatalf("unexpected activated events: %#v", events)
+	}
+}
+
 func TestCodexHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_CODEX_HELPER") != "1" {
 		return

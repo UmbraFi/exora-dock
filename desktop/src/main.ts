@@ -755,7 +755,7 @@ const MASKED_API_KEY_VALUE = '************'
 const DRAFT_LLM_PROFILE_ID = '__draft_llm_profile__'
 const SETTINGS_QR_WIDTH = 236
 const SETTINGS_QR_MARGIN = 1
-const SETTINGS_QR_COLOR = { dark: '#17211e', light: '#ffffff' } as const
+const SETTINGS_QR_COLOR = { dark: '#17182b', light: '#ffffff' } as const
 app.dataset.platform = isMacPlatform ? 'mac' : 'windows'
 
 type LLMProviderPreset = {

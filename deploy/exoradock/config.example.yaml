@@ -1,0 +1,30 @@
+listen_addr: ":8080"
+cache_max_mb: 128
+data_dir: "/data"
+mode: "hybrid"
+legacy_market_enabled: false
+dock_id: "exoradock-cloud"
+cors_allowed_origins:
+  - "https://exoradock.com"
+  - "https://www.exoradock.com"
+provider:
+  workspace_dir: "/data/jobs"
+  allow_command_executor: false
+  allowed_commands: []
+  max_job_seconds: 300
+  max_input_mb: 128
+  docker:
+    enabled: false
+    network_mode: "none"
+    allowed_network_modes: ["none"]
+local_agents:
+  codex:
+    enabled: false
+seller_agent:
+  enabled: true
+  auto_quote: false
+  quote_publish_mode: "manual_review"
+  provider_pubkey: "remote-market"
+  default_quote_price: 12
+  default_quote_currency: "USDC"
+  default_estimated_seconds: 300

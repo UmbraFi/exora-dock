@@ -6,9 +6,14 @@ const {
   cachedLocalAgentForBinding,
   createLocalAgentScanSnapshot,
   interpretAuthState,
+  installationIdFor,
+  journalCursorsEqual,
+  queryWindowsJournalCursors,
   preferExecutableCandidates,
   restoreLocalAgentScanSnapshot,
   scanLocalAgents,
+  scanLocalAgentsGlobal,
+  verifyLocalAgentInstallation,
   windowsInstalledAppExecutablePaths,
 } = require('./local-agents.cjs')
 
@@ -57,12 +62,12 @@ HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\zcod
   assert.deepEqual(paths, ['C:\\Users\\test\\AppData\\Local\\Programs\\ZCode\\ZCode.exe'])
 })
 
-test('scan returns catalog entries without starting unsupported agents', async () => {
+test('scan returns every discovered installation without executing candidates', async () => {
   const probeCalls = []
   let zcodeFixedPaths = []
   const result = await scanLocalAgents({
     findExecutables: async (names, fixedPaths = []) => {
-      if (names[0] === 'codex') return ['C:\\Tools\\codex.exe']
+      if (names[0] === 'codex') return ['C:\\Tools\\codex.exe', 'C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd']
       if (fixedPaths.some((value) => /ZCode/i.test(value))) {
         zcodeFixedPaths = fixedPaths
         return ['C:\\Users\\test\\AppData\\Local\\Programs\\ZCode\\ZCode.exe']
@@ -76,26 +81,36 @@ test('scan returns catalog entries without starting unsupported agents', async (
     },
   })
 
-  const codex = result.agents.find((agent) => agent.driverId === 'codex')
+  const codexInstallations = result.agents.filter((agent) => agent.driverId === 'codex')
+  const codex = codexInstallations[0]
   const zcode = result.agents.find((agent) => agent.driverId === 'zcode')
-  const antigravity = result.agents.find((agent) => agent.driverId === 'antigravity')
-  assert.equal(codex?.status, 'ready')
-  assert.equal(codex?.authState, 'authenticated')
+  assert.equal(codexInstallations.length, 2)
+  assert.equal(codex?.status, 'discovered')
+  assert.equal(codex?.authState, 'unknown')
   assert.equal(zcode?.status, 'detected_only')
   assert.equal(zcode?.bindable, false)
   assert.ok(zcodeFixedPaths.some((value) => /ZCode\.exe$/i.test(value)))
-  assert.equal(antigravity?.status, 'not_installed')
-  assert.deepEqual(probeCalls.map((call) => call.args), [['--version'], ['login', 'status']])
+  assert.deepEqual(probeCalls, [])
 
   const snapshot = createLocalAgentScanSnapshot(result)
   const restored = restoreLocalAgentScanSnapshot(JSON.parse(JSON.stringify(snapshot)))
   const probeCountBeforeSelection = probeCalls.length
   assert.equal(restored?.scannedAt, result.scannedAt)
-  assert.equal(cachedLocalAgentForBinding(restored, 'codex')?.executablePath, 'C:\\Tools\\codex.exe')
+  assert.equal(cachedLocalAgentForBinding(restored, codex.installationId)?.executablePath, codex.executablePath)
   assert.equal(probeCalls.length, probeCountBeforeSelection)
+
+  const verified = await verifyLocalAgentInstallation(codex, {
+    fileExists: () => true,
+    fileFingerprint: () => codex.fingerprint,
+    runProbe: async (_executable, args) => args[0] === '--version'
+      ? { ok: true, stdout: 'codex-cli 1.2.3' }
+      : { ok: true, stderr: 'Logged in using ChatGPT' },
+  })
+  assert.equal(verified.status, 'ready')
+  assert.equal(verified.verificationState, 'verified')
 })
 
-test('saved scan rejects machine mismatch, duplicate drivers, and unsafe executable paths', async () => {
+test('saved scan rejects machine mismatch, duplicate installations, and unsafe executable paths', async () => {
   const result = await scanLocalAgents({
     findExecutables: async (names) => names[0] === 'codex' ? ['C:\\Tools\\codex.exe'] : [],
     runProbe: async (_executable, args) => args[0] === '--version'
@@ -121,4 +136,80 @@ test('saved scan rejects machine mismatch, duplicate drivers, and unsafe executa
   assert.ok(withUnknownFields)
   assert.equal(Object.hasOwn(withUnknownFields, 'command'), false)
   assert.equal(Object.hasOwn(withUnknownFields.agents[0], 'env'), false)
+})
+
+test('installation identity distinguishes two runtimes of the same driver', () => {
+  const desktop = installationIdFor('codex', 'C:\\Program Files\\WindowsApps\\OpenAI.Codex_x\\resources\\codex.exe')
+  const npm = installationIdFor('codex', 'C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd')
+  assert.notEqual(desktop, npm)
+})
+
+test('background index discovers matching executables without probing them', async () => {
+  const directory = (name) => ({ name, isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false })
+  const file = (name) => ({ name, isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false })
+  const tree = new Map([
+    ['C:\\', [directory('Tools'), directory('Windows')]],
+    ['C:\\Tools', [file('codex.exe'), file('claudecode.exe')]],
+    ['C:\\Windows', [directory('WinSxS')]],
+  ])
+  const result = await scanLocalAgentsGlobal({
+    platform: 'win32',
+    volumes: ['C:\\'],
+    readDirectory: async (value) => tree.get(value) || [],
+  })
+  assert.deepEqual(result.agents.map((agent) => agent.driverId).sort(), ['claude-code', 'codex'])
+})
+
+test('background index ignores project copies and nested npm package binaries', async () => {
+  const directory = (name) => ({ name, isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false })
+  const file = (name) => ({ name, isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false })
+  const tree = new Map([
+    ['C:\\', [directory('Users')]],
+    ['C:\\Users', [directory('malou')]],
+    ['C:\\Users\\malou', [directory('Documents'), directory('AppData')]],
+    ['C:\\Users\\malou\\Documents', [directory('project')]],
+    ['C:\\Users\\malou\\Documents\\project', [directory('work'), file('codex.exe')]],
+    ['C:\\Users\\malou\\Documents\\project\\work', [file('codex.exe')]],
+    ['C:\\Users\\malou\\AppData', [directory('Roaming')]],
+    ['C:\\Users\\malou\\AppData\\Roaming', [directory('npm')]],
+    ['C:\\Users\\malou\\AppData\\Roaming\\npm', [file('codex.cmd'), directory('node_modules')]],
+    ['C:\\Users\\malou\\AppData\\Roaming\\npm\\node_modules', [directory('@openai')]],
+    ['C:\\Users\\malou\\AppData\\Roaming\\npm\\node_modules\\@openai', [directory('codex')]],
+    ['C:\\Users\\malou\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex', [file('codex.exe')]],
+  ])
+  const result = await scanLocalAgentsGlobal({ platform: 'win32', volumes: ['C:\\'], readDirectory: async (value) => tree.get(value) || [] })
+  assert.deepEqual(result.agents.map((agent) => agent.executablePath), ['C:\\Users\\malou\\AppData\\Roaming\\npm\\codex.cmd'])
+})
+
+test('background index hides Codex Desktop managed runtimes', async () => {
+  const directory = (name) => ({ name, isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false })
+  const file = (name) => ({ name, isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false })
+  const tree = new Map([
+    ['C:\\', [directory('Users')]],
+    ['C:\\Users', [directory('malou')]],
+    ['C:\\Users\\malou', [directory('AppData')]],
+    ['C:\\Users\\malou\\AppData', [directory('Local')]],
+    ['C:\\Users\\malou\\AppData\\Local', [directory('OpenAI')]],
+    ['C:\\Users\\malou\\AppData\\Local\\OpenAI', [directory('Codex')]],
+    ['C:\\Users\\malou\\AppData\\Local\\OpenAI\\Codex', [directory('bin')]],
+    ['C:\\Users\\malou\\AppData\\Local\\OpenAI\\Codex\\bin', [file('codex.exe'), directory('runtime-id')]],
+    ['C:\\Users\\malou\\AppData\\Local\\OpenAI\\Codex\\bin\\runtime-id', [file('codex.exe')]],
+  ])
+  const result = await scanLocalAgentsGlobal({ platform: 'win32', volumes: ['C:\\'], readDirectory: async (value) => tree.get(value) || [] })
+  assert.deepEqual(result.agents, [])
+})
+
+test('USN cursor comparison enables unchanged-index fast path', () => {
+  const cursor = { 'C:\\': { journalId: '0x01ab', nextUsn: '0x0200' } }
+  assert.equal(journalCursorsEqual(cursor, { ...cursor }), true)
+  assert.equal(journalCursorsEqual(cursor, { 'C:\\': { journalId: '0x01ab', nextUsn: '0x0201' } }), false)
+  assert.equal(journalCursorsEqual({}, {}), false)
+})
+
+test('USN journal parsing is independent of Windows display language', async () => {
+  const cursors = await queryWindowsJournalCursors(['C:\\'], async () => ({
+    ok: true,
+    stdout: '鏃ュ織: 0x01ab\r\n棣栦釜: 0x0100\r\n涓嬩竴涓�: 0x0200\r\n',
+  }))
+  assert.deepEqual(cursors, { 'C:\\': { journalId: '0x01ab', nextUsn: '0x0200' } })
 })

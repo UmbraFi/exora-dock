@@ -61,6 +61,7 @@ type sinkRegistration struct {
 	threadID string
 	turnID   string
 	sink     EventSink
+	pending  []Event
 }
 
 type CodexDriver struct {
@@ -300,12 +301,7 @@ func (d *CodexDriver) StartTurn(ctx context.Context, req TurnRequest, sink Event
 		d.removeSink(sinkID)
 		return Turn{}, fmt.Errorf("turn/start returned no turn id")
 	}
-	d.mu.Lock()
-	if reg, ok := d.sinks[sinkID]; ok {
-		reg.turnID = turnID
-		d.sinks[sinkID] = reg
-	}
-	d.mu.Unlock()
+	d.activateSink(sinkID, turnID)
 	return Turn{ThreadID: threadID, TurnID: turnID, Raw: decodeMap(raw)}, nil
 }
 
@@ -549,6 +545,14 @@ func (d *CodexDriver) handleLine(line []byte) {
 	d.mu.Lock()
 	registrations := make([]sinkRegistration, 0, len(d.sinks))
 	for id, reg := range d.sinks {
+		// turn/start can emit notifications before its response gives us the new
+		// turn ID. Keep those events private until the registration is activated;
+		// otherwise a late event from the previous turn can become the new reply.
+		if reg.turnID == "" {
+			reg.pending = append(reg.pending, event)
+			d.sinks[id] = reg
+			continue
+		}
 		registrations = append(registrations, reg)
 		if isTerminalEvent(notification.Method, event.TurnID, reg) {
 			delete(d.sinks, id)
@@ -680,6 +684,33 @@ func (d *CodexDriver) removeSink(id uint64) {
 	d.mu.Lock()
 	delete(d.sinks, id)
 	d.mu.Unlock()
+}
+
+func (d *CodexDriver) activateSink(id uint64, turnID string) {
+	d.mu.Lock()
+	reg, ok := d.sinks[id]
+	if !ok {
+		d.mu.Unlock()
+		return
+	}
+	reg.turnID = turnID
+	pending := reg.pending
+	reg.pending = nil
+	d.sinks[id] = reg
+	d.mu.Unlock()
+
+	for _, event := range pending {
+		if event.TurnID != "" && event.TurnID != turnID {
+			continue
+		}
+		if reg.sink != nil {
+			reg.sink.OnEvent(event)
+		}
+		if isTerminalEvent(event.Method, event.TurnID, reg) {
+			d.removeSink(id)
+			return
+		}
+	}
 }
 func (d *CodexDriver) removePending(id string) { d.mu.Lock(); delete(d.pending, id); d.mu.Unlock() }
 

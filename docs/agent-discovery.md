@@ -1,5 +1,7 @@
 # Local Codex Driver Discovery
 
+> **Legacy V2 document.** This describes discovery for the existing V2 Agent driver. V3.2 keeps user-owned Agents as MCP consumers but no longer requires a provider Agent. See [WHITEPAPER.md](./WHITEPAPER.md).
+
 This document defines the Windows V2 Alpha discovery and wake path. It is a
 single-driver contract: Exora discovers the user's existing Codex installation
 and never asks for a model credential.
