@@ -12,7 +12,7 @@ for (const file of electronScripts(__dirname)) {
 }
 
 const renderer = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.ts'), 'utf8')
-for (const marker of ['function renderV3BuyerSurface', 'function renderV3SellerSurface', "['vm', 'VM']", "['resources', 'Resources']", "['openapi', 'OpenAPI']", "['listings', 'Listings']"]) {
+for (const marker of ['function renderV3BuyerSurface', 'function renderV3SellerSurface', "['vm', 'VM',", "['resources', 'Resources',", "['openapi', 'OpenAPI',", "['listings', 'Listings',", 'class="v3-seller-active-bar"']) {
   if (!renderer.includes(marker)) throw new Error(`V3 Electron surface missing: ${marker}`)
 }
 for (const preserved of ['class="app-shell"', 'class="task-sidebar"', 'data-ledger-list', 'data-order-side-tab="buyer"']) {
