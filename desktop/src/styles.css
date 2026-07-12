@@ -727,13 +727,15 @@ h3 {
 }
 
 .view-switch {
-  background: var(--color-switch-track);
-  border: 0;
+  --view-switch-tone: 102 92 255;
+  background: rgb(var(--view-switch-tone) / 0.07);
+  border: 1px solid rgb(var(--view-switch-tone) / 0.1);
   border-radius: 8px;
   display: grid;
   gap: 2px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   padding: 3px;
+  position: relative;
   width: 100%;
   app-region: drag;
   -webkit-app-region: drag;
@@ -746,6 +748,7 @@ h3 {
   justify-content: center;
   min-height: 27px;
   min-width: 0;
+  position: relative;
   app-region: drag;
   -webkit-app-region: drag;
 }
@@ -782,12 +785,14 @@ h3 {
 }
 
 .view-tab-cell:has(button:hover) {
-  background: rgb(255 255 255 / 0.72);
+  background: rgb(var(--view-switch-tone) / 0.045);
 }
 
 .view-tab-cell:has(button.active) {
-  background: var(--color-surface);
-  box-shadow: none;
+  background: rgb(var(--view-switch-tone) / 0.09);
+  box-shadow:
+    inset 0 0 0 1px rgb(var(--view-switch-tone) / 0.14),
+    0 4px 12px rgb(var(--view-switch-tone) / 0.06);
 }
 
 .view-switch button {
@@ -795,28 +800,29 @@ h3 {
   background: transparent;
   border: 0;
   border-radius: 6px;
-  color: var(--color-text-secondary);
+  color: #727b82;
   display: flex;
-  gap: 3px;
+  gap: 5px;
   justify-content: center;
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 600;
   height: 100%;
   min-height: 27px;
   overflow: hidden;
   padding: 3px 4px;
   white-space: nowrap;
   width: 100%;
+  transition: color 200ms ease;
 }
 
 .view-switch button:hover {
   background: transparent;
-  color: var(--color-primary);
+  color: rgb(var(--view-switch-tone));
 }
 
 .view-switch button.active {
   background: transparent;
-  color: var(--color-primary);
+  color: rgb(var(--view-switch-tone));
 }
 
 .settings-return-cell button {
@@ -865,27 +871,28 @@ h3 {
 
 .tab-icon {
   align-items: center;
-  color: #42514c;
+  color: #687278;
   display: inline-flex;
   flex: 0 0 auto;
-  height: 12px;
+  height: 15px;
   justify-content: center;
   line-height: 1;
-  width: 12px;
+  width: 15px;
+  transition: color 200ms ease;
 }
 
 .tab-icon svg {
-  height: 14px;
-  width: 14px;
+  height: 15px;
+  width: 15px;
 }
 
 .view-tab-cell .tab-icon svg.app-icon {
-  stroke-width: 1;
+  stroke-width: 1.15;
 }
 
 .view-switch button.active .tab-icon,
 .view-switch button:hover .tab-icon {
-  color: var(--color-text-primary);
+  color: rgb(var(--view-switch-tone));
 }
 
 .order-role-row {
@@ -2371,6 +2378,45 @@ h3 {
   position: relative;
   width: 100%;
   user-select: none;
+}
+
+.seller-surface-tabs {
+  align-items: flex-start;
+  display: flex;
+  justify-content: center;
+  left: 50%;
+  position: absolute;
+  top: 0;
+  transform: translateX(calc(-50% + (var(--sidebar-width) + var(--window-inner-edge)) / 2));
+  width: max-content;
+  z-index: 200;
+}
+
+.seller-surface-tabs .v3-seller-tabs {
+  margin: 0;
+}
+
+.seller-surface-tabs,
+.seller-surface-tabs .v3-seller-tabs,
+.seller-surface-tabs .v3-seller-tabs * {
+  app-region: no-drag !important;
+  -webkit-app-region: no-drag !important;
+  pointer-events: auto;
+}
+
+.app-shell.sidebar-collapsed .seller-surface-tabs {
+  transform: translateX(calc(-50% + var(--collapsed-sidebar-width) / 2));
+}
+
+.app-shell.seller-surface-mode .main-window-drag-strip,
+.app-shell.seller-surface-mode .main-workspace::before {
+  display: none;
+}
+
+.app-shell.seller-surface-mode .main-header,
+.app-shell.seller-surface-mode .main-header * {
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
 }
 
 .app-shell.settings-mode .main-header {
@@ -9484,6 +9530,44 @@ label span {
   box-shadow: 0 8px 20px rgb(0 0 0 / 0.24);
 }
 
+:root[data-theme="dark"] .view-switch {
+  --view-switch-tone: 165 156 255;
+  background: rgb(var(--view-switch-tone) / 0.08);
+  border-color: rgb(var(--view-switch-tone) / 0.14);
+}
+
+:root[data-theme="dark"] .view-switch button {
+  color: #8f9c97;
+}
+
+:root[data-theme="dark"] .view-switch .tab-icon {
+  color: #84908b;
+}
+
+:root[data-theme="dark"] .view-tab-cell:has(button:hover) {
+  background: rgb(var(--view-switch-tone) / 0.07);
+  border-color: transparent;
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .view-tab-cell:has(button.active) {
+  background: rgb(var(--view-switch-tone) / 0.12);
+  border-color: transparent;
+  box-shadow:
+    inset 0 0 0 1px rgb(var(--view-switch-tone) / 0.2),
+    0 4px 14px rgb(0 0 0 / 0.16);
+}
+
+:root[data-theme="dark"] .view-switch button:hover,
+:root[data-theme="dark"] .view-switch button.active {
+  color: rgb(var(--view-switch-tone));
+}
+
+:root[data-theme="dark"] .view-switch button:hover .tab-icon,
+:root[data-theme="dark"] .view-switch button.active .tab-icon {
+  color: rgb(var(--view-switch-tone));
+}
+
 :root[data-theme="dark"] .project-folder-menu-button:hover,
 :root[data-theme="dark"] .project-folder-menu-button.active,
 :root[data-theme="dark"] .folder-picker-button:hover,
@@ -11380,7 +11464,7 @@ label span {
     0 0 13px rgb(102 92 255 / 0.34),
     0 7px 16px rgb(102 92 255 / 0.14);
   transform: translateX(var(--v3-seller-active-offset, 0));
-  transition: transform 240ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  transition: transform 360ms cubic-bezier(0.22, 1, 0.36, 1);
   pointer-events: none;
 }
 
@@ -11401,7 +11485,11 @@ label span {
   font-size: 12px;
   font-weight: 650;
   cursor: pointer;
-  transition: border-color 160ms ease, background 160ms ease, color 160ms ease, box-shadow 160ms ease;
+  transition:
+    border-color 240ms ease,
+    background 240ms ease,
+    color 240ms ease,
+    box-shadow 240ms ease;
 }
 
 .v3-seller-tabs button svg.app-icon {
