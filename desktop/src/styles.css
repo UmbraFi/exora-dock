@@ -11288,12 +11288,10 @@ label span {
 }
 
 .v3-catalog-search { width: min(760px, 100%); }
-.v3-product-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.v3-product-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
 .v3-product-card {
-  display: grid;
   min-height: 250px;
-  padding: 18px;
   text-align: left;
 }
 
