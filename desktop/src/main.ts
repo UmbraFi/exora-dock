@@ -8974,6 +8974,35 @@ function v3PriceLabel(value?: Record<string, unknown>) {
   return `${amount} ${value.currency || ''}${value.unit ? ` / ${value.unit}` : ''}`.trim()
 }
 
+function v3ProductMetrics(product: V3Product) {
+  const manifest = product.manifest || {}
+  const price = (manifest.price || {}) as Record<string, unknown>
+  const limits = (manifest.limits || {}) as Record<string, unknown>
+  if (product.productKind === 'compute') return [
+    { label: 'Price', value: v3PriceLabel(price) },
+    { label: 'Minimum', value: `${limits.minMinutes || 1} min` },
+    { label: 'Workspace', value: `${manifest.workspaceGiB || '—'} GiB` },
+  ]
+  if (product.productKind === 'download') return [
+    { label: 'Price', value: v3PriceLabel(price) },
+    { label: 'Grant', value: `${manifest.grantHours || '—'} h` },
+    { label: 'Version', value: String(manifest.version || 'fixed') },
+  ]
+  const operations = Array.isArray(manifest.operations) ? manifest.operations.length : 1
+  return [
+    { label: 'Fee', value: v3PriceLabel(price) },
+    { label: 'Operations', value: String(operations) },
+    { label: 'Schema', value: 'OpenAPI 3.x' },
+  ]
+}
+
+function v3ProductChips(product: V3Product) {
+  const manifest = product.manifest || {}
+  if (product.productKind === 'compute') return ['Guest Root', '1:1 VM', String(manifest.region || 'region declared')]
+  if (product.productKind === 'download') return [String(manifest.license || 'licensed'), String(manifest.delivery || 'downloadable'), 'SHA-256']
+  return ['JSON Schema', manifest.secretConfigured ? 'Gateway auth' : 'No secret', 'Agent callable']
+}
+
 async function loadV3Catalog() {
   if (state.v3CatalogLoading) return
   state.v3CatalogLoading = true
@@ -9023,15 +9052,17 @@ function renderV3BuyerSurface() {
       <aside class="v3-console-panel"><dl class="detail-grid"><div><dt>Status</dt><dd>${escapeHTML(product.status)}</dd></div><div><dt>Provider</dt><dd>${escapeHTML(product.providerDockId || 'Exora')}</dd></div><div><dt>Delivery</dt><dd>${escapeHTML(product.productKind)}</dd></div></dl><button type="button" disabled>Agent purchase coming next</button><p class="muted">This release supports discovery and structured preview only.</p></aside></div>
     </section>`
   }
-  const cards = state.v3Products.map((product) => {
-    const manifest = product.manifest || {}
-    const price = (manifest.price || {}) as Record<string, unknown>
-    return `<button class="agent-card v3-product-card" type="button" data-v3-product="${escapeAttr(product.productId)}">
-      <div class="market-card-topline"><span class="v3-kind-chip">${escapeHTML(product.productKind)}</span><span class="status-dot" data-state="healthy">${escapeHTML(product.status)}</span></div>
-      <div class="market-card-titleblock"><h3>${escapeHTML(product.title)}</h3><small>${escapeHTML(product.description || 'Machine-readable product')}</small></div>
-      <div class="market-card-details"><span><small>Price</small><strong>${escapeHTML(v3PriceLabel(price))}</strong></span><span><small>Provider</small><strong>${escapeHTML(product.providerDockId || 'Exora')}</strong></span></div>
-      <div class="market-card-footer"><span>Open structured manifest</span>${toolbarIcons.forward}</div>
-    </button>`
+  const cards = state.v3Products.map((product, index) => {
+    const metrics = v3ProductMetrics(product)
+    const chips = v3ProductChips(product)
+    return `<article class="agent-card market-rail-card v3-product-card tone-${marketRailTone(index)}" data-v3-product="${escapeAttr(product.productId)}" role="button" tabindex="0" aria-label="Open ${escapeAttr(product.title)}">
+      <div class="market-card-topline"><span class="market-stage-pill">${escapeHTML(product.productKind.replace('_', ' '))}</span><div class="market-card-icon-actions"><button type="button" class="market-icon-action" data-v3-product="${escapeAttr(product.productId)}" aria-label="View ${escapeAttr(product.title)}">${toolbarIcons.disclosure}</button></div></div>
+      <div class="market-card-titleblock"><span>${escapeHTML(product.status)}</span><h3>${escapeHTML(product.title)}</h3><small>${escapeHTML(product.providerDockId || 'Exora provider')}</small></div>
+      <p class="market-rail-summary">${escapeHTML(product.description || 'Machine-readable product ready for an AI Agent.')}</p>
+      <div class="market-metric-row">${metrics.map(renderMarketMetric).join('')}</div>
+      <div class="chip-row market-rail-chips">${chips.map((chip) => `<span>${escapeHTML(chip)}</span>`).join('')}</div>
+      <div class="market-card-footer"><span>${escapeHTML(product.productKind === 'compute' ? 'Exclusive disposable environment' : product.productKind === 'download' ? 'Licensed versioned delivery' : 'Normalized operation manifest')}</span><strong>${toolbarIcons.disclosure}</strong></div>
+    </article>`
   }).join('')
   return `<section class="v3-market-surface">
     <div class="v3-surface-heading"><div><span>AI-FIRST MARKET</span><h2>Agent-ready products</h2><p>Compute minutes, licensed resources, and normalized OpenAPI operations.</p></div><button class="ghost" type="button" data-v3-action="catalog-refresh">${toolbarIcons.refresh}<span>Refresh</span></button></div>
@@ -9081,7 +9112,11 @@ async function v3CreateProductAndListing(productInput: Record<string, unknown>, 
 
 function attachV3SurfaceHandlers() {
   fields.actionView.querySelector<HTMLFormElement>('[data-v3-catalog-search]')?.addEventListener('submit', (event) => { event.preventDefault(); const form = event.currentTarget as HTMLFormElement; state.v3CatalogQuery = String(new FormData(form).get('query') || ''); void loadV3Catalog() })
-  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-product]').forEach((button) => button.addEventListener('click', () => { state.v3SelectedProduct = state.v3Products.find((item) => item.productId === button.dataset.v3Product); renderDecisionPanel() }))
+  fields.actionView.querySelectorAll<HTMLElement>('.v3-product-card[data-v3-product]').forEach((card) => {
+    const open = () => { state.v3SelectedProduct = state.v3Products.find((item) => item.productId === card.dataset.v3Product); renderDecisionPanel() }
+    card.addEventListener('click', open)
+    card.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open() } })
+  })
   fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-seller-tab]').forEach((button) => button.addEventListener('click', () => { state.v3SellerTab = button.dataset.v3SellerTab as V3SellerTab; renderDecisionPanel() }))
   const action = (name: string, handler: () => void) => fields.actionView.querySelector<HTMLButtonElement>(`[data-v3-action="${name}"]`)?.addEventListener('click', handler)
   action('catalog-back', () => { state.v3SelectedProduct = undefined; renderDecisionPanel() })
