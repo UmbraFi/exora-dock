@@ -26,6 +26,7 @@ import (
 	"github.com/exora-dock/exora-dock/internal/delegation"
 	"github.com/exora-dock/exora-dock/internal/dht"
 	"github.com/exora-dock/exora-dock/internal/discovery"
+	"github.com/exora-dock/exora-dock/internal/endpoint"
 	"github.com/exora-dock/exora-dock/internal/ipfs"
 	"github.com/exora-dock/exora-dock/internal/lease"
 	"github.com/exora-dock/exora-dock/internal/market"
@@ -76,6 +77,8 @@ type RuntimeStores struct {
 	CloudTokenPath  string
 	DockID          string
 	ConfigPath      string
+	Endpoints       *endpoint.Store
+	EndpointTunnel  *endpoint.TunnelClient
 }
 
 type Handler struct {
@@ -120,6 +123,8 @@ type Handler struct {
 	cloudTokenPath  string
 	dockID          string
 	configPath      string
+	endpoints       *endpoint.Store
+	endpointTunnel  *endpoint.TunnelClient
 	selfPubkey      string
 	startTime       time.Time
 }
@@ -188,6 +193,8 @@ func NewHandler(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub
 		cloudTokenPath:  strings.TrimSpace(stores.CloudTokenPath),
 		dockID:          strings.TrimSpace(stores.DockID),
 		configPath:      strings.TrimSpace(stores.ConfigPath),
+		endpoints:       stores.Endpoints,
+		endpointTunnel:  stores.EndpointTunnel,
 		selfPubkey:      selfPubkey,
 		startTime:       time.Now(),
 	}

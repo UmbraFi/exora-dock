@@ -61,6 +61,19 @@ func (h *Handler) V3Catalog(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) V3CatalogProduct(w http.ResponseWriter, r *http.Request) {
 	h.v3CloudProxy(w, r, http.MethodGet, "/v3/catalog/products/"+r.PathValue("id"), nil)
 }
+
+func (h *Handler) V3ActivitySessions(w http.ResponseWriter, r *http.Request) {
+	path := "/v3/activity-sessions"
+	if r.URL.RawQuery != "" {
+		path += "?" + r.URL.RawQuery
+	}
+	h.v3CloudProxy(w, r, http.MethodGet, path, nil)
+}
+
+func (h *Handler) V3ActivitySession(w http.ResponseWriter, r *http.Request) {
+	h.v3CloudProxy(w, r, http.MethodGet, "/v3/activity-sessions/"+r.PathValue("id"), nil)
+}
+
 func (h *Handler) V3EnvironmentImageCatalog(w http.ResponseWriter, r *http.Request) {
 	path := "/v3/catalog/environment-images"
 	if r.URL.RawQuery != "" {

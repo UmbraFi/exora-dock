@@ -17,6 +17,7 @@ import (
 	"github.com/exora-dock/exora-dock/internal/delegation"
 	"github.com/exora-dock/exora-dock/internal/dht"
 	"github.com/exora-dock/exora-dock/internal/discovery"
+	"github.com/exora-dock/exora-dock/internal/endpoint"
 	"github.com/exora-dock/exora-dock/internal/ipfs"
 	"github.com/exora-dock/exora-dock/internal/lease"
 	"github.com/exora-dock/exora-dock/internal/localauth"
@@ -69,6 +70,8 @@ type RuntimeStores struct {
 	Auth            *localauth.Store
 	AllowedOrigins  []string
 	LegacyMarket    bool
+	Endpoints       *endpoint.Store
+	EndpointTunnel  *endpoint.TunnelClient
 }
 
 func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring *dht.Ring, ic *ipfs.Client, ps *ipfs.PinStore, ra *agent.ReviewAgent, products *product.Store, orders *orderpkg.Store, resources *resource.Store, delegations *delegation.Store, leases *lease.Store, selfPubkey string, runtime ...RuntimeStores) http.Handler {
@@ -105,6 +108,8 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 		CloudTokenPath:  stores.CloudTokenPath,
 		DockID:          stores.DockID,
 		ConfigPath:      stores.ConfigPath,
+		Endpoints:       stores.Endpoints,
+		EndpointTunnel:  stores.EndpointTunnel,
 	})
 	r := chi.NewRouter()
 
@@ -304,9 +309,15 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 		r.Get("/review/{productID}", h.GetReview)
 	})
 	r.Route("/v3", func(r chi.Router) {
+		r.Get("/local/endpoints", h.V3LocalEndpoints)
+		r.Put("/local/endpoints/{id}", h.V3SaveLocalEndpoint)
+		r.Post("/local/endpoints/probe", h.V3ProbeLocalEndpoint)
+		r.Post("/local/endpoints/test-route", h.V3TestLocalEndpointRoute)
 		r.HandleFunc("/gateway/{listingId}/*", h.V3Gateway)
 		r.Get("/catalog/products", h.V3Catalog)
 		r.Get("/catalog/products/{id}", h.V3CatalogProduct)
+		r.Get("/activity-sessions", h.V3ActivitySessions)
+		r.Get("/activity-sessions/{id}", h.V3ActivitySession)
 		r.Get("/catalog/environment-images", h.V3EnvironmentImageCatalog)
 		r.Get("/catalog/environment-images/{id}", h.V3EnvironmentImageCatalogItem)
 		r.HandleFunc("/provider/worker/{command}", h.V3WorkerCommand)

@@ -1750,21 +1750,23 @@ func toolDefinitions() []toolDefinition {
 	return []toolDefinition{
 		{
 			Name: "exora.save_api_bridge_draft", Title: "Save API Bridge Draft",
-			Description: "Create or version-update a seller API Bridge draft. This tool cannot submit credentials, attest seller responsibility, create a public listing, or publish.",
+			Description: "Create or version-update a seller API Bridge or Dock Endpoint draft. The Agent standardizes routes, metering, and pricing but cannot submit credentials, attest seller responsibility, create a Listing, or publish.",
 			InputSchema: strictObjectSchema(map[string]any{
 				"draftId": stringProp("Use the preallocated desktop draft id when supplied; otherwise omit to create."), "expectedVersion": numberProp("Use 0 for a preallocated id's first save; use the current version for updates."),
 				"title": stringProp("Seller-facing service title."), "description": stringProp("Service description supplied by the seller."),
-				"protocol": stringProp("openapi, openai, generic_http, or sse."), "baseUrl": stringProp("Public HTTPS provider base URL."),
+				"bridgeMode": stringProp("transparent for API Bridge or dock_tunnel for a local Endpoint."),
+				"protocol":   stringProp("openapi, openai, generic_http, or sse."), "baseUrl": stringProp("Public HTTPS provider base URL. Omit for dock_tunnel."),
 				"healthPath": stringProp("Seller-declared side-effect-free probe path."), "routes": arrayProp("Routes. Each route includes operationId, method, path, displayName, pricing[], and maxChargePerInvocationAtomic when variable-priced."),
 				"agentNotes": stringProp("Notes for human review."), "unresolvedFields": arrayProp("Fields the agent could not determine."),
-			}, []string{"title", "protocol", "baseUrl", "healthPath", "routes"}),
+			}, []string{"title", "bridgeMode", "protocol", "healthPath", "routes"}),
 		},
 		{
 			Name: "exora.invoke_api_bridge", Title: "Invoke API Bridge",
 			Description: "Invoke a published API Bridge operation through the same metered transparent Gateway used by HTTP clients.",
 			InputSchema: strictObjectSchema(map[string]any{
 				"listingId": stringProp("Published listing id."), "operationId": stringProp("Declared operation id."),
-				"query": objectProp("Optional query parameters."), "headers": objectProp("Optional safe provider request headers."),
+				"activitySessionId": stringProp("Stable caller-generated id that groups related invocations into one human history record. Reuse it only for the same resource task."),
+				"query":             objectProp("Optional query parameters."), "headers": objectProp("Optional safe provider request headers."),
 				"body": objectProp("Optional JSON request body."), "artifacts": arrayProp("Optional artifact references."),
 				"maxBudgetAtomic": numberProp("Optional buyer-side USDC atomic budget cap."),
 			}, []string{"listingId", "operationId"}),

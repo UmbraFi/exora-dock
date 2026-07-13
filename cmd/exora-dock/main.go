@@ -32,6 +32,7 @@ import (
 	"github.com/exora-dock/exora-dock/internal/delegation"
 	"github.com/exora-dock/exora-dock/internal/dht"
 	"github.com/exora-dock/exora-dock/internal/discovery"
+	"github.com/exora-dock/exora-dock/internal/endpoint"
 	"github.com/exora-dock/exora-dock/internal/fetcher"
 	"github.com/exora-dock/exora-dock/internal/ipfs"
 	"github.com/exora-dock/exora-dock/internal/lease"
@@ -189,6 +190,9 @@ func main() {
 		orderStore = orderpkg.NewStore(c)
 	}
 	resourceStore := resource.NewStore(c)
+	endpointStore := endpoint.NewStore(c)
+	endpointTunnel := endpoint.NewTunnelClient(cfg.CloudURL, cfg.CloudTokenPath, endpointStore)
+	go endpointTunnel.Run(ctx)
 	agentCardStore := agentcard.NewStore(c)
 	delegationStore := delegation.NewStore(c)
 	leaseStore := lease.NewStore(c)
@@ -300,6 +304,8 @@ func main() {
 	srv := &http.Server{
 		Addr: cfg.ListenAddr,
 		Handler: server.New(c, chatStore, relay, hub, ring, ipfsClient, pinStore, reviewAgent, productStore, orderStore, resourceStore, delegationStore, leaseStore, selfPubkey, server.RuntimeStores{
+			Endpoints:       endpointStore,
+			EndpointTunnel:  endpointTunnel,
 			Wallet:          walletStore,
 			Tasks:           taskStore,
 			Approvals:       approvalStore,
