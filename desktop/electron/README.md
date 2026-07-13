@@ -27,7 +27,6 @@ The renderer calls one channel, `exora:invoke`, and passes a command string.
 - `dockRuntime`: daemon lifecycle, health, logs, MCP prompt/config strings.
 - `localWork`: workspace snapshots, work MCP leases, project folder operations.
 - `persistence`: desktop settings, locale, chat, archives, transactions.
-- `pwaLink`: remote PWA link QR and token exchange.
 - `llmAndSeller`: API profiles, seller agent settings, provider probes.
 - `agentCardsAndMarket`: card diagnostics, publishing, market search.
 - `ownerLedger`: approvals, order plans, tasks, payments, payment PIN.

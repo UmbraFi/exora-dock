@@ -51,9 +51,6 @@ const APP_URL_POLICY = createAppURLPolicy({
 })
 const STARTUP_LANGUAGE = readStartupLanguageSync()
 const MASKED_API_KEY_VALUE = '************'
-const ELECTRON_CLIENT_KIND = 'electron'
-const ELECTRON_REMOTE_CAPABILITIES = ['remote.console', 'approvals.queue', 'mcp.stdio', 'electron.shell']
-
 app.commandLine.appendSwitch('lang', chromiumLocaleForLanguage(STARTUP_LANGUAGE))
 
 let mainWindow
@@ -247,13 +244,11 @@ function createIpcHandlerGroups() {
       archive_chat_threads,
       save_transactions,
     },
-    pwaLink: {
-      pwa_link_start,
-      pwa_link_status,
-    },
     v3Market: {
       catalog_products,
       catalog_product,
+      activity_sessions,
+      activity_session,
       provider_vm_probe,
       provider_vm_domains,
       provider_vm_import,
@@ -282,10 +277,16 @@ function createIpcHandlerGroups() {
       provider_api_bridge_materials_get,
       provider_api_bridge_draft_get,
       provider_api_bridge_draft_save,
+      provider_api_bridge_finalize,
       provider_openapi_choose,
       provider_api_probe,
       provider_openapi_import,
       provider_api_bridge_import,
+      provider_endpoint_local_save,
+      provider_endpoint_local_list,
+      provider_endpoint_probe,
+      provider_endpoint_test_route,
+      provider_endpoint_import,
       provider_listings,
       provider_listing_save,
       provider_listing_action,
@@ -459,132 +460,6 @@ async function copy_opencode_config() {
 
 async function copy_rest_base_url() {
   return BASE_URL
-}
-
-async function pwa_link_start(payload) {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  const cfg = await cloudLinkConfig(paths, payload?.input ?? {})
-  const commandKey = createCommandKeyPair()
-  await savePendingCommandKey(cfg.tokenPath, commandKey)
-  const result = await cloudPostJSON(`${cfg.cloudUrl}/v1/device-links`, {
-    dockId: cfg.dockId,
-    clientKind: ELECTRON_CLIENT_KIND,
-    displayName: 'Exora Dock',
-    mode: cfg.mode,
-    publicBaseUrl: BASE_URL,
-    version: '0.1.0',
-    capabilities: ELECTRON_REMOTE_CAPABILITIES,
-    commandPublicKey: commandKey.publicKey,
-  }, 10000)
-  if (!result.ok) {
-    throw new Error(`cloud device link returned ${result.status}: ${result.error}`)
-  }
-  return sanitizePwaLink({
-    status: result.body.status || 'pending',
-    ...result.body,
-    clientKind: ELECTRON_CLIENT_KIND,
-    cloudUrl: cfg.cloudUrl,
-    dockId: result.body.dockId || cfg.dockId,
-    tokenPath: cfg.tokenPath,
-    qrPayload: pwaLinkQRPayload(result.body, cfg),
-    message: 'Scan this QR from the Exora PWA Remote Console.',
-  })
-}
-
-async function pwa_link_status(payload) {
-  const input = payload?.input ?? payload ?? {}
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  const cfg = await cloudLinkConfig(paths, input)
-  const deviceCode = String(input.deviceCode || '').trim()
-  if (!deviceCode) throw new Error('device code missing')
-
-  const result = await cloudPostJSON(`${cfg.cloudUrl}/v1/device-links/token`, { deviceCode }, 10000)
-  const body = result.body
-  if (result.status === 202) {
-    return sanitizePwaLink({
-      status: body.status || 'pending',
-      deviceCode,
-      userCode: input.userCode,
-      verificationUrl: input.verificationUrl,
-      expiresAt: body.expiresAt || input.expiresAt,
-      clientKind: ELECTRON_CLIENT_KIND,
-      cloudUrl: cfg.cloudUrl,
-      dockId: body.dockId || input.dockId || cfg.dockId,
-      tokenPath: cfg.tokenPath,
-      message: 'Waiting for the PWA to confirm this code.',
-    })
-  }
-  if (result.status === 410) {
-    return sanitizePwaLink({
-      status: 'expired',
-      deviceCode,
-      userCode: input.userCode,
-      verificationUrl: input.verificationUrl,
-      expiresAt: body.expiresAt || input.expiresAt,
-      clientKind: ELECTRON_CLIENT_KIND,
-      cloudUrl: cfg.cloudUrl,
-      dockId: input.dockId || cfg.dockId,
-      tokenPath: cfg.tokenPath,
-      message: body.error || 'This PWA link QR has expired. Create a new QR.',
-    })
-  }
-  if (!result.ok) {
-    throw new Error(`cloud token exchange returned ${result.status}: ${result.error}`)
-  }
-  const cloudToken = String(body.cloudToken || '').trim()
-  if (!cloudToken) throw new Error('cloud token missing from approved device link')
-
-  const dockId = String(body.dockId || input.dockId || cfg.dockId).trim()
-  const commandKey = await loadPendingCommandKey(cfg.tokenPath).catch(() => createCommandKeyPair())
-  await saveCloudTokenFile(cfg.tokenPath, {
-    dockId,
-    cloudUrl: cfg.cloudUrl,
-    cloudToken,
-    clientKind: ELECTRON_CLIENT_KIND,
-    commandPrivateKey: commandKey.privateKey,
-    commandPublicKey: commandKey.publicKey,
-    linkedAt: new Date().toISOString(),
-  })
-  await cloudPostJSON(`${cfg.cloudUrl}/v1/docks/${encodeURIComponent(dockId)}/heartbeat`, {
-    dockId,
-    clientKind: ELECTRON_CLIENT_KIND,
-    displayName: 'Exora Dock',
-    mode: cfg.mode,
-    publicBaseUrl: BASE_URL,
-    version: '0.1.0',
-    capabilities: ELECTRON_REMOTE_CAPABILITIES,
-    commandPublicKey: commandKey.publicKey,
-  }, 10000, cloudToken)
-  await deletePendingCommandKey(cfg.tokenPath)
-  await ensureCloudLinkConfig(paths, cfg.cloudUrl, cfg.tokenPath, dockId)
-
-  let restart = { daemonRestarted: false, message: 'PWA linked. Remote Console can now control this Dock.' }
-  try {
-    restart = await refreshDaemonForCloudLink(paths)
-  } catch (error) {
-    restart = {
-      daemonRestarted: false,
-      message: `PWA linked, but Dock restart failed: ${errorMessage(error)}`,
-    }
-  }
-
-  return sanitizePwaLink({
-    status: body.status || 'approved',
-    linked: true,
-    deviceCode,
-    userCode: input.userCode,
-    verificationUrl: input.verificationUrl,
-    expiresAt: body.expiresAt || input.expiresAt,
-    clientKind: ELECTRON_CLIENT_KIND,
-    cloudUrl: cfg.cloudUrl,
-    dockId,
-    accountId: body.accountId,
-    tokenPath: cfg.tokenPath,
-    daemonRestarted: restart.daemonRestarted,
-    message: restart.message,
-  })
 }
 
 async function seller_settings() {
@@ -3637,6 +3512,22 @@ async function catalog_product(payload = {}) {
   return httpJson('GET', `/v3/catalog/products/${encodeURIComponent(String(payload?.input?.id || ''))}`, undefined, await localOwnerToken(await dockPaths()))
 }
 
+async function activity_sessions(payload = {}) {
+  const input = payload?.input || {}
+  const query = new URLSearchParams()
+  for (const key of ['role', 'kind', 'status', 'q', 'limit']) {
+    const value = String(input[key] ?? '').trim()
+    if (value) query.set(key, value)
+  }
+  return httpJson('GET', `/v3/activity-sessions${query.size ? `?${query}` : ''}`, undefined, await localOwnerToken(await dockPaths()))
+}
+
+async function activity_session(payload = {}) {
+  const id = String(payload?.input?.id || '').trim()
+  if (!id) throw new Error('activity session id is required')
+  return httpJson('GET', `/v3/activity-sessions/${encodeURIComponent(id)}`, undefined, await localOwnerToken(await dockPaths()))
+}
+
 async function v3Worker(command, input = {}) {
   return httpJson('POST', `/v3/provider/worker/${encodeURIComponent(command)}`, input, await localOwnerToken(await dockPaths()), { timeoutMs: 180000 })
 }
@@ -4141,7 +4032,7 @@ async function provider_api_bridge_materials_choose(payload = {}) {
   const draftId = String(payload?.input?.draftId || '')
   const current = await readAPIBridgeMaterialManifest(draftId)
   const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile', 'multiSelections'], filters: [{ name: 'API materials', extensions: Array.from(API_BRIDGE_MATERIAL_EXTENSIONS) }] })
-  if (result.canceled) return current
+  if (result.canceled) return { ...current, canceled: true }
   const candidates = []
   for (const sourcePath of result.filePaths) {
     const extension = path.extname(sourcePath).slice(1).toLowerCase()
@@ -4161,7 +4052,7 @@ async function provider_api_bridge_materials_choose(payload = {}) {
     if (file.sourcePath) {
       const storedName = `${crypto.createHash('sha256').update(file.name.toLowerCase()).digest('hex').slice(0, 12)}-${file.name}`
       const storedPath = path.join(root, storedName); await fsp.copyFile(file.sourcePath, storedPath)
-      files.push({ id: storedName, name: file.name, extension: file.extension, sizeBytes: file.sizeBytes, localPath: storedPath })
+      files.push({ id: storedName, name: file.name, extension: file.extension, sizeBytes: file.sizeBytes, sha256: await sha256File(storedPath), localPath: storedPath })
     } else files.push(file)
   }
   let discovery = current.discovery
@@ -4196,6 +4087,12 @@ async function provider_api_bridge_draft_get(payload = {}) {
 }
 async function provider_api_bridge_draft_save(payload = {}) {
   return httpJson('POST', '/v3/provider/api-bridge-drafts', payload.input || {}, await localOwnerToken(await dockPaths()), { timeoutMs: 30000 })
+}
+
+async function provider_api_bridge_finalize(payload = {}) {
+  const input = payload.input || {}
+  if (!String(input.idempotencyKey || '').trim()) throw new Error('API Bridge finalize idempotencyKey is required')
+  return httpJson('POST', '/v3/provider/api-bridge-imports', input, await localOwnerToken(await dockPaths()), { timeoutMs: 30000 })
 }
 
 function resourceArchiveTempRoot() {
@@ -4258,6 +4155,23 @@ async function provider_openapi_import(payload = {}) {
   return httpJson('POST', '/v3/provider/api-imports', { ...(payload.input || {}) }, await localOwnerToken(await dockPaths()), { timeoutMs: 30000 })
 }
 async function provider_api_bridge_import(payload = {}) { return provider_openapi_import(payload) }
+async function provider_endpoint_local_save(payload = {}) {
+  const input = payload.input || {}
+  const endpointId = String(input.endpointId || '')
+  return httpJson('PUT', `/v3/local/endpoints/${encodeURIComponent(endpointId)}`, input, await localOwnerToken(await dockPaths()), { timeoutMs: 15000 })
+}
+async function provider_endpoint_local_list() {
+  return httpJson('GET', '/v3/local/endpoints', undefined, await localOwnerToken(await dockPaths()), { timeoutMs: 15000 })
+}
+async function provider_endpoint_probe(payload = {}) {
+  return httpJson('POST', '/v3/local/endpoints/probe', payload.input || {}, await localOwnerToken(await dockPaths()), { timeoutMs: 20000 })
+}
+async function provider_endpoint_test_route(payload = {}) {
+  return httpJson('POST', '/v3/local/endpoints/test-route', payload.input || {}, await localOwnerToken(await dockPaths()), { timeoutMs: 35000 })
+}
+async function provider_endpoint_import(payload = {}) {
+  return httpJson('POST', '/v3/provider/endpoint-imports', payload.input || {}, await localOwnerToken(await dockPaths()), { timeoutMs: 30000 })
+}
 async function provider_listings() {
   try { return await httpJson('GET', '/v3/provider/listings', undefined, await localOwnerToken(await dockPaths())) }
   catch (error) { return { listings: [], offline: true, error: errorMessage(error) } }
@@ -4333,188 +4247,6 @@ function localRequestError(error, route, timeoutMs) {
     return new Error(`Local Exora Dock is not reachable at ${BASE_URL}. I tried to start it automatically, but ${route} is still unavailable. Wait a few seconds and try again.`)
   }
   return error instanceof Error ? error : new Error(message)
-}
-
-async function cloudLinkConfig(paths, input = {}) {
-  const raw = await readTextOr(paths.configPath, defaultLocalConfig(paths))
-  let value
-  try {
-    value = objectOr(YAML.parse(raw) || {})
-  } catch {
-    value = {}
-  }
-  const seller = objectOr(value.seller_agent)
-  const cloudUrl = normalizeCloudURL(
-    input.cloudUrl ||
-    input.cloudURL ||
-    value.cloud_url ||
-    process.env.EXORA_CLOUD_URL ||
-    'http://127.0.0.1:8090',
-  )
-  const tokenPath = path.resolve(String(
-    input.tokenPath ||
-    value.cloud_token_path ||
-    process.env.EXORA_CLOUD_TOKEN_PATH ||
-    path.join(paths.dataDir, 'cloud-token.json'),
-  ).trim())
-  const dockId = defaultIfBlank(
-    input.dockId || input.dockID || value.dock_id || seller.provider_pubkey,
-    'local-dev-miner',
-  )
-  return {
-    cloudUrl,
-    tokenPath,
-    dockId,
-    mode: defaultIfBlank(input.mode || value.mode, 'hybrid'),
-  }
-}
-
-function normalizeCloudURL(value) {
-  const trimmed = String(value || '').trim().replace(/\/+$/, '')
-  return trimmed || 'http://127.0.0.1:8090'
-}
-
-async function cloudPostJSON(url, body, timeoutMs, token = '') {
-  const response = await fetchWithTimeout(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify(body),
-  }, timeoutMs)
-  const text = await response.text()
-  let parsed = {}
-  if (text.trim()) {
-    try {
-      parsed = JSON.parse(text)
-    } catch {
-      parsed = { raw: text }
-    }
-  }
-  return {
-    ok: response.ok,
-    status: response.status,
-    body: objectOr(parsed),
-    error: String(parsed?.error || parsed?.message || text || response.statusText || 'cloud request failed'),
-  }
-}
-
-function pwaLinkQRPayload(link, cfg) {
-  const userCode = String(link?.userCode || '').trim()
-  const verificationUrl = String(link?.verificationUrl || '').trim()
-  if (verificationUrl && userCode) {
-    try {
-      const url = new URL(verificationUrl, cfg.cloudUrl)
-      url.searchParams.set('userCode', userCode)
-      url.searchParams.set('code', userCode)
-      url.searchParams.set('dockCode', userCode)
-      url.searchParams.set('dockId', cfg.dockId)
-      url.searchParams.set('cloudUrl', cfg.cloudUrl)
-      url.searchParams.set('clientKind', ELECTRON_CLIENT_KIND)
-      return url.toString()
-    } catch {
-      // Fall through to structured payload.
-    }
-  }
-  return JSON.stringify({
-    type: 'exora.dock.link',
-    userCode,
-    verificationUrl,
-    cloudUrl: cfg.cloudUrl,
-    dockId: cfg.dockId,
-    clientKind: ELECTRON_CLIENT_KIND,
-    expiresAt: link?.expiresAt || '',
-  })
-}
-
-function sanitizePwaLink(value) {
-  const next = { ...objectOr(value) }
-  delete next.cloudToken
-  delete next.commandPrivateKey
-  return next
-}
-
-function createCommandKeyPair() {
-  const ecdh = crypto.createECDH('prime256v1')
-  ecdh.generateKeys()
-  return {
-    privateKey: base64URL(ecdh.getPrivateKey()),
-    publicKey: base64URL(ecdh.getPublicKey()),
-  }
-}
-
-function base64URL(buffer) {
-  return Buffer.from(buffer)
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/g, '')
-}
-
-function pendingCommandKeyPath(tokenPath) {
-  return `${tokenPath}.command-key.json`
-}
-
-async function savePendingCommandKey(tokenPath, commandKey) {
-  const keyPath = pendingCommandKeyPath(tokenPath)
-  await fsp.mkdir(path.dirname(keyPath), { recursive: true })
-  await fsp.writeFile(keyPath, `${JSON.stringify(commandKey, null, 2)}\n`, { mode: 0o600 })
-}
-
-async function loadPendingCommandKey(tokenPath) {
-  const raw = await fsp.readFile(pendingCommandKeyPath(tokenPath), 'utf8')
-  const parsed = objectOr(JSON.parse(raw))
-  const privateKey = String(parsed.privateKey || '').trim()
-  const publicKey = String(parsed.publicKey || '').trim()
-  if (!privateKey || !publicKey) throw new Error('pending command key missing')
-  return { privateKey, publicKey }
-}
-
-async function deletePendingCommandKey(tokenPath) {
-  await fsp.rm(pendingCommandKeyPath(tokenPath), { force: true })
-}
-
-async function saveCloudTokenFile(tokenPath, value) {
-  await fsp.mkdir(path.dirname(tokenPath), { recursive: true })
-  await fsp.writeFile(tokenPath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 })
-}
-
-async function ensureCloudLinkConfig(paths, cloudUrl, tokenPath, dockId) {
-  const raw = await readTextOr(paths.configPath, defaultLocalConfig(paths))
-  let value
-  try {
-    value = objectOr(YAML.parse(raw) || {})
-  } catch {
-    value = {}
-  }
-  value.cloud_url = normalizeCloudURL(cloudUrl)
-  value.cloud_token_path = tokenPath
-  value.dock_id = defaultIfBlank(dockId, 'local-dev-miner')
-  await fsp.writeFile(paths.configPath, ensureTrailingNewline(YAML.stringify(value)))
-  await writeDiscoveryManifest(paths)
-}
-
-async function refreshDaemonForCloudLink(paths) {
-  if (await trackedDaemonRunning(paths)) {
-    await stopTrackedDaemon(paths)
-    await start_dock()
-    return {
-      daemonRestarted: true,
-      message: 'PWA linked. Dock was restarted so remote commands can connect.',
-    }
-  }
-  if (!(await healthOk())) {
-    await start_dock()
-    return {
-      daemonRestarted: true,
-      message: 'PWA linked. Dock was started so remote commands can connect.',
-    }
-  }
-  return {
-    daemonRestarted: false,
-    message: 'PWA linked. Remote Console can now control this Dock; restart any external daemon if it does not appear online.',
-  }
 }
 
 function effectiveLlmApiKey(rawConfig, input) {
