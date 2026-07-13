@@ -13,6 +13,14 @@ const {
 } = require('./security.cjs')
 const { createWorkspaceSnapshot } = require('./workspace.cjs')
 const {
+  MAX_RESOURCE_ARCHIVE_BYTES,
+  cleanupResourceArchive,
+  cleanupResourceArchiveSync,
+  cleanupStaleResourceArchives,
+  createResourceArchive,
+  validateResourceArchiveForUpload,
+} = require('./resource-archive.cjs')
+const {
   cachedLocalAgentForBinding,
   createLocalAgentScanSnapshot,
   localAgentDriver,
@@ -30,7 +38,8 @@ const DEFAULT_PROJECT_NAME = 'AgenStaff'
 const DESKTOP_STATE_NAME = 'desktop-state.json'
 const PERSISTENCE_DIR_NAME = 'exora-data'
 const WORK_MCP_LEASE_LIMIT = 100
-const v3SelectedFiles = new Map()
+const v3SelectedArchives = new Map()
+const v3EnvironmentDownloads = new Map()
 const DEV_URL = process.env.EXORA_DOCK_DESKTOP_DEV_URL || 'http://127.0.0.1:1420'
 const WINDOW_ICON = process.platform === 'win32'
   ? path.join(__dirname, 'assets', 'icon.ico')
@@ -129,8 +138,14 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   registerIpc()
+  await cleanupStaleResourceArchives(resourceArchiveTempRoot(), { maxAgeMs: 1 }).catch((error) => {
+    console.error('Failed to clean stale resource archives:', error)
+  })
   await initializeLocalProjectFolder().catch((error) => {
     console.error('Failed to initialize the default project folder:', error)
+  })
+  await ensureWindowsWSLBroker().catch((error) => {
+    console.error('Failed to start the Windows WSL broker:', error)
   })
   createWindow()
   createTray()
@@ -147,6 +162,10 @@ app.on('before-quit', () => {
   appIsQuitting = true
   for (const controller of localAgentSessionStreams.values()) controller.abort()
   localAgentSessionStreams.clear()
+  for (const archive of v3SelectedArchives.values()) {
+    try { cleanupResourceArchiveSync(archive) } catch (error) { console.error('Failed to remove a temporary resource archive:', error) }
+  }
+  v3SelectedArchives.clear()
 })
 
 function createTray() {
@@ -239,13 +258,34 @@ function createIpcHandlerGroups() {
       provider_vm_domains,
       provider_vm_import,
       provider_vm_validate,
+      provider_runtime_status,
+      provider_host_snapshot,
+      provider_host_scan,
+      provider_environment_catalog,
+      provider_environment_storage,
+      provider_environment_choose_root,
+      provider_environment_update_storage,
+      provider_environment_download,
+      provider_environment_cancel,
+      provider_environment_installed,
+      provider_environment_delete,
+      provider_environment_reserve,
+      provider_environment_release,
       provider_product_create,
       provider_asset_choose_files,
+      provider_asset_clear_selection,
       provider_asset_create,
       provider_asset_upload,
       provider_asset_cancel,
+      provider_api_bridge_materials_choose,
+      provider_api_bridge_material_remove,
+      provider_api_bridge_materials_get,
+      provider_api_bridge_draft_get,
+      provider_api_bridge_draft_save,
       provider_openapi_choose,
+      provider_api_probe,
       provider_openapi_import,
+      provider_api_bridge_import,
       provider_listings,
       provider_listing_save,
       provider_listing_action,
@@ -833,7 +873,7 @@ async function localAgentSnapshotResponse(paths, providedSnapshot) {
     bound: Object.values(bindings).some((binding) => binding?.installationId === agent.installationId),
     boundRoles: ['buyer', 'seller'].filter((role) => bindings[role]?.installationId === agent.installationId),
   }))
-  return {
+  const result = {
     agents,
     binding: presentLocalAgentBinding(bindings.buyer, agents.find((agent) => agent.installationId === bindings.buyer?.installationId)),
     bindings: Object.fromEntries(['buyer', 'seller'].map((role) => [role, presentLocalAgentBinding(bindings[role], agents.find((agent) => agent.installationId === bindings[role]?.installationId))])),
@@ -2149,10 +2189,13 @@ async function dockPaths() {
     appSettingsPath: path.join(persistenceDir, 'settings', 'settings.json'),
     localAgentBindingPath: path.join(persistenceDir, 'settings', 'local-agent-binding.json'),
     localAgentScanPath: path.join(persistenceDir, 'settings', 'local-agent-scan.json'),
+    providerHostSnapshotPath: path.join(persistenceDir, 'settings', 'provider-host-snapshot.json'),
+    providerEnvironmentSettingsPath: path.join(persistenceDir, 'settings', 'provider-environment.json'),
     conversationsDir: path.join(persistenceDir, 'conversations', 'tasks'),
     conversationArchivesDir: path.join(persistenceDir, 'conversations', 'archives'),
     transactionsPath: path.join(persistenceDir, 'transactions', 'transactions.json'),
     helperPath,
+    wslBrokerPath: resolveBundledBinary('exora-wsl-broker'),
     pidPath: path.join(rootDir, 'exora-dockd.pid'),
   }
 }
@@ -2460,6 +2503,37 @@ async function writeJsonAtomic(file, value) {
     await fsp.rename(tmp, file)
   } finally {
     await fsp.rm(tmp, { force: true }).catch(() => undefined)
+  }
+}
+
+function resolveBundledBinary(baseName) {
+  const name = process.platform === 'win32' ? `${baseName}.exe` : baseName
+  const candidates = []
+  if (app.isPackaged) candidates.push(path.join(process.resourcesPath, 'binaries', name))
+  candidates.push(path.join(app.getAppPath(), 'binaries', name))
+  candidates.push(path.join(__dirname, '..', 'binaries', name))
+  return candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0]
+}
+
+async function ensureWindowsWSLBroker() {
+  if (process.platform !== 'win32') return
+  const paths = await dockPaths()
+  if (!fs.existsSync(paths.wslBrokerPath)) throw new Error(`Bundled WSL broker not found: ${paths.wslBrokerPath}`)
+  const providerDir = path.join(paths.rootDir, 'provider')
+  const logsDir = path.join(paths.logsDir, 'provider')
+  await Promise.all([fsp.mkdir(providerDir, { recursive: true }), fsp.mkdir(logsDir, { recursive: true })])
+  const logPath = path.join(logsDir, 'wsl-broker.log')
+  const out = fs.openSync(logPath, 'a')
+  try {
+    const child = spawn(paths.wslBrokerPath, ['--data-dir', providerDir], {
+      cwd: paths.rootDir,
+      detached: true,
+      windowsHide: true,
+      stdio: ['ignore', out, out],
+    })
+    child.unref()
+  } finally {
+    fs.closeSync(out)
   }
 }
 
@@ -3586,17 +3660,407 @@ async function provider_vm_validate(payload = {}) {
 }
 async function provider_product_create(payload = {}) { return httpJson('POST', '/v3/provider/products', payload.input || {}, await localOwnerToken(await dockPaths())) }
 
+async function provider_runtime_status() { return v3Worker('probe_runtime') }
+async function provider_host_snapshot() {
+  const paths = await dockPaths()
+  const saved = objectOr(await readJsonOr(paths.providerHostSnapshotPath, {}))
+  return { result: objectOr(saved.result), measuredAt: saved.measuredAt || '' }
+}
+
+function percentile(values, fraction) {
+  const ordered = values.filter(Number.isFinite).sort((a, b) => a - b)
+  if (!ordered.length) return 0
+  return ordered[Math.min(ordered.length - 1, Math.max(0, Math.round((ordered.length - 1) * fraction)))]
+}
+
+async function timedBandwidthProbe(url, direction, durationMs, maxBytes, onProgress = () => undefined) {
+  const samples = []
+  let transferred = 0
+  const startedAt = performance.now()
+  const sizes = direction === 'download' ? [1 << 20, 8 << 20, 25 << 20, 50 << 20] : [512 << 10, 2 << 20, 4 << 20, 8 << 20]
+  let index = 0
+  while (performance.now() - startedAt < durationMs && transferred < maxBytes) {
+    const bytes = Math.min(sizes[Math.min(index, sizes.length - 1)], maxBytes - transferred)
+    if (bytes <= 0) break
+    const sampleStartedAt = performance.now()
+    const response = direction === 'download'
+      ? await fetchWithTimeout(`${url}?bytes=${bytes}&cache=${Date.now()}-${index}`, { cache: 'no-store' }, 15000)
+      : await fetchWithTimeout(url, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: Buffer.alloc(bytes) }, 15000)
+    if (!response.ok) throw new Error(`network ${direction} probe returned ${response.status}`)
+    let actualBytes = bytes
+    if (direction === 'download') actualBytes = (await response.arrayBuffer()).byteLength
+    else await response.arrayBuffer()
+    const elapsedMs = Math.max(1, performance.now() - sampleStartedAt)
+    transferred += actualBytes
+    samples.push((actualBytes * 8 * 1000) / elapsedMs)
+    index += 1
+    onProgress(Math.min(1, (performance.now() - startedAt) / durationMs), { bytes: transferred, samples: samples.length })
+  }
+  return {
+    bps: percentile(samples.length > 1 ? samples.slice(1) : samples, 0.5),
+    bytes: transferred,
+    durationMs: Math.round(performance.now() - startedAt),
+    samples: samples.length,
+  }
+}
+
+async function measurePublicNetwork(onProgress = () => undefined) {
+  const base = 'https://speed.cloudflare.com'
+  const latencySamples = []
+  let meta = {}
+  onProgress('geolocation', 0)
+  try {
+    const metaResponse = await fetchWithTimeout(`${base}/meta`, { cache: 'no-store' }, 8000)
+    if (metaResponse.ok) meta = objectOr(await metaResponse.json())
+  } catch {}
+  if (!(meta.clientIp || meta.clientIP) || !(meta.country || meta.city || meta.region)) {
+    try {
+      const geoResponse = await fetchWithTimeout('https://api.ip.sb/geoip', { cache: 'no-store', headers: { 'User-Agent': 'ExoraDock/0.1' } }, 8000)
+      if (geoResponse.ok) meta = { ...meta, ...objectOr(await geoResponse.json()) }
+    } catch {}
+  }
+  onProgress('latency', 0)
+  for (let i = 0; i < 5; i += 1) {
+    const startedAt = performance.now()
+    const response = await fetchWithTimeout(`${base}/__down?bytes=0&cache=${Date.now()}-${i}`, { cache: 'no-store' }, 8000)
+    if (!response.ok) throw new Error(`network latency probe returned ${response.status}`)
+    await response.arrayBuffer()
+    latencySamples.push(performance.now() - startedAt)
+    onProgress('latency', (i + 1) / 5)
+  }
+  onProgress('download', 0)
+  const download = await timedBandwidthProbe(`${base}/__down`, 'download', 4000, 400 << 20, (progress, detail) => onProgress('download', progress, detail))
+  onProgress('upload', 0)
+  const upload = await timedBandwidthProbe(`${base}/__up`, 'upload', 3000, 200 << 20, (progress, detail) => onProgress('upload', progress, detail))
+  const result = {
+    publicIp: meta.clientIp || meta.clientIP || meta.ip || '',
+    city: meta.city || '',
+    region: meta.region || '',
+    country: meta.country || '',
+    colo: meta.colo || '',
+    asn: meta.asn || '',
+    asOrganization: meta.asOrganization || meta.asn_organization || meta.organization || '',
+    downloadMbps: Number((download.bps / 1e6).toFixed(1)),
+    uploadMbps: Number((upload.bps / 1e6).toFixed(1)),
+    latencyMs: Math.round(percentile(latencySamples, 0.5)),
+    download,
+    upload,
+    provider: 'cloudflare',
+    observedAt: new Date().toISOString(),
+  }
+  if (!result.publicIp || !result.country) throw new Error('public IP geolocation could not be verified')
+  if (!(result.downloadMbps > 0) || !(result.uploadMbps > 0)) throw new Error('sustained bandwidth measurement did not complete')
+  return result
+}
+
+async function provider_host_scan(payload = {}) {
+  const emitProgress = (phase, percent, detail = {}) => mainWindow?.webContents.send('exora:v3-progress', { kind: 'host_scan', phase, percent: Math.max(0, Math.min(100, Math.round(percent))), ...detail })
+  emitProgress('hardware', 4)
+  const runtime = await v3Worker('probe_runtime')
+  emitProgress('hardware', 18)
+  const phaseRanges = {
+    geolocation: [18, 28],
+    latency: [28, 40],
+    download: [40, 70],
+    upload: [70, 94],
+  }
+  const network = await measurePublicNetwork((phase, progress, detail = {}) => {
+    const range = phaseRanges[phase] || [18, 94]
+    emitProgress(phase, range[0] + (range[1] - range[0]) * progress, detail)
+  })
+  let hardware = {}
+  try { hardware = JSON.parse(String(runtime.result?.hardware || '{}')) } catch {}
+  const gpuLine = String(runtime.result?.gpu || '').split(/\r?\n/).find(Boolean) || ''
+  const [gpuName, gpuUUID, gpuMemoryMiB, gpuFreeMiB, driverVersion] = gpuLine.split(',').map((item) => item.trim())
+  const measuredAt = new Date().toISOString()
+  const result = { ...runtime.result, hardware, gpu: gpuName ? { name: gpuName, uuid: gpuUUID, memoryMiB: Number(gpuMemoryMiB), freeMemoryMiB: Number(gpuFreeMiB), driverVersion } : undefined, network, measuredAt, scanReason: String(payload?.input?.reason || 'manual') }
+  const paths = await dockPaths()
+  emitProgress('saving', 96)
+  await ensurePersistenceLayout(paths)
+  await writeJsonAtomic(paths.providerHostSnapshotPath, { version: 1, measuredAt, result })
+  emitProgress('complete', 100)
+  return { result, measuredAt }
+}
+
+function bundledEnvironmentCatalog() {
+  return [
+    {
+      imageId: 'ubuntu-24.04-cpu-v1', version: '1.0.0', status: 'catalog_preview', cloudAvailable: false,
+      manifest: {
+        schema: 'exora.environment_image.v3alpha1', name: 'Ubuntu 24.04', description: 'Official minimal Ubuntu environment for CPU workloads and custom software stacks.',
+        architecture: 'amd64', runtimeBackends: ['wsl2'], os: { distribution: 'Ubuntu', version: '24.04 LTS' },
+        components: ['Ubuntu 24.04 LTS', 'OpenSSH', 'Exora Guest Contract'], gpu: { required: false, vendor: 'none' },
+        artifact: { format: 'wsl', sizeBytes: 850 * 1024 * 1024 },
+      },
+    },
+    {
+      imageId: 'ubuntu-24.04-cuda-12.8-toolkit-v1', version: '1.0.0', status: 'catalog_preview', cloudAvailable: false,
+      manifest: {
+        schema: 'exora.environment_image.v3alpha1', name: 'Ubuntu 24.04 + CUDA 12.8', description: 'Official GPU environment with the CUDA 12.8 userspace toolkit, ready for NVIDIA WSL GPU validation.',
+        architecture: 'amd64', runtimeBackends: ['wsl2'], os: { distribution: 'Ubuntu', version: '24.04 LTS' },
+        components: ['Ubuntu 24.04 LTS', 'CUDA Toolkit 12.8', 'OpenSSH', 'Exora Guest Contract'],
+        gpu: { required: true, vendor: 'nvidia', cudaVersion: '12.8' }, artifact: { format: 'wsl', sizeBytes: 5.2 * 1024 * 1024 * 1024 },
+      },
+    },
+  ]
+}
+
+function pathsOverlap(first, second) {
+  const relative = path.relative(path.resolve(first), path.resolve(second))
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
+}
+
+async function providerEnvironmentStorageDetails(settings = {}) {
+  const paths = await dockPaths()
+  const rootPath = String(settings.rootPath || '').trim()
+  let freeBytes = 0
+  if (rootPath) {
+    try {
+      const stats = await fsp.statfs(rootPath)
+      freeBytes = Number(stats.bavail) * Number(stats.bsize)
+    } catch {}
+  }
+  return {
+    rootPath,
+    workspaceGiB: Math.max(20, Number(settings.workspaceGiB || 100)),
+    freeBytes,
+    imageCachePath: path.join(paths.rootDir, 'provider', 'images'),
+    pricing: {
+      baseFee: Math.max(0, Number(settings.pricing?.baseFee || 0)),
+      baseFeeEnabled: settings.pricing?.baseFeeEnabled ?? Number(settings.pricing?.baseFee || 0) > 0,
+      pricePerMinute: Math.max(0, Number(settings.pricing?.pricePerMinute || 0)),
+      minimumMinutes: Math.max(1, Math.round(Number(settings.pricing?.minimumMinutes || 10))),
+      longDiscountAfterMinutes: Math.max(1, Math.round(Number(settings.pricing?.longDiscountAfterMinutes || 60))),
+      longDiscountPercent: Math.max(0, Math.min(90, Number(settings.pricing?.longDiscountPercent || 0))),
+      longDiscountMinimumPricePercent: Math.max(1, Math.min(100, Number(settings.pricing?.longDiscountMinimumPricePercent || 50))),
+      longDiscountEnabled: settings.pricing?.longDiscountEnabled ?? Number(settings.pricing?.longDiscountPercent || 0) > 0,
+    },
+  }
+}
+
+async function provider_environment_storage() {
+  const paths = await dockPaths()
+  const settings = objectOr(await readJsonOr(paths.providerEnvironmentSettingsPath, {}))
+  return providerEnvironmentStorageDetails(settings)
+}
+
+async function saveProviderEnvironmentStorage(input = {}) {
+  const paths = await dockPaths()
+  const current = objectOr(await readJsonOr(paths.providerEnvironmentSettingsPath, {}))
+  const next = {
+    version: 1,
+    rootPath: String(input.rootPath ?? current.rootPath ?? '').trim(),
+    workspaceGiB: Math.max(20, Math.round(Number(input.workspaceGiB ?? current.workspaceGiB ?? 100))),
+    pricing: {
+      baseFee: Math.max(0, Number(input.pricing?.baseFee ?? current.pricing?.baseFee ?? 0)),
+      baseFeeEnabled: input.pricing?.baseFeeEnabled ?? current.pricing?.baseFeeEnabled ?? Number(input.pricing?.baseFee ?? current.pricing?.baseFee ?? 0) > 0,
+      pricePerMinute: Math.max(0, Number(input.pricing?.pricePerMinute ?? current.pricing?.pricePerMinute ?? 0)),
+      minimumMinutes: Math.max(1, Math.round(Number(input.pricing?.minimumMinutes ?? current.pricing?.minimumMinutes ?? 10))),
+      longDiscountAfterMinutes: Math.max(1, Math.round(Number(input.pricing?.longDiscountAfterMinutes ?? current.pricing?.longDiscountAfterMinutes ?? 60))),
+      longDiscountPercent: Math.max(0, Math.min(90, Number(input.pricing?.longDiscountPercent ?? current.pricing?.longDiscountPercent ?? 0))),
+      longDiscountMinimumPricePercent: Math.max(1, Math.min(100, Number(input.pricing?.longDiscountMinimumPricePercent ?? current.pricing?.longDiscountMinimumPricePercent ?? 50))),
+      longDiscountEnabled: input.pricing?.longDiscountEnabled ?? current.pricing?.longDiscountEnabled ?? Number(input.pricing?.longDiscountPercent ?? current.pricing?.longDiscountPercent ?? 0) > 0,
+    },
+    updatedAt: new Date().toISOString(),
+  }
+  await ensurePersistenceLayout(paths)
+  await writeJsonAtomic(paths.providerEnvironmentSettingsPath, next)
+  return providerEnvironmentStorageDetails(next)
+}
+
+async function provider_environment_choose_root(payload = {}) {
+  const current = await provider_environment_storage()
+  const paths = await dockPaths()
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose virtual environment root',
+    defaultPath: current.rootPath || app.getPath('documents'),
+    properties: ['openDirectory', 'createDirectory'],
+  })
+  if (result.canceled || !result.filePaths?.[0]) return current
+  const rootPath = path.resolve(result.filePaths[0])
+  const imageCachePath = path.resolve(path.join(paths.rootDir, 'provider', 'images'))
+  if (pathsOverlap(rootPath, imageCachePath) || pathsOverlap(imageCachePath, rootPath)) throw new Error('Virtual environments must use a directory separate from the Exora image cache.')
+  await fsp.mkdir(rootPath, { recursive: true })
+  return saveProviderEnvironmentStorage({ rootPath, workspaceGiB: payload?.input?.workspaceGiB || current.workspaceGiB })
+}
+
+async function provider_environment_update_storage(payload = {}) {
+  return saveProviderEnvironmentStorage(payload.input || payload)
+}
+
+async function provider_environment_catalog() {
+  try {
+    const response = await httpJson('GET', '/v3/catalog/environment-images?runtime=wsl2&arch=amd64', undefined, await localOwnerToken(await dockPaths()))
+    return { ...response, images: response.images?.length ? response.images.map((image) => ({ ...image, cloudAvailable: true })) : bundledEnvironmentCatalog(), offline: !response.images?.length }
+  } catch (error) {
+    return { images: bundledEnvironmentCatalog(), offline: true, error: errorMessage(error) }
+  }
+}
+async function provider_environment_installed() {
+  const [local, cloud, storage] = await Promise.all([
+    v3Worker('list_environment_images'),
+    httpJson('GET', '/v3/provider/environment-images', undefined, await localOwnerToken(await dockPaths())).catch(() => ({ images: [] })),
+    provider_environment_storage(),
+  ])
+  return { local: local.result || {}, attestations: cloud.images || [], storage }
+}
+async function provider_environment_cancel(payload = {}) {
+  const key = String(payload?.input?.imageId || '')
+  v3EnvironmentDownloads.get(key)?.abort()
+  return { cancelled: true }
+}
+async function provider_environment_delete(payload = {}) {
+  const storage = await provider_environment_storage()
+  return v3Worker('delete_environment_image', { environmentId: String(payload?.input?.environmentId || ''), environmentRoot: storage.rootPath })
+}
+async function provider_environment_reserve(payload = {}) {
+  const workspaceGiB = Math.max(1, Number(payload?.input?.workspaceGiB || 1))
+  const environmentId = String(payload?.input?.environmentId || '')
+  const imageId = String(payload?.input?.imageId || '')
+  const imageVersion = String(payload?.input?.imageVersion || '')
+  const storage = await provider_environment_storage()
+  if (!storage.rootPath) throw new Error('Choose a virtual environment root before reserving capacity.')
+  const catalog = await provider_environment_catalog()
+  const selectedImage = (catalog.images || []).find((image) => {
+    const catalogImageId = String(image.imageId || '')
+    const catalogVersion = String(image.version || '')
+    const catalogEnvironmentId = `${catalogImageId}-${catalogVersion}`.replace(/[^a-zA-Z0-9._-]/g, '-')
+    return (catalogImageId === imageId && (!imageVersion || catalogVersion === imageVersion)) || (!imageId && catalogEnvironmentId === environmentId)
+  })
+  if (!selectedImage) throw new Error('The selected environment image is not available in the signed catalog.')
+  const imageSizeBytes = Math.max(0, Number(selectedImage.manifest?.artifact?.sizeBytes || 0))
+  const systemReserveBytes = 10 * 1024 * 1024 * 1024
+  const capacity = await v3Worker('capacity_check', { checkLevel: 'full' })
+  if (capacity.result?.healthy !== true) throw new Error('Windows provider capacity check failed')
+  const reservation = await v3Worker('reserve_disk', {
+    slotId: `wsl-${environmentId}`,
+    sizeBytes: workspaceGiB * 1024 * 1024 * 1024,
+    requiredFreeBytes: systemReserveBytes + imageSizeBytes,
+    systemReserveBytes,
+    environmentImageBytes: imageSizeBytes,
+    environmentRoot: storage.rootPath,
+  })
+  return { capacity: capacity.result, reservation: reservation.result }
+}
+async function provider_environment_release(payload = {}) {
+  const environmentId = String(payload?.input?.environmentId || '')
+  const storage = await provider_environment_storage()
+  if (!storage.rootPath) return { released: false }
+  return v3Worker('release_disk', { slotId: `wsl-${environmentId}`, environmentRoot: storage.rootPath })
+}
+
+function canonicalJSON(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJSON).join(',')}]`
+  if (value && typeof value === 'object') return `{${Object.keys(value).filter((key) => key !== 'signature' && key !== 'objectKey').sort().map((key) => `${JSON.stringify(key)}:${canonicalJSON(value[key])}`).join(',')}}`
+  return JSON.stringify(value)
+}
+
+function imageVerificationKey() {
+  const configured = String(process.env.EXORA_IMAGE_VERIFY_PUBLIC_KEY || '').trim()
+  if (configured) return configured
+  const candidate = app.isPackaged ? path.join(process.resourcesPath, 'image-signing-public-key.txt') : path.join(__dirname, '..', 'resources', 'image-signing-public-key.txt')
+  return fs.existsSync(candidate) ? fs.readFileSync(candidate, 'utf8').trim() : ''
+}
+
+function verifyEnvironmentManifest(manifest, signature) {
+  const raw = Buffer.from(imageVerificationKey(), 'base64')
+  if (raw.length !== 32) throw new Error('Exora environment image verification key is not configured.')
+  const spki = Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), raw])
+  const key = crypto.createPublicKey({ key: spki, format: 'der', type: 'spki' })
+  if (!crypto.verify(null, Buffer.from(canonicalJSON(manifest)), key, Buffer.from(String(signature || ''), 'base64'))) throw new Error('Environment image manifest signature verification failed.')
+}
+
+async function sha256File(filePath) {
+  const hash = crypto.createHash('sha256')
+  for await (const chunk of fs.createReadStream(filePath)) hash.update(chunk)
+  return hash.digest('hex')
+}
+
+async function provider_environment_download(payload = {}) {
+  const input = payload.input || {}
+  const imageId = String(input.imageId || '')
+  const version = String(input.version || '')
+  if (!imageId || !version) throw new Error('imageId and version are required')
+  const paths = await dockPaths()
+  const imageDir = path.join(paths.rootDir, 'provider', 'images')
+  await fsp.mkdir(imageDir, { recursive: true })
+  const controller = new AbortController()
+  v3EnvironmentDownloads.set(imageId, controller)
+  try {
+    const token = await localOwnerToken(paths)
+    const started = await httpJson('POST', '/v3/provider/environment-image-downloads', { imageId, version }, token)
+    const manifest = started.image?.manifest || {}
+    verifyEnvironmentManifest(manifest, started.image?.signature)
+    const artifact = manifest.artifact || {}
+    const finalPath = path.join(imageDir, `${imageId}-${version}.wsl`)
+    const partialPath = `${finalPath}.partial`
+    let offset = fs.existsSync(partialPath) ? (await fsp.stat(partialPath)).size : 0
+    let url = started.url
+    while (offset < Number(artifact.sizeBytes || 0)) {
+      const response = await fetch(url, { headers: offset ? { Range: `bytes=${offset}-` } : {}, signal: controller.signal })
+      if (!response.ok && response.status !== 206) {
+        const refreshed = await httpJson('POST', `/v3/provider/environment-image-downloads/${encodeURIComponent(started.download.downloadId)}/refresh`, { bytesDownloaded: offset }, token)
+        url = refreshed.url
+        continue
+      }
+      const handle = await fsp.open(partialPath, offset ? 'a' : 'w')
+      try {
+        for await (const chunk of response.body) {
+          await handle.write(chunk)
+          offset += chunk.length
+          mainWindow?.webContents.send('exora:v3-progress', { kind: 'environment_image', imageId, phase: 'downloading', bytesDownloaded: offset, sizeBytes: Number(artifact.sizeBytes || 0) })
+        }
+      } finally { await handle.close() }
+    }
+    mainWindow?.webContents.send('exora:v3-progress', { kind: 'environment_image', imageId, phase: 'verifying' })
+    const digest = await sha256File(partialPath)
+    if (offset !== Number(artifact.sizeBytes) || digest.toLowerCase() !== String(artifact.sha256 || '').toLowerCase()) throw new Error('Downloaded environment image size or SHA-256 mismatch.')
+    await httpJson('POST', `/v3/provider/environment-image-downloads/${encodeURIComponent(started.download.downloadId)}/complete`, { sizeBytes: offset, sha256: digest }, token)
+    await fsp.rename(partialPath, finalPath)
+    const environmentId = `${imageId}-${version}`.replace(/[^a-zA-Z0-9._-]/g, '-')
+    const storage = await provider_environment_storage()
+    if (!storage.rootPath) throw new Error('Choose a virtual environment root before installing an environment.')
+    mainWindow?.webContents.send('exora:v3-progress', { kind: 'environment_image', imageId, phase: 'importing' })
+    await v3Worker('import_environment_image', { environmentId, artifactPath: finalPath, environmentRoot: storage.rootPath })
+    mainWindow?.webContents.send('exora:v3-progress', { kind: 'environment_image', imageId, phase: 'validating' })
+    const checked = await v3Worker('validate_environment_image', { environmentId, cudaRequired: Boolean(manifest.gpu?.required) })
+    await httpJson('POST', `/v3/provider/environment-images/${encodeURIComponent(imageId)}/attestations`, { version, status: 'ready', report: checked.result }, token)
+    return { imageId, version, environmentId, status: 'ready', report: checked.result }
+  } finally {
+    v3EnvironmentDownloads.delete(imageId)
+  }
+}
+
 async function provider_asset_choose_files() {
   const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile', 'multiSelections'] })
-  if (result.canceled) return { files: [] }
-  const files = []
-  for (const filePath of result.filePaths) {
-    const stat = await fsp.stat(filePath)
-    const token = crypto.randomUUID()
-    v3SelectedFiles.set(token, filePath)
-    files.push({ token, name: path.basename(filePath), sizeBytes: stat.size })
+  if (result.canceled || !result.filePaths.length) return { canceled: true }
+  const packaged = await createResourceArchive({
+    filePaths: result.filePaths,
+    tempRoot: resourceArchiveTempRoot(),
+    maxBytes: MAX_RESOURCE_ARCHIVE_BYTES,
+    onProgress: (progress) => mainWindow?.webContents.send('exora:v3-progress', { kind: 'asset_packaging', ...progress }),
+  })
+  const token = crypto.randomUUID()
+  const archive = { ...packaged, token, kind: 'generated_zip' }
+  await clearSelectedResourceArchives()
+  v3SelectedArchives.set(token, archive)
+  return {
+    archive: {
+      token,
+      name: archive.archiveName,
+      sizeBytes: archive.sizeBytes,
+      sourceBytes: archive.sourceBytes,
+      sourceCount: archive.sourceCount,
+      format: archive.format,
+      status: 'ready',
+    },
+    sources: archive.sources,
   }
-  return { files }
+}
+
+async function provider_asset_clear_selection() {
+  await clearSelectedResourceArchives()
+  return { cleared: true }
 }
 
 async function provider_asset_create(payload = {}) {
@@ -3605,13 +4069,16 @@ async function provider_asset_create(payload = {}) {
 
 async function provider_asset_upload(payload = {}) {
   const input = payload.input || {}
-  const filePath = v3SelectedFiles.get(String(input.fileToken || ''))
-  if (!filePath) throw new Error('Selected file token is unavailable')
+  const fileToken = String(input.fileToken || '')
+  const selectedArchive = v3SelectedArchives.get(fileToken)
+  if (!selectedArchive) throw new Error('Generated ZIP token is unavailable. Choose the source files again.')
+  const filePath = selectedArchive.archivePath
   const stat = await fsp.stat(filePath)
+  validateResourceArchiveForUpload(selectedArchive, stat.size)
   const hash = crypto.createHash('sha256')
   await new Promise((resolve, reject) => { const stream = fs.createReadStream(filePath); stream.on('data', chunk => hash.update(chunk)); stream.on('error', reject); stream.on('end', resolve) })
   const sha256 = hash.digest('hex')
-  const started = await httpJson('POST', `/v3/provider/asset-bundles/${encodeURIComponent(String(input.bundleId))}/multipart`, { fileName: path.basename(filePath), sizeBytes: stat.size, sha256 }, await localOwnerToken(await dockPaths()))
+  const started = await httpJson('POST', `/v3/provider/asset-bundles/${encodeURIComponent(String(input.bundleId))}/multipart`, { fileName: selectedArchive.archiveName, sizeBytes: stat.size, sha256, contentType: 'application/zip', archiveFormat: 'zip', sourceCount: selectedArchive.sourceCount }, await localOwnerToken(await dockPaths()))
   const upload = started.upload
   const partSize = 16 * 1024 * 1024
   const partCount = Math.max(1, Math.ceil(stat.size / partSize))
@@ -3632,7 +4099,8 @@ async function provider_asset_upload(payload = {}) {
     }
   } finally { await handle.close() }
   const complete = await httpJson('POST', `/v3/provider/uploads/${encodeURIComponent(upload.uploadSessionId)}/complete`, { parts }, await localOwnerToken(await dockPaths()), { timeoutMs: 60000 })
-  v3SelectedFiles.delete(String(input.fileToken || ''))
+  v3SelectedArchives.delete(fileToken)
+  await cleanupResourceArchive(selectedArchive)
   return complete
 }
 async function provider_asset_cancel(payload = {}) {
@@ -3640,21 +4108,160 @@ async function provider_asset_cancel(payload = {}) {
   return httpJson('POST', `/v3/provider/uploads/${encodeURIComponent(id)}/abort`, {}, await localOwnerToken(await dockPaths()))
 }
 
+async function clearSelectedResourceArchives() {
+  const archives = Array.from(v3SelectedArchives.values())
+  v3SelectedArchives.clear()
+  await Promise.all(archives.map((archive) => cleanupResourceArchive(archive).catch(() => undefined)))
+}
+
+const API_BRIDGE_MATERIAL_EXTENSIONS = new Set(['json', 'yaml', 'yml', 'md', 'markdown', 'txt', 'csv'])
+const API_BRIDGE_FILE_LIMIT = 5 * 1024 * 1024
+const API_BRIDGE_PACKAGE_LIMIT = 20 * 1024 * 1024
+const API_BRIDGE_FILE_COUNT_LIMIT = 20
+
+function apiBridgeMaterialRoot(draftId) {
+  const safe = String(draftId || '').trim()
+  if (!/^apid_[A-Za-z0-9_-]{8,128}$/.test(safe)) throw new Error('API Bridge draft id is invalid')
+  return path.join(app.getPath('userData'), 'api-bridge-materials', safe)
+}
+async function readAPIBridgeMaterialManifest(draftId) {
+  const root = apiBridgeMaterialRoot(draftId)
+  try { return JSON.parse(await fsp.readFile(path.join(root, 'manifest.json'), 'utf8')) }
+  catch { return { draftId, files: [] } }
+}
+async function writeAPIBridgeMaterialManifest(draftId, manifest) {
+  const root = apiBridgeMaterialRoot(draftId)
+  await fsp.mkdir(root, { recursive: true })
+  await fsp.writeFile(path.join(root, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8')
+}
+async function provider_api_bridge_materials_get(payload = {}) {
+  return readAPIBridgeMaterialManifest(payload?.input?.draftId)
+}
+async function provider_api_bridge_materials_choose(payload = {}) {
+  const draftId = String(payload?.input?.draftId || '')
+  const current = await readAPIBridgeMaterialManifest(draftId)
+  const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile', 'multiSelections'], filters: [{ name: 'API materials', extensions: Array.from(API_BRIDGE_MATERIAL_EXTENSIONS) }] })
+  if (result.canceled) return current
+  const candidates = []
+  for (const sourcePath of result.filePaths) {
+    const extension = path.extname(sourcePath).slice(1).toLowerCase()
+    if (!API_BRIDGE_MATERIAL_EXTENSIONS.has(extension)) throw new Error(`Unsupported API material: ${path.basename(sourcePath)}`)
+    const stat = await fsp.stat(sourcePath)
+    if (!stat.isFile() || stat.size > API_BRIDGE_FILE_LIMIT) throw new Error(`${path.basename(sourcePath)} exceeds the 5 MiB file limit`)
+    candidates.push({ sourcePath, name: path.basename(sourcePath), extension, sizeBytes: stat.size })
+  }
+  const byName = new Map((current.files || []).map(file => [String(file.name).toLowerCase(), file]))
+  for (const candidate of candidates) byName.set(candidate.name.toLowerCase(), candidate)
+  const combined = Array.from(byName.values())
+  if (combined.length > API_BRIDGE_FILE_COUNT_LIMIT) throw new Error('An API material package can contain at most 20 files')
+  if (combined.reduce((sum, file) => sum + Number(file.sizeBytes || 0), 0) > API_BRIDGE_PACKAGE_LIMIT) throw new Error('The API material package exceeds 20 MiB')
+  const root = apiBridgeMaterialRoot(draftId); await fsp.mkdir(root, { recursive: true })
+  const files = []
+  for (const file of combined) {
+    if (file.sourcePath) {
+      const storedName = `${crypto.createHash('sha256').update(file.name.toLowerCase()).digest('hex').slice(0, 12)}-${file.name}`
+      const storedPath = path.join(root, storedName); await fsp.copyFile(file.sourcePath, storedPath)
+      files.push({ id: storedName, name: file.name, extension: file.extension, sizeBytes: file.sizeBytes, localPath: storedPath })
+    } else files.push(file)
+  }
+  let discovery = current.discovery
+  for (const candidate of candidates) {
+    if (!['json', 'yaml', 'yml'].includes(candidate.extension)) continue
+    try {
+      const document = await fsp.readFile(candidate.sourcePath, 'utf8'); let parsed
+      try { parsed = JSON.parse(document) } catch { parsed = YAML.parse(document) }
+      if (!parsed?.openapi || !parsed?.paths) continue
+      const operations = []; const methods = new Set(['get','post','put','patch','delete','head','options'])
+      for (const [routePath, pathItem] of Object.entries(parsed.paths)) for (const [method, operation] of Object.entries(pathItem || {})) {
+        if (!methods.has(method.toLowerCase()) || !operation || typeof operation !== 'object') continue
+        const operationId = String(operation.operationId || `${method}${String(routePath).replace(/[^a-zA-Z0-9]+(.)/g, (_, value) => String(value || '').toUpperCase())}`)
+        operations.push({ operationId, method: method.toUpperCase(), path: routePath, displayName: String(operation.summary || operationId) })
+        if (operations.length >= 200) break
+      }
+      discovery = { sourceFile: candidate.name, title: String(parsed.info?.title || ''), description: String(parsed.info?.description || ''), baseUrl: Array.isArray(parsed.servers) && typeof parsed.servers[0]?.url === 'string' && !parsed.servers[0].url.includes('{') ? parsed.servers[0].url : '', operations }
+      break
+    } catch { /* best-effort discovery; the material remains available to the Agent */ }
+  }
+  const manifest = { draftId, files, discovery, updatedAt: new Date().toISOString() }; await writeAPIBridgeMaterialManifest(draftId, manifest); return manifest
+}
+async function provider_api_bridge_material_remove(payload = {}) {
+  const draftId = String(payload?.input?.draftId || ''); const id = String(payload?.input?.id || '')
+  const manifest = await readAPIBridgeMaterialManifest(draftId); const target = (manifest.files || []).find(file => file.id === id)
+  if (target?.localPath && path.dirname(path.resolve(target.localPath)) === path.resolve(apiBridgeMaterialRoot(draftId))) await fsp.rm(target.localPath, { force: true })
+  manifest.files = (manifest.files || []).filter(file => file.id !== id); manifest.updatedAt = new Date().toISOString(); await writeAPIBridgeMaterialManifest(draftId, manifest); return manifest
+}
+
+async function provider_api_bridge_draft_get(payload = {}) {
+  return httpJson('GET', `/v3/provider/api-bridge-drafts/${encodeURIComponent(String(payload?.input?.draftId || ''))}`, undefined, await localOwnerToken(await dockPaths()))
+}
+async function provider_api_bridge_draft_save(payload = {}) {
+  return httpJson('POST', '/v3/provider/api-bridge-drafts', payload.input || {}, await localOwnerToken(await dockPaths()), { timeoutMs: 30000 })
+}
+
+function resourceArchiveTempRoot() {
+  return path.join(app.getPath('temp'), 'exora-dock', 'resource-bundles')
+}
+
 async function provider_openapi_choose() {
   const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile'], filters: [{ name: 'OpenAPI', extensions: ['json', 'yaml', 'yml'] }] })
   if (result.canceled || !result.filePaths[0]) return { document: '' }
   const document = await fsp.readFile(result.filePaths[0], 'utf8')
   if (Buffer.byteLength(document) > 5 * 1024 * 1024) throw new Error('OpenAPI document exceeds 5 MiB')
-  return { document, name: path.basename(result.filePaths[0]) }
+  let parsed
+  try { parsed = JSON.parse(document) } catch { parsed = YAML.parse(document) }
+  if (!parsed || typeof parsed !== 'object' || !parsed.openapi) throw new Error('The selected file is not an OpenAPI 3.x document')
+  const operations = []
+  const methods = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options'])
+  for (const [routePath, pathItem] of Object.entries(parsed.paths || {})) {
+    if (!pathItem || typeof pathItem !== 'object') continue
+    for (const [method, operation] of Object.entries(pathItem)) {
+      if (!methods.has(method.toLowerCase()) || !operation || typeof operation !== 'object') continue
+      const operationId = String(operation.operationId || `${method}${String(routePath).replace(/[^a-zA-Z0-9]+(.)/g, (_, character) => String(character || '').toUpperCase())}`)
+      operations.push({ id: `${method.toLowerCase()}:${routePath}`, operationId, method: method.toUpperCase(), path: routePath, title: String(operation.summary || operationId), selected: true, price: 0 })
+      if (operations.length > 200) throw new Error('OpenAPI operation limit exceeded')
+    }
+  }
+  const serverURL = Array.isArray(parsed.servers) && typeof parsed.servers[0]?.url === 'string' && !parsed.servers[0].url.includes('{') ? parsed.servers[0].url : ''
+  return { document, name: path.basename(result.filePaths[0]), title: String(parsed.info?.title || ''), description: String(parsed.info?.description || ''), baseUrl: serverURL, operations }
+}
+
+function publicHTTPSBridgeURL(baseUrl, routePath) {
+  let base
+  try { base = new URL(String(baseUrl || '')) } catch { throw new Error('Base URL is invalid') }
+  const hostname = base.hostname.toLowerCase()
+  if (base.protocol !== 'https:' || base.username || base.password) throw new Error('Base URL must be a public HTTPS URL without embedded credentials')
+  if (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local') || hostname === '::1' || hostname.startsWith('127.') || hostname.startsWith('10.') || hostname.startsWith('192.168.') || /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) || hostname === '0.0.0.0') throw new Error('Base URL must not resolve to a local or private host')
+  return new URL(String(routePath || '/health'), base.href.endsWith('/') ? base.href : `${base.href}/`)
+}
+
+async function provider_api_probe(payload = {}) {
+  const input = payload.input || {}
+  const target = publicHTTPSBridgeURL(input.baseUrl, input.healthPath)
+  const headers = { Accept: 'application/json, text/event-stream;q=0.9, */*;q=0.5' }
+  const secret = String(input.secret || '')
+  if (input.authType === 'bearer' && secret) headers.Authorization = `Bearer ${secret}`
+  if (input.authType === 'basic' && secret) headers.Authorization = `Basic ${Buffer.from(secret).toString('base64')}`
+  if (input.authType === 'api_key' && secret) {
+    const header = String(input.apiKeyHeader || 'X-API-Key').trim()
+    if (!/^[A-Za-z0-9-]{1,64}$/.test(header)) throw new Error('API key header name is invalid')
+    headers[header] = secret
+  }
+  const started = Date.now()
+  let response = await fetchWithTimeout(target, { method: 'HEAD', headers, redirect: 'error', cache: 'no-store' }, 12000)
+  if (response.status === 405 || response.status === 501) response = await fetchWithTimeout(target, { method: 'GET', headers, redirect: 'error', cache: 'no-store' }, 12000)
+  const out = { ok: response.status >= 200 && response.status < 400, status: response.status, latencyMs: Date.now() - started, contentType: response.headers.get('content-type') || '', checkedURL: target.origin + target.pathname }
+  if (!out.ok) out.error = `Provider returned HTTP ${response.status}`
+  try { await response.body?.cancel() } catch {}
+  return out
 }
 async function provider_openapi_import(payload = {}) {
-  const input = { ...(payload.input || {}) }
-  if (typeof input.document === 'string') {
-    try { input.document = JSON.parse(input.document) } catch { input.document = YAML.parse(input.document) }
-  }
-  return httpJson('POST', '/v3/provider/api-imports', input, await localOwnerToken(await dockPaths()), { timeoutMs: 30000 })
+  return httpJson('POST', '/v3/provider/api-imports', { ...(payload.input || {}) }, await localOwnerToken(await dockPaths()), { timeoutMs: 30000 })
 }
-async function provider_listings() { return httpJson('GET', '/v3/provider/listings', undefined, await localOwnerToken(await dockPaths())) }
+async function provider_api_bridge_import(payload = {}) { return provider_openapi_import(payload) }
+async function provider_listings() {
+  try { return await httpJson('GET', '/v3/provider/listings', undefined, await localOwnerToken(await dockPaths())) }
+  catch (error) { return { listings: [], offline: true, error: errorMessage(error) } }
+}
 async function provider_listing_save(payload = {}) {
   const input = payload.input || {}
   const route = input.listingId ? `/v3/provider/listings/${encodeURIComponent(input.listingId)}` : '/v3/provider/listings'

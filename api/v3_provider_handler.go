@@ -7,9 +7,49 @@ import (
 	"strings"
 	"time"
 
+	"github.com/exora-dock/exora-dock/internal/cloudlink"
 	"github.com/exora-dock/exora-dock/internal/providerworker"
 	"github.com/go-chi/chi/v5"
 )
+
+func (h *Handler) V3Gateway(w http.ResponseWriter, r *http.Request) {
+	token, err := cloudlink.LoadToken(h.cloudTokenPath)
+	if err != nil {
+		writeJSON(w, 503, map[string]string{"error": "Exora Cloud is not configured"})
+		return
+	}
+	cloudURL := firstNonEmpty(strings.TrimSpace(h.cloudURL), strings.TrimSpace(token.CloudURL))
+	path := "/v3/gateway/" + chi.URLParam(r, "listingId") + "/" + strings.TrimPrefix(chi.URLParam(r, "*"), "/")
+	if r.URL.RawQuery != "" {
+		path += "?" + r.URL.RawQuery
+	}
+	up, err := http.NewRequestWithContext(r.Context(), r.Method, strings.TrimRight(cloudURL, "/")+path, r.Body)
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	for k, values := range r.Header {
+		if strings.EqualFold(k, "Host") {
+			continue
+		}
+		for _, v := range values {
+			up.Header.Add(k, v)
+		}
+	}
+	resp, err := http.DefaultClient.Do(up)
+	if err != nil {
+		writeJSON(w, 502, map[string]string{"error": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+	for k, values := range resp.Header {
+		for _, v := range values {
+			w.Header().Add(k, v)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
+}
 
 func (h *Handler) V3Catalog(w http.ResponseWriter, r *http.Request) {
 	path := "/v3/catalog/products"
@@ -20,6 +60,20 @@ func (h *Handler) V3Catalog(w http.ResponseWriter, r *http.Request) {
 }
 func (h *Handler) V3CatalogProduct(w http.ResponseWriter, r *http.Request) {
 	h.v3CloudProxy(w, r, http.MethodGet, "/v3/catalog/products/"+r.PathValue("id"), nil)
+}
+func (h *Handler) V3EnvironmentImageCatalog(w http.ResponseWriter, r *http.Request) {
+	path := "/v3/catalog/environment-images"
+	if r.URL.RawQuery != "" {
+		path += "?" + r.URL.RawQuery
+	}
+	h.v3CloudProxy(w, r, http.MethodGet, path, nil)
+}
+func (h *Handler) V3EnvironmentImageCatalogItem(w http.ResponseWriter, r *http.Request) {
+	path := "/v3/catalog/environment-images/" + r.PathValue("id")
+	if r.URL.RawQuery != "" {
+		path += "?" + r.URL.RawQuery
+	}
+	h.v3CloudProxy(w, r, http.MethodGet, path, nil)
 }
 func (h *Handler) V3ProviderProxy(w http.ResponseWriter, r *http.Request) {
 	path := "/v3/provider/" + strings.TrimPrefix(chi.URLParam(r, "*"), "/")

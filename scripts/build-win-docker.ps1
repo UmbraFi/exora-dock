@@ -106,6 +106,25 @@ Invoke-Step "Building Windows MCP/CLI helper" {
   }
 }
 
+Invoke-Step "Fetching and verifying bundled WSL Runtime" {
+  & (Join-Path $PSScriptRoot "fetch-wsl-runtime.ps1")
+}
+
+Invoke-Step "Building Windows WSL broker" {
+  Push-Location $Root
+  try {
+    $env:CGO_ENABLED = "0"
+    $env:GOOS = "windows"
+    $env:GOARCH = "amd64"
+    & $Go build -o (Join-Path $BinariesDir "exora-wsl-broker.exe") ./cmd/exora-worker/
+  } finally {
+    Remove-Item Env:\CGO_ENABLED -ErrorAction SilentlyContinue
+    Remove-Item Env:\GOOS -ErrorAction SilentlyContinue
+    Remove-Item Env:\GOARCH -ErrorAction SilentlyContinue
+    Pop-Location
+  }
+}
+
 Invoke-Step "Installing desktop dependencies" {
   Push-Location $DesktopDir
   try {

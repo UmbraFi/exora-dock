@@ -23,6 +23,12 @@ const exoraBridge = Object.freeze({
     ipcRenderer.on('exora:local-agent-event', listener)
     return () => ipcRenderer.removeListener('exora:local-agent-event', listener)
   },
+  onV3Progress(callback) {
+    if (typeof callback !== 'function') return () => undefined
+    const listener = (_event, payload) => callback(payload)
+    ipcRenderer.on('exora:v3-progress', listener)
+    return () => ipcRenderer.removeListener('exora:v3-progress', listener)
+  },
 })
 
 contextBridge.exposeInMainWorld('exora', exoraBridge)

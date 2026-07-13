@@ -235,6 +235,21 @@ func (s *Server) callToolInner(ctx context.Context, name string, args map[string
 		return s.callV2Tool(ctx, name, args)
 	}
 	switch name {
+	case "exora.save_api_bridge_draft":
+		// Deliberately forwards only the public draft schema. Provider credentials,
+		// seller attestation, listing creation, and publishing are UI-only actions.
+		body := cloneArgs(args)
+		for _, forbidden := range []string{"secret", "providerSecret", "sellerAttestationConfirmed", "publish", "status"} {
+			delete(body, forbidden)
+		}
+		return s.proxy(ctx, http.MethodPost, "/v3/provider/api-bridge-drafts", nil, body)
+	case "exora.invoke_api_bridge":
+		listingID := firstString(args, "listingId")
+		operationID := firstString(args, "operationId")
+		if listingID == "" || operationID == "" {
+			return errorResult("listingId and operationId required", nil), nil
+		}
+		return s.proxy(ctx, http.MethodPost, "/v3/gateway-invoke", nil, args)
 	case "exora.get_my_agent_card":
 		return s.proxy(ctx, http.MethodGet, "/v1/agent-cards/mine", nil, nil)
 	case "exora.search_agent_cards":
@@ -1733,6 +1748,27 @@ func strictObjectSchema(properties map[string]any, required []string) map[string
 
 func toolDefinitions() []toolDefinition {
 	return []toolDefinition{
+		{
+			Name: "exora.save_api_bridge_draft", Title: "Save API Bridge Draft",
+			Description: "Create or version-update a seller API Bridge draft. This tool cannot submit credentials, attest seller responsibility, create a public listing, or publish.",
+			InputSchema: strictObjectSchema(map[string]any{
+				"draftId": stringProp("Use the preallocated desktop draft id when supplied; otherwise omit to create."), "expectedVersion": numberProp("Use 0 for a preallocated id's first save; use the current version for updates."),
+				"title": stringProp("Seller-facing service title."), "description": stringProp("Service description supplied by the seller."),
+				"protocol": stringProp("openapi, openai, generic_http, or sse."), "baseUrl": stringProp("Public HTTPS provider base URL."),
+				"healthPath": stringProp("Seller-declared side-effect-free probe path."), "routes": arrayProp("Routes. Each route includes operationId, method, path, displayName, pricing[], and maxChargePerInvocationAtomic when variable-priced."),
+				"agentNotes": stringProp("Notes for human review."), "unresolvedFields": arrayProp("Fields the agent could not determine."),
+			}, []string{"title", "protocol", "baseUrl", "healthPath", "routes"}),
+		},
+		{
+			Name: "exora.invoke_api_bridge", Title: "Invoke API Bridge",
+			Description: "Invoke a published API Bridge operation through the same metered transparent Gateway used by HTTP clients.",
+			InputSchema: strictObjectSchema(map[string]any{
+				"listingId": stringProp("Published listing id."), "operationId": stringProp("Declared operation id."),
+				"query": objectProp("Optional query parameters."), "headers": objectProp("Optional safe provider request headers."),
+				"body": objectProp("Optional JSON request body."), "artifacts": arrayProp("Optional artifact references."),
+				"maxBudgetAtomic": numberProp("Optional buyer-side USDC atomic budget cap."),
+			}, []string{"listingId", "operationId"}),
+		},
 		{
 			Name:        "exora.get_my_agent_card",
 			Title:       "Get My Exora Agent Card",

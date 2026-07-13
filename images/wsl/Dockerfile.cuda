@@ -1,0 +1,8 @@
+FROM nvidia/cuda:12.8.1-devel-ubuntu24.04
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates openssh-server iproute2 curl && rm -rf /var/lib/apt/lists/* /etc/ssh/ssh_host_*
+RUN mkdir -p /usr/lib/exora /var/run/sshd /artifacts && printf '%s\n' '{"schema":"exora.guest_contract.v1","capabilities":["ssh_identity_injection","health_check","artifact_directory","residual_check","cuda_smoke_test"]}' > /usr/lib/exora/guest-contract.json
+COPY cuda-smoke-test.cu /tmp/cuda-smoke-test.cu
+RUN nvcc -O2 /tmp/cuda-smoke-test.cu -o /usr/lib/exora/cuda-smoke-test && rm /tmp/cuda-smoke-test.cu
+COPY wsl.conf /etc/wsl.conf
+COPY wsl-distribution.conf /etc/wsl-distribution.conf
+RUN chown root:root /etc/wsl.conf /etc/wsl-distribution.conf && chmod 0644 /etc/wsl.conf /etc/wsl-distribution.conf
