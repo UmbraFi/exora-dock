@@ -12,9 +12,15 @@ for (const file of electronScripts(__dirname)) {
 }
 
 const renderer = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.ts'), 'utf8')
-for (const marker of ['function renderV3BuyerSurface', 'function renderV3SellerSurface', "['vm', 'VM',", "['resources', 'Resources',", "['endpoint', 'Endpoint',", "['api_bridge', 'API Bridge',", "['listings', 'Listings',", 'function renderV3EndpointAgentPage', 'class="v3-seller-active-bar"']) {
+const rendererStyles = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.css'), 'utf8')
+for (const marker of ['function renderV3BuyerSurface', 'function renderV3SellerSurface', "['vm', 'VM',", "['resources', 'Resources',", "['endpoint', 'Endpoint',", "['api_bridge', 'API Bridge',", "['listings', 'Listings',", 'function renderV3EndpointAgentPage', 'class="v3-seller-active-bar"', 'class="v3-market-surface v3-seller-surface"']) {
   if (!renderer.includes(marker)) throw new Error(`V3 Electron surface missing: ${marker}`)
 }
+if (!/\.v3-application-flow,\s*\.v3-vm-onboarding,\s*\.v3-listings-page\s*\{[^}]*width:\s*100%;[^}]*margin:\s*0;/s.test(rendererStyles)) throw new Error('Listings must share the seller stack width and offset')
+if (!/\.app-shell\.seller-surface-mode \.action-view\s*\{[^}]*overflow-y:\s*scroll;[^}]*scrollbar-gutter:\s*stable both-edges;/s.test(rendererStyles)) throw new Error('Seller tabs must keep one symmetric scroll lane')
+if (!/state\.v3SellerTab = nextTab\s*renderDecisionPanel\(\)\s*fields\.actionView\.scrollTop = 0/.test(renderer)) throw new Error('Seller tab switches must reset the shared scroll position')
+const listingStyles = rendererStyles.slice(rendererStyles.indexOf('.v3-listing-overview,'), rendererStyles.indexOf('.v3-endpoint-review-list'))
+if (!listingStyles || listingStyles.includes('linear-gradient')) throw new Error('Listings containers must use solid backgrounds')
 for (const marker of ['function renderV3HistoryRow', 'function renderV3ActivityDetail', 'data-v3-history-session', 'data-v3-activity-detail']) {
   if (!renderer.includes(marker)) throw new Error(`V3 history surface missing: ${marker}`)
 }

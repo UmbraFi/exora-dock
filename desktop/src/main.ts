@@ -1515,6 +1515,7 @@ fields.sellerSurfaceTabs.addEventListener('click', (event) => {
   if (!nextTab || nextTab === state.v3SellerTab) return
   state.v3SellerTab = nextTab
   renderDecisionPanel()
+  fields.actionView.scrollTop = 0
 })
 
 fields.sellerSurfaceTabs.addEventListener('pointerdown', (event) => {
@@ -10058,7 +10059,7 @@ function renderV3SellerSurface() {
     listings: { kicker: 'MARKET INVENTORY', title: 'Manage your listings', description: 'Review drafts, publish products, pause availability, inspect health, and retire offers from the market.' },
   }
   const heading = headings[state.v3SellerTab]
-  return `<section class="v3-market-surface"><div class="v3-surface-heading"><div><span>${escapeHTML(heading.kicker)}</span><h2>${escapeHTML(heading.title)}</h2><p>${escapeHTML(heading.description)}</p></div></div>${state.v3SellerError ? `<div class="v3-error">${escapeHTML(state.v3SellerError)}</div>` : ''}<div class="v3-seller-page">${page}</div></section>${renderV3EnvironmentCloudModal()}`
+  return `<section class="v3-market-surface v3-seller-surface"><div class="v3-surface-heading"><div><span>${escapeHTML(heading.kicker)}</span><h2>${escapeHTML(heading.title)}</h2><p>${escapeHTML(heading.description)}</p></div></div>${state.v3SellerError ? `<div class="v3-error">${escapeHTML(state.v3SellerError)}</div>` : ''}<div class="v3-seller-page">${page}</div></section>${renderV3EnvironmentCloudModal()}`
 }
 
 type V3ApplicationSource = 'vm' | 'resources' | 'endpoint' | 'api_bridge'
