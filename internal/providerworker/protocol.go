@@ -5,11 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
+	"io"
 	"time"
 )
 
-const DefaultSocket = "/run/exora/worker.sock"
+var DefaultSocket = defaultWorkerEndpoint
 
 type Request struct {
 	ID      string         `json:"id"`
@@ -30,8 +30,7 @@ func (c Client) Call(ctx context.Context, command string, input map[string]any) 
 	if socket == "" {
 		socket = DefaultSocket
 	}
-	d := net.Dialer{}
-	conn, err := d.DialContext(ctx, "unix", socket)
+	conn, err := dialWorker(ctx, socket)
 	if err != nil {
 		return nil, err
 	}
@@ -58,4 +57,28 @@ type Runner interface {
 var AllowedCommands = map[string]bool{
 	"probe_host": true, "list_domains": true, "import_template": true, "validate_template": true,
 	"reserve_disk": true, "capacity_check": true, "create_test_clone": true, "reset_test_clone": true, "delete_template": true,
+	"release_disk":  true,
+	"probe_runtime": true, "list_environment_images": true, "import_environment_image": true,
+	"validate_environment_image": true, "delete_environment_image": true,
+}
+
+func handleConnection(ctx context.Context, c io.ReadWriteCloser, dispatch func(context.Context, string, map[string]any) (map[string]any, error), audit func(string, bool, string)) {
+	defer c.Close()
+	var req Request
+	if json.NewDecoder(bufio.NewReader(io.LimitReader(c, 1<<20))).Decode(&req) != nil {
+		return
+	}
+	out := Response{ID: req.ID}
+	if !AllowedCommands[req.Command] {
+		out.Error = "unsupported command"
+	} else if result, err := dispatch(ctx, req.Command, req.Input); err != nil {
+		out.Error = err.Error()
+	} else {
+		out.OK = true
+		out.Result = result
+	}
+	if audit != nil {
+		audit(req.Command, out.OK, out.Error)
+	}
+	_ = json.NewEncoder(c).Encode(out)
 }

@@ -5,6 +5,7 @@ type ExoraBridge = {
   }
   invoke<T = unknown>(command: string, payload?: Record<string, unknown>): Promise<T>
   onLocalAgentEvent?(callback: (payload: unknown) => void): () => void
+  onV3Progress?(callback: (payload: unknown) => void): () => void
 }
 
 declare global {

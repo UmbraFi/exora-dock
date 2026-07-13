@@ -304,8 +304,11 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 		r.Get("/review/{productID}", h.GetReview)
 	})
 	r.Route("/v3", func(r chi.Router) {
+		r.HandleFunc("/gateway/{listingId}/*", h.V3Gateway)
 		r.Get("/catalog/products", h.V3Catalog)
 		r.Get("/catalog/products/{id}", h.V3CatalogProduct)
+		r.Get("/catalog/environment-images", h.V3EnvironmentImageCatalog)
+		r.Get("/catalog/environment-images/{id}", h.V3EnvironmentImageCatalogItem)
 		r.HandleFunc("/provider/worker/{command}", h.V3WorkerCommand)
 		r.HandleFunc("/provider/*", h.V3ProviderProxy)
 	})

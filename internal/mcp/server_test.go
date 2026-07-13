@@ -54,7 +54,7 @@ func TestMCPLegacyMarketToolsRequireExplicitOptIn(t *testing.T) {
 	listed := responseMap(t, server.HandleJSON(context.Background(), []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)))
 	tools := listed["result"].(map[string]any)["tools"].([]any)
 	toolsJSON := mustJSON(t, tools)
-	if len(tools) != 26 || !strings.Contains(toolsJSON, "exora.search_offers") || !strings.Contains(toolsJSON, "exora.run_buyer_work") {
+	if len(tools) != 28 || !strings.Contains(toolsJSON, "exora.search_offers") || !strings.Contains(toolsJSON, "exora.run_buyer_work") || !strings.Contains(toolsJSON, "exora.save_api_bridge_draft") || !strings.Contains(toolsJSON, "exora.invoke_api_bridge") {
 		t.Fatalf("legacy tools = %#v", tools)
 	}
 }

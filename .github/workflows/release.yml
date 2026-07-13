@@ -128,6 +128,10 @@ jobs:
           $env:GOOS='windows'
           $env:GOARCH='amd64'
           go build -o desktop/binaries/exora-dockd.exe ./cmd/exora-dock/
+          go build -o desktop/binaries/exora-wsl-broker.exe ./cmd/exora-worker/
+      - name: Fetch and verify bundled WSL Runtime
+        shell: pwsh
+        run: ./scripts/fetch-wsl-runtime.ps1
       - name: Build exe installer
         run: npm run build:exe
         working-directory: desktop

@@ -9,4 +9,5 @@ desktop/node_modules/
 desktop/release/
 desktop/binaries/exora-dockd
 desktop/binaries/exora-dockd.exe
+desktop/binaries/exora-wsl-broker.exe
 desktop/resources/docker/exora-dock-image.tar

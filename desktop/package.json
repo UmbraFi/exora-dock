@@ -11,7 +11,7 @@
     "preview:desktop": "npm run dev",
     "dev:frontend": "vite --host 127.0.0.1 --port 1420",
     "build:frontend": "tsc && vite build",
-    "build:electron": "node --test electron/local-agents.test.cjs && node electron/check.cjs",
+    "build:electron": "node --test electron/local-agents.test.cjs electron/resource-archive.test.cjs && node electron/check.cjs",
     "build": "npm run build:frontend && npm run build:electron && electron-builder",
     "build:dmg": "npm run build:frontend && npm run build:electron && electron-builder --mac dmg",
     "build:exe": "npm run build:frontend && npm run build:electron && electron-builder --win nsis",
@@ -20,6 +20,7 @@
     "build:win-docker": "powershell -ExecutionPolicy Bypass -File ../scripts/build-win-docker.ps1 -BuildDockerImage"
   },
   "dependencies": {
+    "archiver": "^7.0.1",
     "lucide": "^1.23.0",
     "qrcode": "^1.5.4",
     "yaml": "^2.8.1"
@@ -30,6 +31,7 @@
     "electron": "^38.2.1",
     "electron-builder": "^26.0.12",
     "typescript": "^5.9.0",
+    "unzipper": "^0.12.5",
     "vite": "^7.3.0",
     "wait-on": "^9.0.3"
   },
@@ -50,6 +52,14 @@
         "to": "binaries",
         "filter": [
           "**/*"
+        ]
+      },
+      {
+        "from": "resources/wsl",
+        "to": "wsl",
+        "filter": [
+          "*.msi",
+          "wsl-runtime.lock.json"
         ]
       }
     ],
@@ -75,7 +85,10 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": true,
+      "allowElevation": true,
+      "include": "build/installer.nsh"
     }
   }
 }
