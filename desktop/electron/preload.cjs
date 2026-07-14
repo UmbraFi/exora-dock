@@ -29,6 +29,12 @@ const exoraBridge = Object.freeze({
     ipcRenderer.on('exora:v3-progress', listener)
     return () => ipcRenderer.removeListener('exora:v3-progress', listener)
   },
+  onAuthStateChanged(callback) {
+    if (typeof callback !== 'function') return () => undefined
+    const listener = (_event, payload) => callback(payload)
+    ipcRenderer.on('exora:auth-state-changed', listener)
+    return () => ipcRenderer.removeListener('exora:auth-state-changed', listener)
+  },
 })
 
 contextBridge.exposeInMainWorld('exora', exoraBridge)

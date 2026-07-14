@@ -1602,18 +1602,39 @@ func (h *Handler) SetPaymentPIN(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Pin string `json:"pin"`
+		Pin       string `json:"pin"`
+		AccountID string `json:"accountId,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
-	status, err := h.paymentPIN.Set(req.Pin)
+	status, err := h.paymentPIN.SetForAccount(req.Pin, req.AccountID)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"paymentPin": status})
+}
+
+func (h *Handler) VerifyPaymentPIN(w http.ResponseWriter, r *http.Request) {
+	if h.paymentPIN == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "payment pin service not configured"})
+		return
+	}
+	var req struct {
+		Pin       string `json:"pin"`
+		AccountID string `json:"accountId,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if err := h.paymentPIN.VerifyForAccount(req.Pin, req.AccountID); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"verified": true})
 }
 
 func (h *Handler) ListPayments(w http.ResponseWriter, r *http.Request) {

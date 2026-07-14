@@ -11,6 +11,7 @@ import (
 )
 
 type recordingRunner struct{ calls []string }
+type leaseRunner struct{ calls []string }
 
 func TestHiddenCommandContextSuppressesConsoleWindows(t *testing.T) {
 	cmd := hiddenCommandContext(context.Background(), "cmd.exe", "/c", "exit", "0")
@@ -31,6 +32,21 @@ func (r *recordingRunner) Run(_ context.Context, name string, args ...string) (s
 		return "Ubuntu\nExora-ready", nil
 	}
 	return "ok", nil
+}
+
+func (r *leaseRunner) Run(_ context.Context, name string, args ...string) (string, error) {
+	call := name + " " + strings.Join(args, " ")
+	r.calls = append(r.calls, call)
+	switch {
+	case strings.Contains(call, "--list --running --quiet"):
+		return "", nil
+	case strings.Contains(call, "cat /etc/wsl.conf"):
+		return "[automount]\nenabled=false\nmountFsTab=false\n[interop]\nenabled=false\nappendWindowsPath=false\n", nil
+	case strings.Contains(call, "hostname -I"):
+		return "172.27.1.2\n", nil
+	default:
+		return "ok", nil
+	}
 }
 
 func TestWindowsWorkerNeverManagesNonExoraDistribution(t *testing.T) {
@@ -80,5 +96,62 @@ func TestWindowsEnvironmentRootCannotOverlapImageCache(t *testing.T) {
 	s := Server{DataDir: root, Runner: &recordingRunner{}}
 	if _, err := s.environmentRoot(map[string]any{"environmentRoot": filepath.Join(root, "images", "instances")}); err == nil {
 		t.Fatal("environment root inside image cache accepted")
+	}
+}
+
+func TestWindowsLeaseUsesSingleManagedDistroAndResetReceipt(t *testing.T) {
+	root := t.TempDir()
+	runtimeRoot := filepath.Join(t.TempDir(), "runtime")
+	artifact := filepath.Join(root, "images", "cpu.wsl")
+	if err := os.MkdirAll(filepath.Dir(artifact), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(artifact, []byte("managed image"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &leaseRunner{}
+	server := Server{DataDir: root, Runner: runner}
+	input := map[string]any{
+		"leaseId":      "lease-1",
+		"leaseEpoch":   float64(1),
+		"sshPublicKey": "ssh-ed25519 AAAATEST desktop",
+		"product": map[string]any{"manifest": map[string]any{
+			"runtimeBackend":     "wsl2",
+			"isolationClass":     "managed_wsl2_shared_host",
+			"environmentImageId": "cpu",
+			"environmentRoot":    runtimeRoot,
+			"publicHost":         "203.0.113.8",
+		}},
+	}
+	result, err := server.provisionLease(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["backend"] != "wsl2" || result["isolationClass"] != "managed_wsl2_shared_host" || result["guestVerified"] != true {
+		t.Fatalf("result=%v", result)
+	}
+	disclosure := result["resourceDisclosure"].(map[string]any)
+	if disclosure["singleLeasePerHost"] != true || disclosure["hardwarePassthroughExclusive"] != false {
+		t.Fatalf("disclosure=%v", disclosure)
+	}
+	if _, err := server.leaseRecheck(context.Background(), map[string]any{"leaseId": "lease-2"}); err == nil {
+		t.Fatal("second WSL lease was accepted while the host lock was active")
+	}
+	reset, err := server.resetLease(context.Background(), map[string]any{"leaseId": "lease-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := reset["resetReceipt"].(map[string]any)
+	if receipt["distributionUnregistered"] != true || receipt["guestCredentialsDestroyed"] != true || receipt["portProxyRemoved"] != true {
+		t.Fatalf("receipt=%v", receipt)
+	}
+	if _, err := os.Stat(server.wslLeaseLockPath()); !os.IsNotExist(err) {
+		t.Fatalf("lease lock still exists: %v", err)
+	}
+	joined := strings.Join(runner.calls, "\n")
+	for _, expected := range []string{"--import Exora-Lease-lease-1", "portproxy add", "--unregister Exora-Lease-lease-1", "Remove-NetFirewallRule"} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("missing %q in calls:\n%s", expected, joined)
+		}
 	}
 }

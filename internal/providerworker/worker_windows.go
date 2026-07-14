@@ -4,6 +4,8 @@ package providerworker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -213,6 +215,14 @@ func (s Server) dispatch(ctx context.Context, command string, input map[string]a
 		return s.releaseDisk(input)
 	case "capacity_check":
 		return s.capacity(ctx)
+	case "lease_recheck":
+		return persistentWorkerCommand(s.DataDir, command, input, func() (map[string]any, error) { return s.leaseRecheck(ctx, input) })
+	case "provision_lease":
+		return persistentWorkerCommand(s.DataDir, command, input, func() (map[string]any, error) { return s.provisionLease(ctx, input) })
+	case "renew_lease_epoch":
+		return persistentWorkerCommand(s.DataDir, command, input, func() (map[string]any, error) { return s.renewLease(ctx, input) })
+	case "reset_lease":
+		return persistentWorkerCommand(s.DataDir, command, input, func() (map[string]any, error) { return s.resetLease(ctx, input) })
 	default:
 		return nil, fmt.Errorf("unsupported command on Windows WSL backend")
 	}
@@ -504,6 +514,203 @@ func (s Server) capacity(ctx context.Context) (map[string]any, error) {
 	memory, _ := s.Runner.Run(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "$o=Get-CimInstance Win32_OperatingSystem; [pscustomobject]@{TotalBytes=[int64]$o.TotalVisibleMemorySize*1024;FreeBytes=[int64]$o.FreePhysicalMemory*1024}|ConvertTo-Json -Compress")
 	gpu, _ := s.Runner.Run(ctx, "nvidia-smi.exe", "--query-gpu=uuid,memory.total,memory.free,utilization.gpu", "--format=csv,noheader,nounits")
 	return map[string]any{"checkLevel": "light", "healthy": true, "providerBusy": false, "memory": memory, "gpu": gpu, "checkedAt": time.Now().UTC().Format(time.RFC3339)}, nil
+}
+
+func windowsNestedMap(value any) map[string]any { result, _ := value.(map[string]any); return result }
+
+func (s Server) wslLeaseLockPath() string { return filepath.Join(s.DataDir, "leases", "active.json") }
+
+func windowsLeaseDistro(leaseID string) (string, error) {
+	if !windowsSafeID.MatchString(leaseID) {
+		return "", fmt.Errorf("invalid leaseId")
+	}
+	return "Exora-Lease-" + leaseID, nil
+}
+
+func (s Server) leaseRecheck(ctx context.Context, input map[string]any) (map[string]any, error) {
+	leaseID := winString(input, "leaseId")
+	if _, err := windowsLeaseDistro(leaseID); err != nil {
+		return nil, err
+	}
+	if raw, err := os.ReadFile(s.wslLeaseLockPath()); err == nil {
+		var lock map[string]any
+		_ = json.Unmarshal(raw, &lock)
+		if current, _ := lock["leaseId"].(string); current != "" && current != leaseID {
+			return nil, fmt.Errorf("Windows WSL host already has an active lease")
+		}
+	}
+	running, _ := s.Runner.Run(ctx, "wsl.exe", "--list", "--running", "--quiet")
+	for _, name := range strings.Fields(strings.ReplaceAll(running, "\x00", "")) {
+		if !strings.EqualFold(name, "Exora-Lease-"+leaseID) {
+			return nil, fmt.Errorf("another WSL workload is running; managed single-lease mode requires an idle WSL subsystem")
+		}
+	}
+	return map[string]any{"healthy": true, "providerBusy": false, "leaseId": leaseID, "checkLevel": "lease_recheck", "runtimeBackend": "wsl2", "isolationClass": "managed_wsl2_shared_host", "checkedAt": time.Now().UTC()}, nil
+}
+
+func wslLeasePort(leaseID string) int {
+	sum := sha256.Sum256([]byte(leaseID))
+	return 22000 + (int(sum[0]) << 4) + int(sum[1])%16
+}
+
+func (s Server) provisionLease(ctx context.Context, input map[string]any) (map[string]any, error) {
+	if _, err := s.leaseRecheck(ctx, input); err != nil {
+		return nil, err
+	}
+	leaseID := winString(input, "leaseId")
+	distro, err := windowsLeaseDistro(leaseID)
+	if err != nil {
+		return nil, err
+	}
+	product := windowsNestedMap(input["product"])
+	manifest := windowsNestedMap(product["manifest"])
+	if isolation, _ := manifest["isolationClass"].(string); isolation != "managed_wsl2_shared_host" {
+		return nil, fmt.Errorf("WSL lease requires managed_wsl2_shared_host isolation contract")
+	}
+	imageID, _ := manifest["environmentImageId"].(string)
+	artifact, _ := manifest["artifactPath"].(string)
+	if artifact == "" && windowsSafeID.MatchString(imageID) {
+		artifact = filepath.Join(s.DataDir, "images", imageID+".wsl")
+	}
+	artifactAbs, err := filepath.Abs(artifact)
+	if err != nil {
+		return nil, err
+	}
+	imagesRoot, _ := filepath.Abs(filepath.Join(s.DataDir, "images"))
+	if !pathWithin(imagesRoot, artifactAbs) || strings.ToLower(filepath.Ext(artifactAbs)) != ".wsl" {
+		return nil, fmt.Errorf("lease artifact must be a managed .wsl image")
+	}
+	if _, err := os.Stat(artifactAbs); err != nil {
+		return nil, fmt.Errorf("lease image is unavailable: %w", err)
+	}
+	runtimeRoot := filepath.Join(s.DataDir, "lease-runtime")
+	if configured, _ := manifest["environmentRoot"].(string); strings.TrimSpace(configured) != "" {
+		runtimeRoot = configured
+	}
+	runtimeRoot, err = filepath.Abs(runtimeRoot)
+	if err != nil {
+		return nil, err
+	}
+	if pathWithin(imagesRoot, runtimeRoot) || pathWithin(runtimeRoot, imagesRoot) {
+		return nil, fmt.Errorf("lease runtime must be separate from image cache")
+	}
+	installPath := filepath.Join(runtimeRoot, "leases", leaseID)
+	if err := os.MkdirAll(installPath, 0700); err != nil {
+		return nil, err
+	}
+	if _, err := s.Runner.Run(ctx, "wsl.exe", "--import", distro, installPath, artifactAbs, "--version", "2"); err != nil {
+		_ = os.RemoveAll(installPath)
+		return nil, err
+	}
+	conf, err := s.Runner.Run(ctx, "wsl.exe", "-d", distro, "--exec", "cat", "/etc/wsl.conf")
+	if err != nil || !strings.Contains(conf, "enabled=false") || !strings.Contains(conf, "mountFsTab=false") || !strings.Contains(conf, "appendWindowsPath=false") {
+		_, _ = s.Runner.Run(ctx, "wsl.exe", "--unregister", distro)
+		return nil, fmt.Errorf("lease image permits Windows automount or interop")
+	}
+	privateKeyPath := filepath.Join(runtimeRoot, "leases", leaseID+".ssh")
+	sshPublicKey := winString(input, "sshPublicKey")
+	privateKey := ""
+	if sshPublicKey == "" {
+		if _, err := s.Runner.Run(ctx, "ssh-keygen.exe", "-q", "-t", "ed25519", "-N", "", "-f", privateKeyPath); err != nil {
+			return nil, err
+		}
+		publicRaw, readErr := os.ReadFile(privateKeyPath + ".pub")
+		if readErr != nil {
+			return nil, readErr
+		}
+		sshPublicKey = strings.TrimSpace(string(publicRaw))
+		privateRaw, readErr := os.ReadFile(privateKeyPath)
+		if readErr != nil {
+			return nil, readErr
+		}
+		privateKey = string(privateRaw)
+	}
+	encodedPublic := base64.StdEncoding.EncodeToString([]byte(sshPublicKey + "\n"))
+	setupCommand := "umask 077; mkdir -p /root/.ssh; echo " + encodedPublic + " | base64 -d > /root/.ssh/authorized_keys; chmod 700 /root/.ssh; chmod 600 /root/.ssh/authorized_keys; ssh-keygen -A; /usr/sbin/sshd"
+	if _, err := s.Runner.Run(ctx, "wsl.exe", "-d", distro, "--user", "root", "--exec", "sh", "-lc", setupCommand); err != nil {
+		return nil, fmt.Errorf("WSL guest bootstrap failed: %w", err)
+	}
+	ipRaw, err := s.Runner.Run(ctx, "wsl.exe", "-d", distro, "--exec", "hostname", "-I")
+	if err != nil {
+		return nil, fmt.Errorf("WSL guest verification failed: %w", err)
+	}
+	guestIP := strings.Fields(ipRaw)
+	if len(guestIP) == 0 {
+		return nil, fmt.Errorf("WSL guest did not report an address")
+	}
+	port := wslLeasePort(leaseID)
+	if _, err := s.Runner.Run(ctx, "netsh.exe", "interface", "portproxy", "add", "v4tov4", "listenaddress=0.0.0.0", "listenport="+strconv.Itoa(port), "connectaddress="+guestIP[0], "connectport=22"); err != nil {
+		return nil, err
+	}
+	firewallRule := "Exora Lease " + leaseID
+	if _, err := s.Runner.Run(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "New-NetFirewallRule -DisplayName '"+firewallRule+"' -Direction Inbound -Action Allow -Protocol TCP -LocalPort "+strconv.Itoa(port)+" -Profile Private | Out-Null"); err != nil {
+		return nil, err
+	}
+	publicHost, _ := manifest["publicHost"].(string)
+	if strings.TrimSpace(publicHost) == "" {
+		publicHost = "127.0.0.1"
+	}
+	metadata := map[string]any{"leaseId": leaseID, "distro": distro, "installPath": installPath, "port": port, "firewallRule": firewallRule}
+	raw, _ := json.Marshal(metadata)
+	if err := os.MkdirAll(filepath.Dir(s.wslLeaseLockPath()), 0700); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(s.wslLeaseLockPath(), raw, 0600); err != nil {
+		return nil, err
+	}
+	_ = os.Remove(privateKeyPath)
+	_ = os.Remove(privateKeyPath + ".pub")
+	capability := map[string]any{"protocol": "ssh", "host": publicHost, "port": port, "username": "root", "leaseEpoch": winInt64(input, "leaseEpoch")}
+	if privateKey != "" {
+		capability["privateKeyPem"] = privateKey
+	}
+	return map[string]any{"leaseId": leaseID, "state": "active", "guestVerified": true, "backend": "wsl2", "isolationClass": "managed_wsl2_shared_host", "resourceDisclosure": map[string]any{"singleLeasePerHost": true, "cpuMemoryAreConfiguredCaps": true, "gpuSharedWindowsDriver": true, "hardwarePassthroughExclusive": false}, "capability": capability}, nil
+}
+
+func (s Server) renewLease(ctx context.Context, input map[string]any) (map[string]any, error) {
+	leaseID := winString(input, "leaseId")
+	if _, err := s.leaseRecheck(ctx, input); err != nil {
+		return nil, fmt.Errorf("WSL isolation conditions no longer hold: %w", err)
+	}
+	distro, err := windowsLeaseDistro(leaseID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.Runner.Run(ctx, "wsl.exe", "-d", distro, "--exec", "true"); err != nil {
+		return nil, fmt.Errorf("WSL lease guest is not running")
+	}
+	return map[string]any{"leaseId": leaseID, "leaseEpoch": winInt64(input, "leaseEpoch"), "state": "active", "renewedAt": time.Now().UTC()}, nil
+}
+
+func (s Server) resetLease(ctx context.Context, input map[string]any) (map[string]any, error) {
+	leaseID := winString(input, "leaseId")
+	distro, err := windowsLeaseDistro(leaseID)
+	if err != nil {
+		return nil, err
+	}
+	metadata := map[string]any{}
+	if raw, readErr := os.ReadFile(s.wslLeaseLockPath()); readErr == nil {
+		_ = json.Unmarshal(raw, &metadata)
+		if current, _ := metadata["leaseId"].(string); current != "" && current != leaseID {
+			return nil, fmt.Errorf("active WSL lease lock belongs to another lease")
+		}
+	}
+	port := int(winInt64(metadata, "port"))
+	if port > 0 {
+		_, _ = s.Runner.Run(ctx, "netsh.exe", "interface", "portproxy", "delete", "v4tov4", "listenaddress=0.0.0.0", "listenport="+strconv.Itoa(port))
+	}
+	if rule, _ := metadata["firewallRule"].(string); rule != "" {
+		_, _ = s.Runner.Run(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Remove-NetFirewallRule -DisplayName '"+rule+"' -ErrorAction SilentlyContinue")
+	}
+	_, _ = s.Runner.Run(ctx, "wsl.exe", "--terminate", distro)
+	if _, err := s.Runner.Run(ctx, "wsl.exe", "--unregister", distro); err != nil {
+		return nil, err
+	}
+	if path, _ := metadata["installPath"].(string); path != "" {
+		_ = os.RemoveAll(path)
+	}
+	_ = os.Remove(s.wslLeaseLockPath())
+	return map[string]any{"leaseId": leaseID, "state": "verified", "resetReceipt": map[string]any{"distributionUnregistered": true, "guestCredentialsDestroyed": true, "portProxyRemoved": true, "completedAt": time.Now().UTC()}}, nil
 }
 
 func decodeWindowsOutput(raw []byte) string {

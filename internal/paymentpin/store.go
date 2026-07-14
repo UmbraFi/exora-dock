@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	version      = 1
+	version      = 2
 	saltBytes    = 16
 	keyBytes     = 32
 	argonTime    = 3
@@ -28,12 +28,14 @@ var pinPattern = regexp.MustCompile(`^\d{6}$`)
 
 type Status struct {
 	Configured     bool   `json:"configured"`
+	BoundAccountID string `json:"boundAccountId,omitempty"`
 	UpdatedAt      string `json:"updatedAt,omitempty"`
 	FailedAttempts int    `json:"failedAttempts,omitempty"`
 }
 
 type fileData struct {
 	Version        int    `json:"version"`
+	AccountID      string `json:"accountId,omitempty"`
 	Salt           string `json:"salt"`
 	Hash           string `json:"hash"`
 	UpdatedAt      string `json:"updatedAt"`
@@ -65,14 +67,23 @@ func (s *Store) Status() (Status, error) {
 	}
 	return Status{
 		Configured:     data.Hash != "" && data.Salt != "",
+		BoundAccountID: data.AccountID,
 		UpdatedAt:      data.UpdatedAt,
 		FailedAttempts: data.FailedAttempts,
 	}, nil
 }
 
 func (s *Store) Set(pin string) (Status, error) {
+	return s.SetForAccount(pin, "")
+}
+
+func (s *Store) SetForAccount(pin, accountID string) (Status, error) {
 	if !pinPattern.MatchString(strings.TrimSpace(pin)) {
 		return Status{}, fmt.Errorf("payment_pin must be exactly 6 digits")
+	}
+	accountID = strings.TrimSpace(accountID)
+	if len(accountID) > 128 {
+		return Status{}, fmt.Errorf("account_id is too long")
 	}
 	salt := make([]byte, saltBytes)
 	if _, err := rand.Read(salt); err != nil {
@@ -82,6 +93,7 @@ func (s *Store) Set(pin string) (Status, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	data := fileData{
 		Version:   version,
+		AccountID: accountID,
 		Salt:      base64.StdEncoding.EncodeToString(salt),
 		Hash:      base64.StdEncoding.EncodeToString(hash),
 		UpdatedAt: now,
@@ -89,10 +101,14 @@ func (s *Store) Set(pin string) (Status, error) {
 	if err := s.write(data); err != nil {
 		return Status{}, err
 	}
-	return Status{Configured: true, UpdatedAt: now}, nil
+	return Status{Configured: true, BoundAccountID: accountID, UpdatedAt: now}, nil
 }
 
 func (s *Store) Verify(pin string) error {
+	return s.VerifyForAccount(pin, "")
+}
+
+func (s *Store) VerifyForAccount(pin, accountID string) error {
 	if !pinPattern.MatchString(strings.TrimSpace(pin)) {
 		return fmt.Errorf("invalid_payment_pin")
 	}
@@ -102,6 +118,13 @@ func (s *Store) Verify(pin string) error {
 			return fmt.Errorf("payment_pin_not_configured")
 		}
 		return err
+	}
+	accountID = strings.TrimSpace(accountID)
+	if accountID != "" && data.AccountID != accountID {
+		if data.AccountID == "" {
+			return fmt.Errorf("payment_pin_needs_account_binding")
+		}
+		return fmt.Errorf("payment_pin_account_mismatch")
 	}
 	salt, err := base64.StdEncoding.DecodeString(data.Salt)
 	if err != nil {

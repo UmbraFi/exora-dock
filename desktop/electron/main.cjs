@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage, shell, Tray } = require('electron')
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage, shell, Tray } = require('electron')
 const { spawn, execFile } = require('node:child_process')
 const crypto = require('node:crypto')
 const fs = require('node:fs')
@@ -6,6 +6,7 @@ const fsp = require('node:fs/promises')
 const path = require('node:path')
 const YAML = require('yaml')
 const { registerIpcHandlers } = require('./ipc.cjs')
+const { createCloudAuth } = require('./cloud-auth.cjs')
 const {
   createAppURLPolicy,
   installNavigationGuards,
@@ -61,6 +62,23 @@ let localAgentGlobalScanController
 let localAgentGlobalScanPromise
 let localAgentGlobalScanPaused = false
 let localAgentScanPauseRequested = false
+let sessionAccountKey = ''
+const cloudAuth = createCloudAuth({
+  safeStorage,
+  isPackaged: app.isPackaged,
+  envCloudURL: () => process.env.EXORA_CLOUD_URL || '',
+  getPaths: dockPaths,
+  readState: readDesktopState,
+  writeState: writeDesktopState,
+  configuredCloudURL,
+  deviceName: () => `${app.getName()} on ${process.platform}`,
+  getPINStatus: payment_pin_status,
+  setPIN: async (pin, accountId) => set_payment_pin({ input: { pin, accountId } }),
+  verifyPIN: verify_payment_pin,
+  ensureDockLink,
+  clearDockLink,
+  broadcast: (payload) => mainWindow?.webContents.send('exora:auth-state-changed', payload),
+})
 const localAgentGlobalScanPauseWaiters = []
 const localAgentSessionStreams = new Map()
 const localAgentSessionEventBacklogs = new Map()
@@ -190,6 +208,20 @@ function createIpcHandlerGroups() {
       window_toggle_maximize,
       window_close,
     },
+    cloudIdentity: {
+      auth_status,
+      auth_registration_start,
+      auth_registration_complete,
+      auth_login,
+      auth_password_reset_start,
+      auth_password_reset_complete,
+      auth_pin_set,
+      auth_pin_change,
+      auth_pin_reset,
+      auth_logout,
+      auth_social_start,
+      auth_social_complete,
+    },
     dockRuntime: {
       app_status,
       start_dock,
@@ -247,6 +279,20 @@ function createIpcHandlerGroups() {
     v3Market: {
       catalog_products,
       catalog_product,
+      catalog_listings,
+      account_key_status,
+      account_key_save,
+      account_key_delete,
+      consumer_account_balance,
+      consumer_purchase_estimate,
+      consumer_invoke_operation,
+      consumer_purchase_download,
+      consumer_create_transfer,
+      consumer_purchase_compute,
+      consumer_compute_purchase,
+      consumer_extend_compute,
+      consumer_get_lease,
+      consumer_release_lease,
       activity_sessions,
       activity_session,
       provider_vm_probe,
@@ -325,6 +371,7 @@ function createIpcHandlerGroups() {
       cancel_order_plan,
       payment_pin_status,
       set_payment_pin,
+      verify_payment_pin,
     },
     walletAndSecurity: {
       wallet_status,
@@ -350,6 +397,19 @@ async function window_toggle_maximize() {
 async function window_close() {
   mainWindow?.hide()
 }
+
+async function auth_status() { return cloudAuth.status() }
+async function auth_registration_start(payload) { return cloudAuth.registrationStart(payload) }
+async function auth_registration_complete(payload) { return cloudAuth.registrationComplete(payload) }
+async function auth_login(payload) { return cloudAuth.login(payload) }
+async function auth_password_reset_start(payload) { return cloudAuth.passwordResetStart(payload) }
+async function auth_password_reset_complete(payload) { return cloudAuth.passwordResetComplete(payload) }
+async function auth_pin_set(payload) { return cloudAuth.setPIN(payload) }
+async function auth_pin_change(payload) { return cloudAuth.changePIN(payload) }
+async function auth_pin_reset(payload) { return cloudAuth.resetPIN(payload) }
+async function auth_logout() { return cloudAuth.logout() }
+async function auth_social_start(payload) { return cloudAuth.socialStart(payload) }
+async function auth_social_complete(payload) { return cloudAuth.socialComplete(payload) }
 
 async function app_status() {
   const paths = await dockPaths()
@@ -1791,7 +1851,18 @@ async function set_payment_pin(payload) {
   const input = payload?.input ?? {}
   const paths = await dockPaths()
   await ensureLocalLayout(paths)
-  return httpJson('POST', '/v1/payment-pin/set', { pin: input.pin }, await localOwnerToken(paths))
+  return httpJson('POST', '/v1/payment-pin/set', { pin: input.pin, accountId: input.accountId || '' }, await localOwnerToken(paths))
+}
+
+async function verify_payment_pin(pin, accountId) {
+  if (pin && typeof pin === 'object') {
+    const input = pin.input || pin
+    accountId = input.accountId
+    pin = input.pin
+  }
+  const paths = await dockPaths()
+  await ensureLocalLayout(paths)
+  return httpJson('POST', '/v1/payment-pin/verify', { pin, accountId }, await localOwnerToken(paths))
 }
 
 async function wallet_status() {
@@ -2348,8 +2419,7 @@ async function readDesktopState(paths) {
 }
 
 async function writeDesktopState(paths, value) {
-  await fsp.mkdir(paths.rootDir, { recursive: true })
-  await fsp.writeFile(paths.desktopStatePath, `${JSON.stringify(value, null, 2)}\n`)
+  await writeJsonAtomic(paths.desktopStatePath, value)
 }
 
 async function ensurePersistenceLayout(paths) {
@@ -3511,6 +3581,276 @@ async function catalog_products(payload = {}) {
 async function catalog_product(payload = {}) {
   return httpJson('GET', `/v3/catalog/products/${encodeURIComponent(String(payload?.input?.id || ''))}`, undefined, await localOwnerToken(await dockPaths()))
 }
+
+async function catalog_listings(payload = {}) {
+  const input = payload?.input || {}
+  const query = new URLSearchParams()
+  for (const key of ['q', 'kind']) {
+    const value = String(input[key] || '').trim()
+    if (value) query.set(key, value)
+  }
+  return httpJson('GET', `/v3/catalog/listings${query.size ? `?${query}` : ''}`, undefined, await localOwnerToken(await dockPaths()))
+}
+
+async function cloudConsumerConnection(paths) {
+  const raw = fs.existsSync(paths.configPath) ? await fsp.readFile(paths.configPath, 'utf8') : defaultLocalConfig(paths)
+  let config = {}
+  try { config = YAML.parse(raw) || {} } catch {}
+  const tokenPath = String(config.cloud_token_path || path.join(paths.dataDir, 'cloud-token.json')).trim()
+  let token = {}
+  try { token = JSON.parse(await fsp.readFile(tokenPath, 'utf8')) || {} } catch {}
+  const cloudURL = String(config.cloud_url || token.cloudUrl || '').trim().replace(/\/$/, '')
+  if (!cloudURL) throw new Error('Exora Cloud is not configured')
+  return { cloudURL }
+}
+
+async function configuredCloudURL(paths, state = {}) {
+  let config = {}
+  try {
+    const raw = fs.existsSync(paths.configPath) ? await fsp.readFile(paths.configPath, 'utf8') : ''
+    config = raw ? YAML.parse(raw) || {} : {}
+  } catch {}
+  return String(config.cloud_url || state.cloudAuth?.cloudURL || '').trim()
+}
+
+async function ensureDockLink({ paths, state, cloudURL, token, account, installationID }) {
+  await ensureLocalLayout(paths)
+  let config = {}
+  try { config = YAML.parse(await fsp.readFile(paths.configPath, 'utf8')) || {} } catch {}
+  if (!config || typeof config !== 'object' || Array.isArray(config)) config = {}
+  const tokenPath = String(config.cloud_token_path || path.join(paths.dataDir, 'cloud-token.json')).trim()
+  let dockID = String(state.dockId || '').trim()
+  if (!dockID) {
+    dockID = `dock_${String(installationID || crypto.randomUUID()).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 96)}`
+    state.dockId = dockID
+    await writeDesktopState(paths, state)
+  }
+  const existing = objectOr(await readJsonOr(tokenPath, {}))
+  if (
+    String(existing.accountId || '') === account.accountId &&
+    String(existing.dockId || '') === dockID &&
+    String(existing.cloudUrl || '').replace(/\/$/, '') === cloudURL &&
+    String(existing.cloudToken || '').trim()
+  ) {
+    try {
+      await cloudAbsoluteJSON(cloudURL, 'POST', `/v1/docks/${encodeURIComponent(dockID)}/heartbeat`, {}, existing.cloudToken)
+      return { linked: true, dockId: dockID, accountId: account.accountId }
+    } catch (error) {
+      if (Number(error?.status || 0) !== 401) throw error
+    }
+  }
+
+  const link = await cloudAbsoluteJSON(cloudURL, 'POST', '/v1/device-links', {
+    dockId: dockID,
+    clientKind: 'electron',
+    displayName: String(app.getName() || 'Exora Dock'),
+    mode: 'hybrid',
+    version: String(app.getVersion() || ''),
+    capabilities: ['electron.shell', 'typed.wake-jobs', 'local.payment-pin'],
+  })
+  await cloudAbsoluteJSON(cloudURL, 'POST', '/v1/device-links/confirm', { userCode: link.userCode }, token)
+  const exchanged = await cloudAbsoluteJSON(cloudURL, 'POST', '/v1/device-links/token', { deviceCode: link.deviceCode })
+  if (!String(exchanged.cloudToken || '').trim()) throw new Error('Cloud device link did not return a Dock token.')
+  await writeJsonAtomic(tokenPath, {
+    dockId: dockID,
+    accountId: account.accountId,
+    cloudUrl: cloudURL,
+    cloudToken: exchanged.cloudToken,
+    linkedAt: new Date().toISOString(),
+  })
+  await fsp.chmod(tokenPath, 0o600).catch(() => undefined)
+  const configChanged = String(config.cloud_url || '').trim() !== cloudURL || String(config.dock_id || '').trim() !== dockID || String(config.cloud_token_path || '').trim() !== tokenPath
+  config.cloud_url = cloudURL
+  config.dock_id = dockID
+  config.cloud_token_path = tokenPath
+  if (configChanged) await fsp.writeFile(paths.configPath, ensureTrailingNewline(YAML.stringify(config)))
+  await restart_dock()
+  return { linked: true, dockId: dockID, accountId: account.accountId }
+}
+
+async function clearDockLink(paths) {
+  let config = {}
+  try { config = YAML.parse(await fsp.readFile(paths.configPath, 'utf8')) || {} } catch {}
+  const tokenPath = String(config.cloud_token_path || path.join(paths.dataDir, 'cloud-token.json')).trim()
+  await fsp.rm(tokenPath, { force: true }).catch(() => undefined)
+  await stopTrackedDaemon(paths).catch(() => undefined)
+}
+
+async function cloudAbsoluteJSON(cloudURL, method, route, body, token = '', timeoutMs = 15000) {
+  const response = await fetchWithTimeout(`${String(cloudURL).replace(/\/$/, '')}${route}`, {
+    method,
+    headers: {
+      Accept: 'application/json',
+      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    redirect: 'error',
+    cache: 'no-store',
+  }, timeoutMs)
+  const text = await response.text()
+  let decoded = {}
+  try { decoded = text.trim() ? JSON.parse(text) : {} } catch { decoded = { error: text } }
+  if (!response.ok) {
+    const error = new Error(String(decoded?.error || `Exora Cloud returned ${response.status}`))
+    error.status = response.status
+    error.code = decoded?.code || `cloud_http_${response.status}`
+    throw error
+  }
+  return decoded
+}
+
+async function storedAccountKey(paths) {
+  if (sessionAccountKey) return sessionAccountKey
+  const state = await readDesktopState(paths)
+  const record = state.accountKey || {}
+  if (record.keyStorage !== 'safeStorage' || !record.encryptedKey || !safeStorage.isEncryptionAvailable()) return ''
+  try { return safeStorage.decryptString(Buffer.from(String(record.encryptedKey), 'base64')) } catch { return '' }
+}
+
+async function cloudConsumerJson(method, route, body, explicitKey = '') {
+  const connection = await cloudAuth.connection()
+  const key = String(explicitKey || connection.token).trim()
+  if (!key) throw new Error('Sign in to Exora Cloud before purchasing or invoking a product.')
+  const { cloudURL } = connection
+  const response = await fetchWithTimeout(`${cloudURL}${route}`, {
+    method,
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    redirect: 'error',
+    cache: 'no-store',
+  }, 180000)
+  const text = await response.text()
+  let decoded = {}
+  try { decoded = text.trim() ? JSON.parse(text) : {} } catch { decoded = { error: text } }
+  if (!response.ok) {
+    if (response.status === 401 && !explicitKey) await cloudAuth.unauthorized()
+    throw new Error(`Exora Cloud returned ${response.status}: ${String(decoded?.error || text || response.statusText)}`)
+  }
+  return decoded
+}
+
+async function account_key_status() {
+  const paths = await dockPaths()
+  const state = await readDesktopState(paths)
+  const record = state.accountKey || {}
+  const secureConfigured = Boolean(record.encryptedKey && record.keyStorage === 'safeStorage' && safeStorage.isEncryptionAvailable())
+  const configured = Boolean(sessionAccountKey || secureConfigured)
+  return {
+    configured,
+    maskedKey: sessionAccountKey ? `exa_...${sessionAccountKey.slice(-6)}` : secureConfigured ? String(record.maskedKey || 'exa_...') : '',
+    savedAt: sessionAccountKey ? undefined : record.savedAt,
+    keyStorageAvailable: safeStorage.isEncryptionAvailable(),
+    storageMode: sessionAccountKey ? 'session' : secureConfigured ? 'safeStorage' : undefined,
+  }
+}
+
+async function account_key_save() {
+  const clipboardValue = clipboard.readText()
+  const key = String(clipboardValue || '').trim()
+  if (!/^exa_[a-f0-9]{64}$/i.test(key)) throw new Error('Clipboard does not contain a valid exa_ account key.')
+  const balance = await cloudConsumerJson('GET', '/v3/account/balance', undefined, key)
+  const paths = await dockPaths()
+  sessionAccountKey = ''
+  if (safeStorage.isEncryptionAvailable()) {
+    const state = await readDesktopState(paths)
+    state.accountKey = {
+      encryptedKey: safeStorage.encryptString(key).toString('base64'),
+      keyStorage: 'safeStorage',
+      maskedKey: `exa_...${key.slice(-6)}`,
+      savedAt: new Date().toISOString(),
+    }
+    await writeDesktopState(paths, state)
+  } else {
+    sessionAccountKey = key
+  }
+  if (clipboardValue.trim() === key) clipboard.clear()
+  return { ...(await account_key_status()), balance: balance.balance }
+}
+
+async function account_key_delete() {
+  sessionAccountKey = ''
+  const paths = await dockPaths()
+  const state = await readDesktopState(paths)
+  delete state.accountKey
+  await writeDesktopState(paths, state)
+  return { configured: false, maskedKey: '', keyStorageAvailable: safeStorage.isEncryptionAvailable() }
+}
+
+async function consumer_account_balance() { return cloudConsumerJson('GET', '/v3/account/balance') }
+async function consumer_purchase_estimate(payload = {}) { return cloudConsumerJson('POST', '/v3/purchase-estimates', payload.input || {}) }
+async function consumer_invoke_operation(payload = {}) { return cloudConsumerJson('POST', '/v3/invocations', payload.input || {}) }
+async function consumer_purchase_download(payload = {}) { return cloudConsumerJson('POST', '/v3/download-grants', payload.input || {}) }
+async function consumer_create_transfer(payload = {}) {
+  const input = payload.input || {}
+  const grantId = String(input.grantId || '').trim()
+  if (!grantId) throw new Error('grantId is required')
+  const response = await cloudConsumerJson('POST', `/v3/download-grants/${encodeURIComponent(grantId)}/transfers`, {})
+  if (input.download !== false && response?.transfer?.url) {
+    response.download = await downloadConsumerTransfer(response)
+  }
+  if (response?.transfer) delete response.transfer.url
+  return response
+}
+
+async function downloadConsumerTransfer(response) {
+  const file = response.file || {}
+  const suggestedName = path.basename(String(file.fileName || 'exora-download.bin'))
+  const selected = await dialog.showSaveDialog(mainWindow, { title: 'Save Exora download', defaultPath: suggestedName })
+  if (selected.canceled || !selected.filePath) return { status: 'canceled' }
+  const destination = path.resolve(selected.filePath)
+  const partial = `${destination}.exora.part`
+  const expectedSize = Math.max(0, Number(file.sizeBytes || 0))
+  let offset = 0
+  try { offset = Math.max(0, Number((await fsp.stat(partial)).size || 0)) } catch {}
+  if (expectedSize > 0 && offset > expectedSize) {
+    await fsp.truncate(partial, 0)
+    offset = 0
+  }
+  const headers = offset > 0 ? { Range: `bytes=${offset}-` } : {}
+  const transferResponse = await fetchWithTimeout(String(response.transfer.url), { method: 'GET', headers, redirect: 'error', cache: 'no-store' }, 30 * 60 * 1000)
+  if (!transferResponse.ok && transferResponse.status !== 206) throw new Error(`Download transfer returned ${transferResponse.status}`)
+  if (offset > 0 && transferResponse.status !== 206) {
+    await fsp.truncate(partial, 0)
+    offset = 0
+  }
+  const handle = await fsp.open(partial, offset > 0 ? 'a' : 'w')
+  let downloaded = offset
+  try {
+    const reader = transferResponse.body?.getReader()
+    if (!reader) throw new Error('Download response has no body')
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      await handle.write(Buffer.from(value))
+      downloaded += value.byteLength
+      mainWindow?.webContents.send('exora:v3-progress', { kind: 'marketplace_download', phase: 'downloading', bytesDownloaded: downloaded, sizeBytes: expectedSize })
+    }
+  } finally {
+    await handle.close()
+  }
+  mainWindow?.webContents.send('exora:v3-progress', { kind: 'marketplace_download', phase: 'verifying', bytesDownloaded: downloaded, sizeBytes: expectedSize })
+  if (expectedSize > 0 && downloaded !== expectedSize) throw new Error(`Downloaded size ${downloaded} does not match expected size ${expectedSize}`)
+  const hash = crypto.createHash('sha256')
+  await new Promise((resolve, reject) => {
+    const stream = fs.createReadStream(partial)
+    stream.on('data', (chunk) => hash.update(chunk))
+    stream.on('error', reject)
+    stream.on('end', resolve)
+  })
+  const actualSHA256 = hash.digest('hex')
+  const expectedSHA256 = String(file.sha256 || '').trim().toLowerCase()
+  if (expectedSHA256 && actualSHA256 !== expectedSHA256) throw new Error('Downloaded file failed SHA-256 verification; the resumable partial file was retained.')
+  await fsp.rm(destination, { force: true })
+  await fsp.rename(partial, destination)
+  mainWindow?.webContents.send('exora:v3-progress', { kind: 'marketplace_download', phase: 'complete', bytesDownloaded: downloaded, sizeBytes: expectedSize })
+  return { status: 'complete', fileName: path.basename(destination), sizeBytes: downloaded, sha256: actualSHA256, resumedFromBytes: offset }
+}
+async function consumer_purchase_compute(payload = {}) { return cloudConsumerJson('POST', '/v3/compute-purchases', payload.input || {}) }
+async function consumer_compute_purchase(payload = {}) { return cloudConsumerJson('GET', `/v3/compute-purchases/${encodeURIComponent(String(payload?.input?.purchaseId || ''))}`) }
+async function consumer_extend_compute(payload = {}) { const input = { ...(payload.input || {}) }; const purchaseId = String(input.purchaseId || ''); delete input.purchaseId; return cloudConsumerJson('POST', `/v3/compute-purchases/${encodeURIComponent(purchaseId)}/extend`, input) }
+async function consumer_get_lease(payload = {}) { return cloudConsumerJson('GET', `/v3/leases/${encodeURIComponent(String(payload?.input?.leaseId || ''))}`) }
+async function consumer_release_lease(payload = {}) { return cloudConsumerJson('POST', `/v3/leases/${encodeURIComponent(String(payload?.input?.leaseId || ''))}/release`, {}) }
 
 async function activity_sessions(payload = {}) {
   const input = payload?.input || {}

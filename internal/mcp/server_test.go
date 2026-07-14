@@ -34,13 +34,19 @@ func TestMCPInitializeAndToolsList(t *testing.T) {
 	listResp := responseMap(t, server.HandleJSON(context.Background(), []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)))
 	listResult := listResp["result"].(map[string]any)
 	tools := listResult["tools"].([]any)
-	if len(tools) != len(V2ToolNames()) {
-		t.Fatalf("tools len = %d, want %d", len(tools), len(V2ToolNames()))
+	if len(tools) != len(V2ToolNames())+len(marketplaceToolNames) {
+		t.Fatalf("tools len = %d, want %d", len(tools), len(V2ToolNames())+len(marketplaceToolNames))
 	}
-	for index, raw := range tools {
+	for index, raw := range tools[:len(V2ToolNames())] {
 		tool := raw.(map[string]any)
 		if tool["name"] != V2ToolNames()[index] {
 			t.Fatalf("tool %d = %#v, want %s", index, tool, V2ToolNames()[index])
+		}
+	}
+	toolsJSON := mustJSON(t, tools)
+	for _, name := range []string{"exora.search_products", "exora.estimate_purchase", "exora.purchase_compute_minutes", "exora.purchase_download", "exora.invoke_operation", "exora.get_usage"} {
+		if !strings.Contains(toolsJSON, name) {
+			t.Fatalf("default tools missing %s", name)
 		}
 	}
 	claim := responseMap(t, server.HandleJSON(context.Background(), []byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"exora.claim_run","arguments":{"runId":"run-1"}}}`)))
@@ -54,7 +60,7 @@ func TestMCPLegacyMarketToolsRequireExplicitOptIn(t *testing.T) {
 	listed := responseMap(t, server.HandleJSON(context.Background(), []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)))
 	tools := listed["result"].(map[string]any)["tools"].([]any)
 	toolsJSON := mustJSON(t, tools)
-	if len(tools) != 28 || !strings.Contains(toolsJSON, "exora.search_offers") || !strings.Contains(toolsJSON, "exora.run_buyer_work") || !strings.Contains(toolsJSON, "exora.save_api_bridge_draft") || !strings.Contains(toolsJSON, "exora.invoke_api_bridge") {
+	if len(tools) != 39 || !strings.Contains(toolsJSON, "exora.search_products") || !strings.Contains(toolsJSON, "exora.purchase_compute_minutes") || !strings.Contains(toolsJSON, "exora.purchase_download") || !strings.Contains(toolsJSON, "exora.invoke_operation") || !strings.Contains(toolsJSON, "exora.search_offers") || !strings.Contains(toolsJSON, "exora.run_buyer_work") || !strings.Contains(toolsJSON, "exora.save_api_bridge_draft") || !strings.Contains(toolsJSON, "exora.invoke_api_bridge") {
 		t.Fatalf("legacy tools = %#v", tools)
 	}
 }
@@ -136,6 +142,43 @@ func TestMCPFindSellersProxiesNaturalLanguageSearch(t *testing.T) {
 	}
 	if !strings.Contains(mustJSON(t, result["structuredContent"]), "provider-1") {
 		t.Fatalf("structured content = %#v", result["structuredContent"])
+	}
+}
+
+func TestMCPAPIBridgeUsesCanonicalStrictInvocation(t *testing.T) {
+	calls := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+			return
+		}
+		calls++
+		if r.URL.Path != "/v3/invocations" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["idempotencyKey"] != "invoke-one" || body["maxChargeAtomic"] != float64(500) {
+			t.Fatalf("body=%#v", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"invocation":{"status":"completed"}}`))
+	}))
+	defer ts.Close()
+	server := NewServer(Options{BaseURL: ts.URL, AgentToken: "agent", LegacyMarket: true})
+	missing := responseMap(t, server.HandleJSON(context.Background(), []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"exora.invoke_api_bridge","arguments":{"listingId":"lst","operationId":"op"}}}`)))
+	if !strings.Contains(mustJSON(t, missing), "idempotencyKey") {
+		t.Fatalf("missing validation=%#v", missing)
+	}
+	response := responseMap(t, server.HandleJSON(context.Background(), []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"exora.invoke_api_bridge","arguments":{"listingId":"lst","operationId":"op","idempotencyKey":"invoke-one","maxChargeAtomic":500}}}`)))
+	if strings.Contains(mustJSON(t, response), `"isError":true`) {
+		t.Fatalf("response=%#v", response)
+	}
+	if calls != 1 {
+		t.Fatalf("calls=%d", calls)
 	}
 }
 

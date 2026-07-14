@@ -62,6 +62,26 @@ func (h *Handler) V3CatalogProduct(w http.ResponseWriter, r *http.Request) {
 	h.v3CloudProxy(w, r, http.MethodGet, "/v3/catalog/products/"+r.PathValue("id"), nil)
 }
 
+func (h *Handler) V3ConsumerProxy(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	if r.URL.RawQuery != "" {
+		path += "?" + r.URL.RawQuery
+	}
+	var body any
+	if r.Method != http.MethodGet && r.Method != http.MethodDelete {
+		raw, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+		if err != nil {
+			writeJSON(w, 400, map[string]string{"error": err.Error()})
+			return
+		}
+		if len(raw) > 0 && json.Unmarshal(raw, &body) != nil {
+			writeJSON(w, 400, map[string]string{"error": "invalid JSON"})
+			return
+		}
+	}
+	h.v3CloudProxy(w, r, r.Method, path, body)
+}
+
 func (h *Handler) V3ActivitySessions(w http.ResponseWriter, r *http.Request) {
 	path := "/v3/activity-sessions"
 	if r.URL.RawQuery != "" {
