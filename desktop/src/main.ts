@@ -1,4 +1,5 @@
 import { invoke } from './bridge'
+import { createAuthGate, type CloudAuthAccount, type CloudAuthState } from './auth-ui'
 import {
   htmlLangForLanguage,
   initialI18nLanguage,
@@ -27,7 +28,6 @@ import {
   Inbox,
   KeyRound,
   Languages,
-  ListFilter,
   LogOut,
   Maximize2,
   MessagesSquare,
@@ -50,6 +50,7 @@ import {
   ShoppingBag,
   ShoppingCart,
   SquareKanban,
+  Wallet,
   WalletCards,
   X,
   type IconNode,
@@ -195,6 +196,14 @@ type V3ListingApplication = {
   readiness: { ready: boolean; checks: V3ReadinessCheck[] }
   runtime?: { tunnelOnline: boolean; endpointHealthy: boolean; lastSeenAt?: string; routeFingerprint?: string; error?: string }
 }
+type V3CatalogListing = {
+  listing: V3Listing
+  productManifest: V3Product
+  availability?: Record<string, unknown>
+  ownerMetadata?: { providerDockId?: string; isOwner?: boolean }
+}
+type V3AccountKeyStatus = { configured: boolean; maskedKey?: string; savedAt?: string; keyStorageAvailable: boolean; storageMode?: 'safeStorage' | 'session' }
+type V3ConsumerBalance = { accountId?: string; asset: string; availableAtomic: number; reservedAtomic: number; pendingAtomic: number }
 type V3LocalEndpoint = { endpointId: string; localBaseUrl: string; healthPath: string; routeFingerprint: string; lastProbeHealthy: boolean; lastProbeAt?: string; timeoutSeconds: number; concurrency: number }
 
 type V3ActivitySession = {
@@ -255,7 +264,8 @@ type V3APIRoute = { id: string; routeId: string; operationId: string; method: st
 type V3APIMaterial = { id: string; name: string; extension: string; sizeBytes: number; localPath: string; sha256?: string }
 type V3APIBridgeDraft = { draftId: string; version: number; status: string; bridgeMode?: 'transparent' | 'dock_tunnel'; title: string; description: string; protocol: V3APIBridgeProtocol; baseUrl: string; healthPath: string; routes: Array<{ routeId: string; operationId: string; method: string; path: string; displayName: string; pricing: V3APIPricingComponent[]; maxChargePerInvocationAtomic: number }>; agentNotes?: string; unresolvedFields?: string[] }
 type V3APIProbe = { ok: boolean; status?: number; latencyMs?: number; contentType?: string; checkedURL?: string; checkedAt?: string; error?: string }
-type SettingsView = 'wallet' | 'archives'
+type SettingsView = 'archives'
+type WalletPanel = 'receive' | 'withdraw' | 'key'
 type AppTheme = 'light' | 'dark'
 type LLMTestStatus = 'passed' | 'failed'
 type ProfileSubmenu = 'language' | 'theme'
@@ -796,6 +806,22 @@ type WalletStatus = {
   feePolicy?: { currency?: string; relayFeeAtomic?: number; relayFeeDescription?: string; gasPaidBy?: string }
 }
 
+type WalletWithdrawal = {
+  fromAddress?: string
+  toAddress?: string
+  amountAtomic?: number
+  currency?: string
+  decimals?: number
+  signature?: string
+  status?: string
+}
+
+type WalletWithdrawalResponse = {
+  withdrawal?: WalletWithdrawal
+  nextAction?: string
+  feePolicy?: WalletStatus['feePolicy']
+}
+
 const app = document.querySelector<HTMLDivElement>('#app')!
 const isMacPlatform = /Mac|iPhone|iPad|iPod/.test(navigator.platform)
 const TOP_WINDOW_DRAG_HEIGHT = 64
@@ -969,7 +995,6 @@ const windowIcons = {
 
 const toolbarIcons = {
   search: icon(Search),
-  filter: icon(ListFilter),
   copy: icon(Copy),
   send: icon(SendHorizontal),
   sidebarExpanded: icon(PanelLeftClose),
@@ -995,11 +1020,13 @@ const roleTabIcons: Record<OrderSide, string> = {
 }
 
 const profileIcons = {
+  wallet: icon(Wallet),
   settings: icon(Settings2),
 }
 
+const walletSurfaceIcon = icon(WalletCards)
+
 const settingsNavIcons: Record<SettingsView, string> = {
-  wallet: icon(WalletCards),
   archives: icon(Archive),
 }
 const localAgentIcon = icon(Network)
@@ -1007,6 +1034,7 @@ const localAgentIcon = icon(Network)
 const profileMenuIcons = {
   language: icon(Languages),
   theme: icon(Moon),
+  pin: icon(KeyRound),
   logout: icon(LogOut),
 }
 
@@ -1228,10 +1256,6 @@ app.innerHTML = `
       <div class="project-folder-menu hidden" data-project-folder-menu role="menu" aria-label="Project actions"></div>
       <div class="task-context-menu hidden" data-task-context-menu role="menu" aria-label="Task actions"></div>
       <div class="sidebar-section-head">
-        <div class="sidebar-section-title">
-          <span data-sidebar-title>Transactions</span>
-          <strong data-ledger-count>0</strong>
-        </div>
         <button class="new-chat-button" type="button" data-action="new-chat" aria-label="Start transaction" title="Start transaction">${toolbarIcons.plus}</button>
       </div>
       <div class="ledger-list" data-ledger-list>
@@ -1243,6 +1267,7 @@ app.innerHTML = `
           <span class="profile-name" data-profile-name>Exora User</span>
         </button>
         <div class="profile-actions">
+          <button class="profile-icon-button" type="button" data-action="open-wallet" aria-label="Open wallet" title="Wallet">${profileIcons.wallet}</button>
           <button class="profile-icon-button" type="button" data-action="open-api-settings" aria-label="Open settings" title="Settings">${profileIcons.settings}</button>
         </div>
         <div class="profile-menu hidden" data-profile-menu role="menu" aria-label="Account menu"></div>
@@ -1294,39 +1319,125 @@ app.innerHTML = `
 
       <section class="workspace-view settings-view hidden" data-view-panel="settings">
         <section class="settings-detail">
-          <section class="settings-page hidden" data-settings-page="wallet">
-            <div class="settings-section">
-              <div class="section-title">
-                <strong>USDC receive wallet</strong>
-                <span data-wallet-state>checking</span>
-              </div>
-              <p class="muted">Your Exora account wallet receives USDC on Solana.</p>
-              <div class="wallet-receive wallet-dashboard settings-qr-layout" data-wallet-receive>
-                <div class="wallet-visual">
-                  <div class="wallet-qr settings-qr-frame" data-wallet-qr><span>QR</span></div>
-                  <div class="wallet-token-row">
-                    <span>USDC</span>
-                    <span>Solana</span>
+          <div class="wallet-modal hidden" data-wallet-modal aria-hidden="true">
+            <button class="wallet-modal-scrim" type="button" data-action="close-wallet" aria-label="Close wallet"></button>
+            <section class="wallet-modal-panel" role="dialog" aria-modal="true" aria-labelledby="wallet-modal-title">
+              <header class="wallet-modal-head">
+                <div class="wallet-modal-head-copy">
+                  <span class="wallet-modal-head-mark" aria-hidden="true">${profileIcons.wallet}</span>
+                  <div>
+                    <p class="eyebrow">Exora Wallet</p>
+                    <h2 id="wallet-modal-title">Wallet</h2>
+                    <span>Balance, transfers, receive address, and secure account access.</span>
                   </div>
                 </div>
-                <div class="wallet-details settings-qr-details">
-                  <dl class="wallet-metadata settings-qr-meta">
-                    <div><dt>Asset</dt><dd>USDC</dd></div>
-                    <div><dt>Network</dt><dd>Solana</dd></div>
-                    <div><dt>Custody</dt><dd>Account wallet</dd></div>
-                  </dl>
-                  <div class="wallet-address-card">
-                    <span>Deposit address</span>
-                    <code data-wallet-address>not configured</code>
-                  </div>
-                  <div class="settings-actions two-col wallet-actions">
-                    <button type="button" data-action="wallet-copy-address">${toolbarIcons.copy}<span>Copy Address</span></button>
-                    <button class="secondary" type="button" data-action="wallet-refresh">${toolbarIcons.refresh}<span>Refresh</span></button>
-                  </div>
+                <button class="wallet-modal-close" type="button" data-action="close-wallet" aria-label="Close wallet" title="Close">${windowIcons.close}</button>
+              </header>
+              <div class="wallet-modal-content">
+          <section class="wallet-page">
+            <div class="wallet-shell">
+              <section class="wallet-balance-card" aria-label="Wallet balance">
+                <div class="wallet-balance-topline">
+                  <span class="wallet-balance-caption"><i aria-hidden="true"></i>Account balance</span>
+                  <button class="wallet-refresh-button" type="button" data-action="wallet-refresh" aria-label="Refresh wallet" title="Refresh wallet">${toolbarIcons.refresh}</button>
                 </div>
+                <div class="wallet-balance-main">
+                  <span>Available USDC</span>
+                  <div><strong data-wallet-balance>0.00</strong><em>USDC</em></div>
+                  <small data-wallet-balance-status>Syncing wallet</small>
+                </div>
+                <div class="wallet-balance-footer">
+                  <div>
+                    <span>Account wallet</span>
+                    <code data-wallet-address-short>Not configured</code>
+                  </div>
+                  <span class="wallet-network-badge"><i aria-hidden="true"></i>Solana</span>
+                </div>
+                <nav class="wallet-panel-tabs" role="tablist" aria-label="Wallet tools">
+                  <button class="wallet-panel-tab active" id="wallet-tab-receive" type="button" role="tab" aria-selected="true" aria-controls="wallet-panel-receive" data-wallet-tab="receive">
+                    <span class="wallet-panel-icon">${walletSurfaceIcon}</span>
+                    <span><strong>Receive</strong><small>QR and address</small></span>
+                    <em class="wallet-status-pill" data-wallet-state>checking</em>
+                  </button>
+                  <button class="wallet-panel-tab" id="wallet-tab-withdraw" type="button" role="tab" aria-selected="false" aria-controls="wallet-panel-withdraw" data-wallet-tab="withdraw">
+                    <span class="wallet-panel-icon wallet-panel-icon-send">${toolbarIcons.forward}</span>
+                    <span><strong>Withdraw</strong><small>Send to a wallet</small></span>
+                  </button>
+                  <button class="wallet-panel-tab" id="wallet-tab-key" type="button" role="tab" aria-selected="false" aria-controls="wallet-panel-key" data-wallet-tab="key">
+                    <span class="wallet-panel-icon wallet-panel-icon-key">${icon(KeyRound)}</span>
+                    <span><strong>Account key</strong><small>Cloud access</small></span>
+                    <em class="wallet-status-pill" data-account-key-state>checking</em>
+                  </button>
+                </nav>
+              </section>
+
+              <div class="wallet-panel-stage">
+                <section class="wallet-panel wallet-receive-panel" id="wallet-panel-receive" role="tabpanel" aria-labelledby="wallet-tab-receive" data-wallet-panel="receive" data-wallet-receive>
+                  <div class="wallet-receive-body">
+                    <div class="wallet-qr" data-wallet-qr><span>QR</span></div>
+                  </div>
+                  <div class="wallet-receive-details">
+                    <div class="wallet-receive-meta">
+                      <span>Solana · USDC</span>
+                      <p>Only send USDC on Solana to this address.</p>
+                    </div>
+                    <div class="wallet-address-row">
+                      <div><span>Deposit address</span><code data-wallet-address>not configured</code></div>
+                      <button type="button" data-action="wallet-copy-address" aria-label="Copy wallet address" title="Copy address">${toolbarIcons.copy}</button>
+                    </div>
+                  </div>
+                </section>
+
+                  <section class="wallet-panel wallet-withdraw-panel hidden" id="wallet-panel-withdraw" role="tabpanel" aria-labelledby="wallet-tab-withdraw" data-wallet-panel="withdraw">
+                    <form class="wallet-withdraw-form" data-wallet-withdraw-form>
+                      <label class="wallet-field wallet-destination-field">
+                        <span>Destination address</span>
+                        <input name="toAddress" type="text" spellcheck="false" autocomplete="off" placeholder="Solana address" required />
+                      </label>
+                      <div class="wallet-withdraw-fields">
+                        <label class="wallet-field wallet-amount-field">
+                          <span>Amount</span>
+                          <div><input name="amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" required /><button type="button" data-action="wallet-withdraw-max">Max</button></div>
+                        </label>
+                        <label class="wallet-field">
+                          <span>Payment PIN</span>
+                          <span class="wallet-pin-control" data-wallet-pin-control>
+                            <input name="paymentPin" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="6" aria-label="Six digit payment PIN" required />
+                            <span class="wallet-pin-cells" aria-hidden="true">
+                              <i></i><i></i><i></i><i></i><i></i><i></i>
+                            </span>
+                          </span>
+                        </label>
+                      </div>
+                      <div class="wallet-withdraw-footer">
+                        <small data-wallet-fee-note>Network fees are covered by Exora.</small>
+                        <button type="submit" data-wallet-withdraw-submit>Authorize withdrawal</button>
+                      </div>
+                    </form>
+                    <div class="wallet-withdraw-status hidden" data-wallet-withdraw-status aria-live="polite"></div>
+                  </section>
+
+                  <section class="wallet-panel wallet-key-panel account-key-section hidden" id="wallet-panel-key" role="tabpanel" aria-labelledby="wallet-tab-key" data-wallet-panel="key" data-account-key-section>
+                    <div class="account-key-status" data-account-key-status></div>
+                    <div class="account-key-form">
+                      <p>Copy an <code>exa_...</code> key first. Validation happens inside the secure main process and the raw key never enters this page.</p>
+                      <div class="wallet-key-actions">
+                        <button type="button" data-account-key-save>Validate from clipboard</button>
+                        <button class="secondary danger" type="button" data-account-key-delete>Delete key</button>
+                      </div>
+                    </div>
+                    <p class="account-key-storage-note" data-account-key-storage-note></p>
+                  </section>
               </div>
             </div>
           </section>
+              </div>
+              <footer class="wallet-modal-footer">
+                <span>USDC on Solana · Account wallet</span>
+                <span><kbd>Esc</kbd> to close</span>
+              </footer>
+            </section>
+          </div>
 
           <section class="settings-page hidden" data-settings-page="archives">
             <div class="settings-section archive-records-section" data-archive-records>
@@ -1417,6 +1528,11 @@ app.innerHTML = `
   </main>
 `
 
+// The wallet markup lives beside the settings markup for template readability,
+// but renders as a root-level modal so it is independent from every workspace view.
+const walletModalRoot = app.querySelector<HTMLElement>('[data-wallet-modal]')!
+app.querySelector<HTMLElement>('.app-shell')!.append(walletModalRoot)
+
 const fields = {
   appShell: app.querySelector<HTMLElement>('.app-shell')!,
   taskSidebar: app.querySelector<HTMLElement>('.task-sidebar')!,
@@ -1429,6 +1545,12 @@ const fields = {
   profileAvatar: app.querySelector<HTMLElement>('[data-profile-avatar]')!,
   profileName: app.querySelector<HTMLElement>('[data-profile-name]')!,
   profileMenu: app.querySelector<HTMLElement>('[data-profile-menu]')!,
+  walletButton: app.querySelector<HTMLButtonElement>('[data-action="open-wallet"]')!,
+  walletModal: app.querySelector<HTMLElement>('[data-wallet-modal]')!,
+  walletModalPanel: app.querySelector<HTMLElement>('.wallet-modal-panel')!,
+  walletPanelTabs: Array.from(app.querySelectorAll<HTMLButtonElement>('[data-wallet-tab]')),
+  walletPanels: Array.from(app.querySelectorAll<HTMLElement>('[data-wallet-panel]')),
+  settingsButton: app.querySelector<HTMLButtonElement>('[data-action="open-api-settings"]')!,
   projectFolderHead: app.querySelector<HTMLElement>('[data-project-folder-head]')!,
   projectFolderToggle: app.querySelector<HTMLButtonElement>('[data-action="toggle-project-folder"]')!,
   projectFolderName: app.querySelector<HTMLElement>('[data-project-folder-name]')!,
@@ -1440,9 +1562,7 @@ const fields = {
   orderRoleRow: app.querySelector<HTMLElement>('.order-role-row')!,
   folderPickerButton: app.querySelector<HTMLButtonElement>('[data-action="choose-folder"]')!,
   sidebarSectionHead: app.querySelector<HTMLElement>('.sidebar-section-head')!,
-  sidebarTitle: app.querySelector<HTMLElement>('[data-sidebar-title]')!,
   ledgerList: app.querySelector<HTMLElement>('[data-ledger-list]')!,
-  ledgerCount: app.querySelector<HTMLElement>('[data-ledger-count]')!,
   newChatButton: app.querySelector<HTMLButtonElement>('[data-action="new-chat"]')!,
   settingsReturnButton: app.querySelector<HTMLButtonElement>('[data-action="return-from-settings"]')!,
   externalWorkLock: app.querySelector<HTMLElement>('[data-external-work-lock]')!,
@@ -1495,7 +1615,17 @@ const fields = {
   walletReceive: app.querySelector<HTMLElement>('[data-wallet-receive]')!,
   walletQR: app.querySelector<HTMLElement>('[data-wallet-qr]')!,
   walletAddress: app.querySelector<HTMLElement>('[data-wallet-address]')!,
+  walletAddressShort: app.querySelector<HTMLElement>('[data-wallet-address-short]')!,
+  walletBalance: app.querySelector<HTMLElement>('[data-wallet-balance]')!,
+  walletBalanceStatus: app.querySelector<HTMLElement>('[data-wallet-balance-status]')!,
+  walletFeeNote: app.querySelector<HTMLElement>('[data-wallet-fee-note]')!,
   walletCopyButton: app.querySelector<HTMLButtonElement>('[data-action="wallet-copy-address"]')!,
+  walletWithdrawForm: app.querySelector<HTMLFormElement>('[data-wallet-withdraw-form]')!,
+  walletPinControl: app.querySelector<HTMLElement>('[data-wallet-pin-control]')!,
+  walletPinInput: app.querySelector<HTMLInputElement>('input[name="paymentPin"]')!,
+  walletPinCells: Array.from(app.querySelectorAll<HTMLElement>('.wallet-pin-cells > i')),
+  walletWithdrawButton: app.querySelector<HTMLButtonElement>('[data-wallet-withdraw-submit]')!,
+  walletWithdrawStatus: app.querySelector<HTMLElement>('[data-wallet-withdraw-status]')!,
   archiveRecords: app.querySelector<HTMLElement>('[data-archive-records]')!,
 }
 
@@ -1512,7 +1642,12 @@ fields.sellerSurfaceTabs.addEventListener('click', (event) => {
   event.preventDefault()
   event.stopPropagation()
   const nextTab = button.dataset.v3SellerTab as V3SellerTab
-  if (!nextTab || nextTab === state.v3SellerTab) return
+  if (!nextTab) return
+  state.selectedV3ActivitySessionId = undefined
+  state.v3ActivityDetail = undefined
+  state.v3ActivityDetailError = undefined
+  state.v3ActivityDetailLoading = false
+  if (nextTab === state.v3SellerTab) { renderDecisionPanel(); return }
   state.v3SellerTab = nextTab
   renderDecisionPanel()
   fields.actionView.scrollTop = 0
@@ -1693,6 +1828,7 @@ const state: {
   permissionMenuOpen: boolean
   permissionMode: PermissionMode
   signedOut: boolean
+  authAccount?: CloudAuthAccount
   language: AppLanguage
   theme: AppTheme
   orderPlans: OrderPlan[]
@@ -1740,7 +1876,12 @@ const state: {
   localAgentSessions: Record<string, InteractiveAgentSession>
   chatAgentMenuOpen: boolean
   chatAgentConnecting: boolean
+  walletModalOpen: boolean
+  walletPanel: WalletPanel
   walletStatus?: WalletStatus
+  walletWithdrawal?: WalletWithdrawal
+  walletWithdrawalBusy: boolean
+  walletWithdrawalError?: string
   appStatus?: AppStatus
   projectFolder?: ProjectFolder
   projectFolders: ProjectFolder[]
@@ -1787,17 +1928,36 @@ const state: {
   statusLoading: boolean
   workspaceLoading: boolean
   v3Products: V3Product[]
+  v3CatalogListings: V3CatalogListing[]
   v3CatalogQuery: string
   v3CatalogLoading: boolean
   v3CatalogLoaded: boolean
   v3CatalogError?: string
   v3SelectedProduct?: V3Product
+  v3SelectedCatalogListingId?: string
+  v3ListingScopeFilter: 'all' | 'market' | 'mine'
+  v3ListingKindFilter: 'all' | 'compute' | 'download' | 'api_operation'
+  v3ListingStatusFilter: string
+  v3ListingQuery: string
+  v3ListingMode: 'buyer' | 'seller'
+  v3ConsumerMinutes: number
+  v3ConsumerOperationId: string
+  v3ConsumerRequestBody: string
+  v3ConsumerParameters: Record<string, string | boolean>
+  v3ConsumerResponse?: Record<string, any>
+  v3ConsumerBusy: boolean
+  v3ConsumerError?: string
+  v3ConsumerBalance?: V3ConsumerBalance
+  v3ConsumerGrant?: Record<string, any>
+  v3ConsumerTransferProgress?: { phase: string; bytesDownloaded: number; sizeBytes: number }
+  v3ConsumerPurchase?: Record<string, any>
+  v3ConsumerLease?: Record<string, any>
+  v3AccountKeyStatus?: V3AccountKeyStatus
+  v3AccountKeyLoaded: boolean
   v3ActivitySessions: Record<OrderSide, V3ActivitySession[]>
   v3ActivityLoaded: Record<OrderSide, boolean>
   v3ActivityLoading: Record<OrderSide, boolean>
   v3ActivityErrors: Partial<Record<OrderSide, string>>
-  v3ActivityKindFilter: 'all' | 'compute' | 'download' | 'api_operation'
-  v3ActivityStatusFilter: 'all' | 'active' | 'completed' | 'needs_attention'
   selectedV3ActivitySessionId?: string
   v3ActivityDetail?: V3ActivityDetail
   v3ActivityDetailLoading: boolean
@@ -1924,6 +2084,7 @@ const state: {
   permissionMenuOpen: false,
   permissionMode: storedPermissionMode(),
   signedOut: false,
+  authAccount: undefined,
   language: storedLanguage(),
   theme: storedTheme(),
   orderPlans: [],
@@ -1948,11 +2109,16 @@ const state: {
   sellerCardGeneration: undefined,
   cartOpen: false,
   llmTestStatus: undefined,
-  activeSettingsView: 'wallet',
+  activeSettingsView: 'archives',
   localAgents: [],
   localAgentSessions: {},
   chatAgentMenuOpen: false,
   chatAgentConnecting: false,
+  walletModalOpen: false,
+  walletPanel: 'receive',
+  walletWithdrawal: undefined,
+  walletWithdrawalBusy: false,
+  walletWithdrawalError: undefined,
   localAgentBinding: undefined,
   localAgentScanning: false,
   localAgentSnapshotLoaded: false,
@@ -1998,20 +2164,39 @@ const state: {
   statusLoading: false,
   workspaceLoading: false,
   v3Products: [],
+  v3CatalogListings: [],
   v3CatalogQuery: '',
   v3CatalogLoading: false,
   v3CatalogLoaded: false,
+  v3SelectedCatalogListingId: undefined,
+  v3ListingScopeFilter: 'all',
+  v3ListingKindFilter: 'all',
+  v3ListingStatusFilter: 'all',
+  v3ListingQuery: '',
+  v3ListingMode: 'buyer',
+  v3ConsumerMinutes: 10,
+  v3ConsumerOperationId: '',
+  v3ConsumerRequestBody: '{}',
+  v3ConsumerParameters: {},
+  v3ConsumerResponse: undefined,
+  v3ConsumerBusy: false,
+  v3ConsumerError: undefined,
+  v3ConsumerBalance: undefined,
+  v3ConsumerGrant: undefined,
+  v3ConsumerTransferProgress: undefined,
+  v3ConsumerPurchase: undefined,
+  v3ConsumerLease: undefined,
+  v3AccountKeyStatus: undefined,
+  v3AccountKeyLoaded: false,
   v3ActivitySessions: { buyer: [], seller: [] },
   v3ActivityLoaded: { buyer: false, seller: false },
   v3ActivityLoading: { buyer: false, seller: false },
   v3ActivityErrors: {},
-  v3ActivityKindFilter: 'all',
-  v3ActivityStatusFilter: 'all',
   selectedV3ActivitySessionId: undefined,
   v3ActivityDetail: undefined,
   v3ActivityDetailLoading: false,
   v3ActivityDetailError: undefined,
-  v3SellerTab: 'vm',
+  v3SellerTab: 'listings',
   v3Listings: [],
   v3ListingApplications: [],
   v3ListingsLoading: false,
@@ -2172,11 +2357,8 @@ function isOrderSide(value: unknown): value is OrderSide {
 }
 
 function normalizeSettingsView(value: unknown): SettingsView | undefined {
-  if (value === 'security') return 'wallet'
-  if (value === 'wallet' || value === 'archives') {
-    return value
-  }
-  return 'wallet'
+  if (value === 'archives') return value
+  return 'archives'
 }
 
 function isSettingsView(value: unknown): value is SettingsView {
@@ -3797,7 +3979,6 @@ function navigateWorkspaceHistory(delta: -1 | 1) {
   state.selectedId = defaultSelectionForView(state.activeView)
   state.pinStep = undefined
   renderAll()
-  if (state.activeView === 'settings') refreshSettingsStatus()
 }
 
 function applySidebarWidth() {
@@ -3899,13 +4080,19 @@ function renderProfileSummary() {
   fields.profileAvatar.textContent = profileInitial(name)
   fields.profileIdentity.classList.toggle('active', state.profileMenuOpen)
   fields.profileIdentity.setAttribute('aria-expanded', String(state.profileMenuOpen))
+  const settingsOpen = state.activeView === 'settings'
+  fields.walletButton.classList.toggle('active', state.walletModalOpen)
+  fields.walletButton.setAttribute('aria-pressed', String(state.walletModalOpen))
+  fields.settingsButton.classList.toggle('active', settingsOpen)
+  fields.settingsButton.setAttribute('aria-pressed', String(settingsOpen))
   renderProfileMenu()
 }
 
 function profileDisplayName() {
+  const accountEmail = state.authAccount?.email?.trim()
   const sellerName = state.agentCards.seller?.manualFields.seller?.displayName?.trim()
   const providerId = state.sellerMarketStatus?.providerId?.trim() || state.sellerSettings?.providerId?.trim()
-  return sellerName || providerId || t('app.userFallback')
+  return accountEmail || sellerName || providerId || t('app.userFallback')
 }
 
 function profileInitial(name: string) {
@@ -4016,6 +4203,7 @@ function permissionTaskTemplate() {
 function profileMenuCopy() {
   return {
     signOut: state.signedOut ? t('profile.signedOut') : t('profile.signOut'),
+    changePin: state.language === 'zh' ? '修改支付 PIN' : 'Change payment PIN',
     language: t('profile.language'),
     theme: t('profile.theme'),
     english: t('profile.english'),
@@ -4039,6 +4227,10 @@ function renderProfileMenu() {
       <span class="profile-menu-icon">${profileMenuIcons.theme}</span>
       <span class="profile-menu-label">${escapeHTML(copy.theme)}</span>
       <span class="profile-menu-chevron">${toolbarIcons.disclosure}</span>
+    </button>
+    <button class="profile-menu-item" type="button" data-profile-action="change-pin" role="menuitem">
+      <span class="profile-menu-icon">${profileMenuIcons.pin}</span>
+      <span class="profile-menu-label">${escapeHTML(copy.changePin)}</span>
     </button>
     <button class="profile-menu-item" type="button" data-profile-action="sign-out" role="menuitem" ${state.signedOut ? 'disabled' : ''}>
       <span class="profile-menu-icon">${profileMenuIcons.logout}</span>
@@ -4092,11 +4284,12 @@ function toggleProfileMenu() {
 }
 
 function signOutProfile() {
-  state.signedOut = true
   state.profileMenuOpen = false
   state.profileSubmenu = undefined
-  renderProfileSummary()
-  showToast(t('toast.signedOut'))
+  void invoke<CloudAuthState>('auth_logout').then((next) => {
+    authGate.applyState(next)
+    showToast(t('toast.signedOut'))
+  }).catch((error) => showToast(humanizeError(error)))
 }
 
 function openProfileSubmenu(submenu: ProfileSubmenu) {
@@ -4124,6 +4317,7 @@ function setLanguage(language: AppLanguage) {
   state.profileSubmenu = undefined
   applyUserPreferences()
   renderAll()
+  authGate.refreshLanguage()
   showToast(t(`toast.language.${state.language}`))
 }
 
@@ -8734,7 +8928,6 @@ async function searchCardMarket(query: string) {
 }
 
 const settingsNavItems: Array<{ view: SettingsView; titleKey: string }> = [
-  { view: 'wallet', titleKey: 'settings.wallet.nav' },
   { view: 'archives', titleKey: 'settings.archives.nav' },
 ]
 
@@ -8751,15 +8944,12 @@ function renderLedger() {
 }
 
 function renderSettingsSidebar() {
-  fields.sidebarTitle.textContent = 'Settings'
-  fields.ledgerCount.classList.remove('hidden')
-  fields.ledgerCount.textContent = String(settingsNavItems.length)
   setLedgerEmpty(false)
   fields.sidebarSectionHead.classList.add('hidden')
   const settingItems = settingsNavItems.map((item) => {
     const title = t(item.titleKey)
     return `
-    <button class="ledger-item history-record settings-record ${item.view === state.activeSettingsView ? 'active' : ''}" data-settings-tab="${escapeHTML(item.view)}" title="${escapeAttr(title)}">
+    <button class="ledger-item history-record settings-record ${item.view === state.activeSettingsView ? 'active' : ''}" data-settings-tab="${escapeHTML(item.view)}">
       <span class="settings-record-icon">${settingsNavIcons[item.view]}</span>
       <strong>${escapeHTML(title)}</strong>
     </button>
@@ -8770,10 +8960,8 @@ function renderSettingsSidebar() {
     button.addEventListener('click', () => {
       state.activeSettingsView = button.dataset.settingsTab as SettingsView
       scheduleSaveAppSettings()
-      renderAll()
-      if (state.activeSettingsView === 'wallet') {
-        refreshSettingsStatus()
-      }
+      renderSettingsPanel()
+      renderContextStrip()
     })
   })
 }
@@ -8879,8 +9067,9 @@ async function loadV3Catalog() {
   state.v3CatalogError = undefined
   renderDecisionPanel()
   try {
-    const response = await invoke<{ products?: V3Product[] }>('catalog_products', { input: { query: state.v3CatalogQuery } })
-    state.v3Products = response.products || []
+    const response = await invoke<{ listings?: V3CatalogListing[] }>('catalog_listings', { input: { q: state.v3ListingQuery, kind: state.v3ListingKindFilter === 'all' ? '' : state.v3ListingKindFilter } })
+    state.v3CatalogListings = response.listings || []
+    state.v3Products = state.v3CatalogListings.map((item) => item.productManifest)
     state.v3CatalogLoaded = true
   } catch (error) {
     state.v3CatalogError = humanizeError(error)
@@ -8888,6 +9077,68 @@ async function loadV3Catalog() {
     state.v3CatalogLoading = false
     renderDecisionPanel()
   }
+}
+
+async function loadV3AccountKeyStatus(force = false) {
+  if (state.v3AccountKeyLoaded && !force) return
+  try {
+    state.v3AccountKeyStatus = await invoke<V3AccountKeyStatus>('account_key_status')
+    state.v3AccountKeyLoaded = true
+    if (state.v3AccountKeyStatus.configured) {
+      const response = await invoke<{ balance?: V3ConsumerBalance }>('consumer_account_balance').catch(() => ({ balance: undefined }))
+      state.v3ConsumerBalance = response.balance
+    }
+  } catch (error) {
+    state.v3AccountKeyStatus = { configured: false, keyStorageAvailable: false }
+    state.v3AccountKeyLoaded = true
+    state.v3ConsumerError = humanizeError(error)
+  }
+  if (state.walletModalOpen) renderWalletModal()
+  if (state.v3SellerTab === 'listings') renderDecisionPanel()
+}
+
+async function runV3Consumer<T extends Record<string, any>>(task: () => Promise<T>) {
+  if (state.v3ConsumerBusy) return undefined
+  state.v3ConsumerBusy = true
+  state.v3ConsumerError = undefined
+  renderDecisionPanel()
+  try {
+    const response = await task()
+    state.v3ConsumerResponse = response
+    const balance = await invoke<{ balance?: V3ConsumerBalance }>('consumer_account_balance').catch(() => ({ balance: undefined }))
+    state.v3ConsumerBalance = balance.balance
+    state.v3ActivityLoaded.buyer = false
+    state.v3ActivityLoaded.seller = false
+    void loadV3ActivitySessions(state.workOrderSide, true)
+    return response
+  } catch (error) {
+    state.v3ConsumerError = humanizeError(error)
+    return undefined
+  } finally {
+    state.v3ConsumerBusy = false
+    renderDecisionPanel()
+  }
+}
+
+function v3AtomicFromPrice(price: Record<string, any>, keys: string[]) {
+  for (const key of keys) {
+    const value = Number(price[key] || 0)
+    if (value > 0) return Math.round(value)
+  }
+  const amount = Number(price.amount || 0)
+  return amount > 0 ? Math.round(amount * 1_000_000) : 0
+}
+
+function v3ConsumerMaxCharge(listing: V3Listing, product: V3Product, quantity = 1) {
+  const price = listing.price || {}
+  if (product.productKind === 'compute') return v3AtomicFromPrice(price, ['amountAtomicPerMinute', 'pricePerMinuteAtomic', 'amountAtomic']) * Math.max(1, quantity)
+  if (product.productKind === 'api_operation') {
+    const operations = Array.isArray(product.manifest?.operations)
+      ? product.manifest.operations as Array<Record<string, any>>
+      : Array.isArray(product.manifest?.routes) ? product.manifest.routes as Array<Record<string, any>> : []
+    return Math.max(v3AtomicFromPrice(price, ['maxChargePerInvocationAtomic', 'amountAtomic']), ...operations.map((operation) => Number(operation.maxChargePerInvocationAtomic || 0)))
+  }
+  return v3AtomicFromPrice(price, ['amountAtomic', 'fixedAmountAtomic'])
 }
 
 async function loadV3ActivitySessions(side: OrderSide = state.workOrderSide, force = false) {
@@ -9012,8 +9263,9 @@ async function loadV3WindowsEnvironments() {
 
 function ensureV3SurfaceData() {
   void loadV3ActivitySessions(state.workOrderSide)
-  if (state.workOrderSide === 'buyer' && !state.v3CatalogLoading && !state.v3CatalogLoaded && !state.v3CatalogError) void loadV3Catalog()
-  if (state.workOrderSide === 'seller' && !state.v3ListingsLoading && !state.v3ListingsLoaded && !state.v3SellerError) void loadV3Listings()
+  if (!state.v3CatalogLoading && !state.v3CatalogLoaded && !state.v3CatalogError) void loadV3Catalog()
+  if (!state.v3ListingsLoading && !state.v3ListingsLoaded && !state.v3SellerError) void loadV3Listings()
+  if (!state.v3AccountKeyLoaded) void loadV3AccountKeyStatus()
 }
 
 function v3ActivityUsageLabel(key: string) {
@@ -9170,14 +9422,14 @@ function renderV3BuyerSurface() {
 function renderV3SellerTabs() {
   const applicationCount = state.v3ListingApplications.filter(({ listing }) => ['draft', 'unhealthy', 'provider_busy', 'capacity_insufficient'].includes(listing.status)).length
   const tabs: Array<[V3SellerTab, string, IconNode]> = [
+    ['listings', 'Listings', SquareKanban],
     ['vm', 'VM', Activity],
     ['resources', 'Resources', Folder],
     ['endpoint', 'Endpoint', BrainCircuit],
     ['api_bridge', 'API Bridge', Network],
-    ['listings', 'Listings', SquareKanban],
   ]
   const activeIndex = Math.max(0, tabs.findIndex(([id]) => state.v3SellerTab === id))
-  return `<nav class="v3-seller-tabs" role="tablist" aria-label="Seller workbench" style="--v3-seller-active-offset: ${activeIndex * 144}px">
+  return `<nav class="v3-seller-tabs" role="tablist" aria-label="Main workspace" style="--v3-seller-active-offset: ${activeIndex * 124}px">
     <span class="v3-seller-active-bar" aria-hidden="true"></span>
     ${tabs.map(([id, label, tabIcon]) => `<button type="button" role="tab" aria-selected="${state.v3SellerTab === id}" data-v3-seller-tab="${id}" class="${state.v3SellerTab === id ? 'active' : ''}">${icon(tabIcon)}<span>${label}${id === 'listings' && applicationCount ? `<em class="v3-tab-count">${applicationCount}</em>` : ''}</span></button>`).join('')}
   </nav>`
@@ -9189,7 +9441,7 @@ function syncV3SellerTabs() {
   }
   const tabs = Array.from(fields.sellerSurfaceTabs.querySelectorAll<HTMLButtonElement>('[data-v3-seller-tab]'))
   const activeIndex = Math.max(0, tabs.findIndex((button) => button.dataset.v3SellerTab === state.v3SellerTab))
-  fields.sellerSurfaceTabs.querySelector<HTMLElement>('.v3-seller-tabs')?.style.setProperty('--v3-seller-active-offset', `${activeIndex * 144}px`)
+  fields.sellerSurfaceTabs.querySelector<HTMLElement>('.v3-seller-tabs')?.style.setProperty('--v3-seller-active-offset', `${activeIndex * 124}px`)
   tabs.forEach((button) => {
     const active = button.dataset.v3SellerTab === state.v3SellerTab
     button.classList.toggle('active', active)
@@ -9312,7 +9564,7 @@ function renderV3EnvironmentSaveControls() {
 }
 
 function renderV3EnvironmentCloudLauncher() {
-  const installed = state.v3InstalledEnvironments.filter((item) => item.attestation?.status === 'ready').length
+  const localPackageCount = state.v3InstalledEnvironments.length
   const selectedImage = state.v3EnvironmentImages.find((item) => item.imageId === state.v3SelectedEnvironmentImageId)
   const selectedInstalled = selectedImage && state.v3InstalledEnvironments.some((item) => item.attestation?.imageId === selectedImage.imageId && item.attestation?.status === 'ready')
   const selectedName = selectedImage ? String(selectedImage.manifest?.name || selectedImage.imageId) : 'Choose an environment configuration'
@@ -9328,7 +9580,7 @@ function renderV3EnvironmentCloudLauncher() {
   const capacityText = state.v3EnvironmentRoot
     ? `${freeGiB} GiB free · ${systemReserveGiB} GiB system${selectedImage ? ` · ${imageGiB} GiB image` : ''}`
     : 'Choose a storage root first'
-  return `<div class="v3-environment-configurator"><div class="v3-environment-setup-grid"><section class="v3-environment-cloud-launcher"><header><span class="v3-cloud-mark">☁</span><div><strong>Exora Environment Cloud</strong><small>Official images download to Exora's managed cache</small></div><em>${installed ? `${installed} installed` : '2 official packages'}</em></header><button class="v3-cloud-selection-bar" type="button" data-v3-action="environment-cloud-open"><strong>${escapeHTML(selectedName)}${selectedInstalled ? ' · installed' : ''}</strong><em>${selectedImage ? 'Change' : 'Choose'} →</em></button></section><section class="v3-environment-storage ${allocationAvailable ? '' : 'capacity-blocked'}"><header><span class="v3-storage-mark">▰</span><div><strong>Virtual environment storage</strong><small>${escapeHTML(capacityText)}</small></div><span class="v3-storage-size-input"><input data-environment-workspace type="number" min="20" max="${Math.max(20, maxGiB)}" step="1" value="${workspaceGiB}" inputmode="numeric" aria-label="Virtual disk allocation in GiB" ${allocationAvailable ? '' : 'disabled'}/><em>GiB</em></span></header><button class="v3-storage-path" type="button" data-v3-action="environment-root-choose"><span>${escapeHTML(state.v3EnvironmentRoot || 'Choose a root folder')}${state.v3EnvironmentRoot && selectedImage && !allocationAvailable ? ' · insufficient capacity' : ''}</span><em>${state.v3EnvironmentRoot ? 'Change' : 'Browse'} →</em></button></section></div></div>`
+  return `<div class="v3-environment-configurator"><div class="v3-environment-setup-grid"><section class="v3-environment-cloud-launcher"><header><span class="v3-cloud-mark">☁</span><div><strong>Exora Environment Cloud</strong><small>Official images download to Exora's managed cache</small></div><em>${localPackageCount} local package${localPackageCount === 1 ? '' : 's'}</em></header><button class="v3-cloud-selection-bar" type="button" data-v3-action="environment-cloud-open"><strong>${escapeHTML(selectedName)}${selectedInstalled ? ' · installed' : ''}</strong><em>${selectedImage ? 'Change' : 'Choose'} →</em></button></section><section class="v3-environment-storage ${allocationAvailable ? '' : 'capacity-blocked'}"><header><span class="v3-storage-mark">▰</span><div><strong>Virtual environment storage</strong><small>${escapeHTML(capacityText)}</small></div><span class="v3-storage-size-input"><input data-environment-workspace type="number" min="20" max="${Math.max(20, maxGiB)}" step="1" value="${workspaceGiB}" inputmode="numeric" aria-label="Virtual disk allocation in GiB" ${allocationAvailable ? '' : 'disabled'}/><em>GiB</em></span></header><button class="v3-storage-path" type="button" data-v3-action="environment-root-choose"><span>${escapeHTML(state.v3EnvironmentRoot || 'Choose a root folder')}${state.v3EnvironmentRoot && selectedImage && !allocationAvailable ? ' · insufficient capacity' : ''}</span><em>${state.v3EnvironmentRoot ? 'Change' : 'Browse'} →</em></button></section></div></div>`
 }
 
 function renderV3EnvironmentCloudModal() {
@@ -10048,18 +10300,189 @@ function renderV3ListingApplicationsPage() {
   return `<section class="v3-listings-page">${savedNotice}<section class="v3-listing-overview v3-console-panel"><div class="v3-listings-head"><div><span class="v3-listing-overview-mark">${icon(SquareKanban)}</span><span><strong>Publishing control</strong><small>Applications stay private until they pass readiness checks and you publish them here.</small></span></div><button class="ghost v3-listing-refresh" type="button" data-v3-action="listings-refresh">${toolbarIcons.refresh}<span>Refresh</span></button></div><div class="v3-listing-stats"><article><span>${icon(SquareKanban)}</span><div><strong>${state.v3Listings.length}</strong><small>Total applications</small></div></article><article class="live"><span>${icon(BadgeCheck)}</span><div><strong>${publishedCount}</strong><small>Live in market</small></div></article><article class="ready"><span>${icon(ShieldCheck)}</span><div><strong>${readyCount}</strong><small>Ready to publish</small></div></article><article class="attention"><span>${icon(ShieldAlert)}</span><div><strong>${attentionCount}</strong><small>Needs attention</small></div></article></div></section>${state.v3ListingsLoading ? loading : workspace}</section>`
 }
 
+type V3UnifiedListingItem = { listing: V3Listing; product: V3Product; application?: V3ListingApplication; isOwner: boolean }
+
+function v3UnifiedListingItems() {
+  const items = new Map<string, V3UnifiedListingItem>()
+  state.v3CatalogListings.forEach((catalog) => items.set(catalog.listing.listingId, { listing: catalog.listing, product: catalog.productManifest, isOwner: false }))
+  state.v3ListingApplications.forEach((application) => {
+    const prior = items.get(application.listing.listingId)
+    items.set(application.listing.listingId, { listing: application.listing, product: application.product || prior?.product, application, isOwner: true })
+  })
+  return [...items.values()].sort((left, right) => {
+    const time = new Date(right.listing.updatedAt || right.product.updatedAt || 0).getTime() - new Date(left.listing.updatedAt || left.product.updatedAt || 0).getTime()
+    return time || left.listing.listingId.localeCompare(right.listing.listingId)
+  })
+}
+
+function v3SourceForProduct(product: V3Product) {
+  if (product.productKind === 'compute') return 'vm'
+  if (product.productKind === 'download') return 'resources'
+  return product.manifest?.bridgeMode === 'dock_tunnel' ? 'endpoint' : 'api_bridge'
+}
+
+function v3RedactedConsumerJSON(value: unknown) {
+  const redact = (item: unknown): unknown => {
+    if (Array.isArray(item)) return item.map(redact)
+    if (!item || typeof item !== 'object') return item
+    return Object.fromEntries(Object.entries(item as Record<string, unknown>).map(([key, nested]) => [key, /account.*key|authorization|access.*token|provider.*secret/i.test(key) ? '[redacted]' : redact(nested)]))
+  }
+  return JSON.stringify(redact(value), null, 2)
+}
+
+function renderV3APIConsumerPanel(item: V3UnifiedListingItem, operations: Array<Record<string, any>>, configured: boolean, balanceLabel: string, maxCharge: number, keyAction: string, error: string, result: string) {
+  const { listing } = item
+  const operation = operations.find((candidate) => String(candidate.operationId || '') === state.v3ConsumerOperationId) || operations[0] || { operationId: 'default', method: 'POST', path: '/' }
+  const operationId = String(operation.operationId || 'default')
+  const parameters = Array.isArray(operation.parameters) ? operation.parameters as Array<Record<string, any>> : []
+  const requestSchema = operation.requestSchema || operation.requestBody?.content?.['application/json']?.schema || operation.schema || {}
+  const schemaProperties = requestSchema && typeof requestSchema === 'object' && requestSchema.properties && typeof requestSchema.properties === 'object' ? requestSchema.properties as Record<string, Record<string, any>> : {}
+  const requiredBody = new Set(Array.isArray(requestSchema.required) ? requestSchema.required.map(String) : [])
+  const parameterFields = [
+    ...parameters.map((parameter) => {
+      const name = String(parameter.name || '')
+      const location = String(parameter.in || 'query')
+      const schema = parameter.schema || {}
+      const type = schema.type === 'integer' || schema.type === 'number' ? 'number' : 'text'
+      const field = `parameter:${location}:${name}`
+      const value = state.v3ConsumerParameters[field] ?? schema.default ?? ''
+      return `<label>${escapeHTML(name)} <small>${escapeHTML(location)}</small><input name="${escapeAttr(field)}" type="${type}" ${parameter.required ? 'required' : ''} value="${escapeAttr(String(value))}"/></label>`
+    }),
+    ...Object.entries(schemaProperties).map(([name, schema]) => {
+      const type = schema.type === 'integer' || schema.type === 'number' ? 'number' : schema.type === 'boolean' ? 'checkbox' : 'text'
+      const field = `schema:${name}`
+      const value = state.v3ConsumerParameters[field] ?? schema.default ?? ''
+      return `<label>${escapeHTML(name)} <small>body</small><input name="${escapeAttr(field)}" type="${type}" ${requiredBody.has(name) ? 'required' : ''} ${type === 'checkbox' ? (value === true || value === 'true' ? 'checked' : '') : `value="${escapeAttr(String(value))}"`}/></label>`
+    }),
+  ].join('')
+  const operationOptions = operations.length
+    ? operations.map((candidate) => { const id = String(candidate.operationId || ''); return `<option value="${escapeAttr(id)}" ${id === operationId ? 'selected' : ''}>${escapeHTML(`${String(candidate.method || 'POST').toUpperCase()} ${candidate.path || '/'} - ${candidate.title || id}`)}</option>` }).join('')
+    : '<option value="default">Default operation</option>'
+  const payload = `{"listingId":"${listing.listingId}","operationId":"${operationId}","idempotencyKey":"YOUR_STABLE_KEY","maxChargeAtomic":${maxCharge},"body":{}}`
+  const curl = `curl -X POST "$EXORA_CLOUD_URL/v3/invocations" \\\n+  -H "Authorization: Bearer $EXORA_API_KEY" \\\n+  -H "Content-Type: application/json" \\\n+  -d '${payload}'`
+  const javascript = `const response = await fetch(process.env.EXORA_CLOUD_URL + "/v3/invocations", {\n  method: "POST",\n  headers: { Authorization: "Bearer " + process.env.EXORA_API_KEY, "Content-Type": "application/json" },\n  body: JSON.stringify(${payload})\n});\nconsole.log(await response.json());`
+  const python = `import os, requests\nresponse = requests.post(\n    os.environ["EXORA_CLOUD_URL"] + "/v3/invocations",\n    headers={"Authorization": "Bearer " + os.environ["EXORA_API_KEY"]},\n    json={"listingId": "${listing.listingId}", "operationId": "${operationId}", "idempotencyKey": "YOUR_STABLE_KEY", "maxChargeAtomic": ${maxCharge}, "body": {}}\n)\nprint(response.json())`
+  return `<section class="v3-consumer-panel"><header><div><span>MANUAL API CLIENT</span><strong>Invoke this operation</strong></div><em>${escapeHTML(balanceLabel)}</em></header>${error}<form data-v3-consumer-form="api" data-listing-id="${escapeAttr(listing.listingId)}"><label>Operation<select name="operationId" data-v3-consumer-operation>${operationOptions}</select></label>${parameterFields ? `<fieldset class="v3-consumer-parameters"><legend>Manifest parameters</legend>${parameterFields}</fieldset>` : ''}<label>JSON request body<textarea name="body" spellcheck="false">${escapeHTML(state.v3ConsumerRequestBody)}</textarea></label><div class="v3-consumer-charge"><span>Maximum charge</span><strong>${escapeHTML(v3AtomicMoney(maxCharge, 'USDC'))}</strong></div><button type="submit" ${configured && !state.v3ConsumerBusy ? '' : 'disabled'}>${state.v3ConsumerBusy ? 'Invoking...' : 'Invoke operation'}</button>${keyAction}</form><details class="v3-consumer-code"><summary>curl</summary><pre>${escapeHTML(curl)}</pre></details><details class="v3-consumer-code"><summary>JavaScript</summary><pre>${escapeHTML(javascript)}</pre></details><details class="v3-consumer-code"><summary>Python</summary><pre>${escapeHTML(python)}</pre></details>${result}</section>`
+}
+
+function renderV3ConsumerPanel(item: V3UnifiedListingItem) {
+  const { listing, product } = item
+  const configured = Boolean(state.v3AccountKeyStatus?.configured)
+  const balance = state.v3ConsumerBalance
+  const balanceLabel = balance ? v3AtomicMoney(balance.availableAtomic, balance.asset || 'USDC') : configured ? 'Checking…' : 'Account key required'
+  const maxCharge = v3ConsumerMaxCharge(listing, product, product.productKind === 'compute' ? state.v3ConsumerMinutes : 1)
+  const operations = Array.isArray(product.manifest?.operations)
+    ? product.manifest.operations as Array<Record<string, any>>
+    : Array.isArray(product.manifest?.routes) ? product.manifest.routes as Array<Record<string, any>> : []
+  const disclosure = product.productKind === 'compute' && product.manifest?.runtimeBackend === 'wsl2'
+    ? `<div class="v3-consumer-disclosure"><strong>Managed WSL2 · shared host</strong><span>One Exora lease per host. CPU and memory are configured caps; the Windows GPU driver is shared and is not hardware passthrough.</span></div>`
+    : product.productKind === 'compute' ? `<div class="v3-consumer-disclosure kvm"><strong>KVM/libvirt hardware isolation</strong><span>Disposable encrypted write layer, Guest Root, and provider-controlled reset.</span></div>` : ''
+  const result = state.v3ConsumerResponse ? `<section class="v3-consumer-result"><header><strong>Latest result</strong><span>Account key and provider credentials are redacted</span></header><pre>${escapeHTML(v3RedactedConsumerJSON(state.v3ConsumerResponse))}</pre></section>` : ''
+  const transfer = state.v3ConsumerTransferProgress
+  const transferStatus = transfer ? `<div class="v3-consumer-transfer"><span>${escapeHTML(transfer.phase)}</span><progress max="${Math.max(1, transfer.sizeBytes || transfer.bytesDownloaded || 1)}" value="${transfer.bytesDownloaded}"></progress><strong>${escapeHTML(v3FormatBytes(transfer.bytesDownloaded))}${transfer.sizeBytes ? ` / ${escapeHTML(v3FormatBytes(transfer.sizeBytes))}` : ''}</strong></div>` : ''
+  const error = `${state.v3ConsumerError ? `<div class="v3-error">${escapeHTML(state.v3ConsumerError)}</div>` : ''}${transferStatus}`
+  const keyAction = !configured ? `<button type="button" data-v3-consumer-action="settings-key">Configure account key</button>` : ''
+  if (product.productKind === 'api_operation') {
+    return renderV3APIConsumerPanel(item, operations, configured, balanceLabel, maxCharge, keyAction, error, result)
+    const operationOptions = operations.length ? operations.map((operation) => `<option value="${escapeAttr(String(operation.operationId || ''))}">${escapeHTML(`${String(operation.method || 'POST').toUpperCase()} ${operation.path || '/'} · ${operation.title || operation.operationId}`)}</option>`).join('') : '<option value="default">Default operation</option>'
+    const curl = `curl -X POST "$EXORA_CLOUD_URL/v3/invocations" \\\n  -H "Authorization: Bearer $EXORA_API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{"listingId":"${listing.listingId}","operationId":"${String((operations[0] || {}).operationId || 'default')}","idempotencyKey":"YOUR_STABLE_KEY","maxChargeAtomic":${maxCharge},"body":{}}'`
+    return `<section class="v3-consumer-panel">${disclosure}<header><div><span>MANUAL API CLIENT</span><strong>Invoke this operation</strong></div><em>${escapeHTML(balanceLabel)}</em></header>${error}<form data-v3-consumer-form="api" data-listing-id="${escapeAttr(listing.listingId)}"><label>Operation<select name="operationId">${operationOptions}</select></label><label>JSON request body<textarea name="body" spellcheck="false">${escapeHTML(state.v3ConsumerRequestBody)}</textarea></label><div class="v3-consumer-charge"><span>Maximum charge</span><strong>${escapeHTML(v3AtomicMoney(maxCharge, 'USDC'))}</strong></div><button type="submit" ${configured && !state.v3ConsumerBusy ? '' : 'disabled'}>${state.v3ConsumerBusy ? 'Invoking…' : 'Invoke operation'}</button>${keyAction}</form><details class="v3-consumer-code"><summary>Use in your own code</summary><pre>${escapeHTML(curl)}</pre></details>${result}</section>`
+  }
+  if (product.productKind === 'download') {
+    const manifest = product.manifest || {}
+    return `<section class="v3-consumer-panel">${disclosure}<header><div><span>LICENSED DOWNLOAD</span><strong>Purchase this fixed version</strong></div><em>${escapeHTML(balanceLabel)}</em></header>${error}<dl class="detail-grid"><div><dt>Version</dt><dd>${escapeHTML(String(manifest.version || 'fixed'))}</dd></div><div><dt>License</dt><dd>${escapeHTML(String(manifest.license || 'declared by provider'))}</dd></div><div><dt>Package</dt><dd>${escapeHTML(v3FormatBytes(Number((manifest.archive as Record<string, any> | undefined)?.sizeBytes || 0)))}</dd></div><div><dt>SHA-256</dt><dd>Verified before delivery</dd></div></dl><div class="v3-consumer-charge"><span>One-time grant</span><strong>${escapeHTML(v3AtomicMoney(maxCharge, 'USDC'))}</strong></div><div class="v3-consumer-actions"><button type="button" data-v3-consumer-action="purchase-download" data-listing-id="${escapeAttr(listing.listingId)}" ${configured && !state.v3ConsumerBusy ? '' : 'disabled'}>${state.v3ConsumerBusy ? 'Purchasing…' : 'Purchase download'}</button>${state.v3ConsumerGrant ? `<button class="ghost" type="button" data-v3-consumer-action="create-transfer" data-grant-id="${escapeAttr(String(state.v3ConsumerGrant.grantId || ''))}">Open resumable download</button>` : ''}${keyAction}</div>${result}</section>`
+  }
+  const lease = state.v3ConsumerLease
+  return `<section class="v3-consumer-panel">${disclosure}<header><div><span>COMPUTE PURCHASE</span><strong>Reserve whole minutes</strong></div><em>${escapeHTML(balanceLabel)}</em></header>${error}<form data-v3-consumer-form="compute" data-listing-id="${escapeAttr(listing.listingId)}"><label>Duration in minutes<input name="durationMinutes" type="number" min="1" step="1" value="${state.v3ConsumerMinutes}"/></label><div class="v3-consumer-charge"><span>Current estimate</span><strong>${escapeHTML(v3AtomicMoney(maxCharge, 'USDC'))}</strong></div><button type="submit" ${configured && !state.v3ConsumerBusy ? '' : 'disabled'}>${state.v3ConsumerBusy ? 'Provisioning…' : 'Purchase and provision'}</button>${keyAction}</form>${lease ? `<section class="v3-consumer-lease"><header><strong>Lease ${escapeHTML(String(lease.leaseId || ''))}</strong><span>${escapeHTML(String(lease.status || ''))}</span></header><dl class="detail-grid"><div><dt>Backend</dt><dd>${escapeHTML(String(lease.backend || ''))}</dd></div><div><dt>Expires</dt><dd>${escapeHTML(lease.expiresAt ? new Date(String(lease.expiresAt)).toLocaleString() : 'Provisioning')}</dd></div></dl><pre>${escapeHTML(v3RedactedConsumerJSON(lease.capability || {}))}</pre><div class="v3-consumer-actions"><button class="ghost" type="button" data-v3-consumer-action="extend-compute" data-purchase-id="${escapeAttr(String(state.v3ConsumerPurchase?.purchaseId || ''))}">Extend ${state.v3ConsumerMinutes} min</button><button class="danger ghost" type="button" data-v3-consumer-action="release-lease" data-lease-id="${escapeAttr(String(lease.leaseId || ''))}">Release lease</button></div></section>` : ''}${result}</section>`
+}
+
+function renderV3UnifiedListingsPage() {
+  const items = v3UnifiedListingItems()
+  const publicCount = items.filter((item) => !item.isOwner).length
+  const ownCount = items.filter((item) => item.isOwner).length
+  const liveCount = items.filter((item) => item.listing.status === 'published').length
+  const rows = items.map((item) => {
+    const { listing, product, application, isOwner } = item
+    const source = application?.source || listing.applicationSource || v3SourceForProduct(product)
+    const sourceMeta = v3ListingSourceMeta(source)
+    const statusMeta = v3ListingStatusMeta(listing.status)
+    const expanded = state.v3ExpandedListingId === listing.listingId
+    const readiness = application?.readiness
+    const checks = readiness?.checks || []
+    const passedChecks = checks.filter((check) => check.ready).length
+    const attention = ['unhealthy', 'provider_busy', 'capacity_insufficient'].includes(listing.status)
+    const searchable = [listing.listingId, product.productId, product.title, product.description, sourceMeta.label, statusMeta.label, isOwner ? 'owner mine' : 'marketplace'].filter(Boolean).join(' ').toLowerCase()
+    const ownerActions = `${listing.status === 'draft' ? `<button type="button" data-v3-listing-action="publish" data-listing-id="${escapeAttr(listing.listingId)}" ${readiness?.ready ? '' : 'disabled'}>Publish</button>` : ''}${listing.status === 'published' ? `<button class="ghost" type="button" data-v3-listing-action="pause" data-listing-id="${escapeAttr(listing.listingId)}">Pause</button>` : ''}${['paused', 'unhealthy', 'provider_busy', 'capacity_insufficient'].includes(listing.status) ? `<button type="button" data-v3-listing-action="resume" data-listing-id="${escapeAttr(listing.listingId)}" ${readiness?.ready ? '' : 'disabled'}>Resume</button>` : ''}${listing.status !== 'retired' ? `<button class="danger ghost" type="button" data-v3-listing-action="retire" data-listing-id="${escapeAttr(listing.listingId)}">Retire</button>` : ''}`
+    return `<article class="v3-listing-application ${expanded ? 'expanded' : ''}" data-listing-row="${escapeAttr(listing.listingId)}" data-listing-source="${escapeAttr(source)}" data-listing-kind="${escapeAttr(product.productKind)}" data-listing-status="${escapeAttr(listing.status)}" data-listing-ready="${String(Boolean(readiness?.ready))}" data-listing-attention="${String(attention)}" data-listing-owner="${String(isOwner)}" data-listing-search="${escapeAttr(searchable)}"><button type="button" class="v3-listing-summary" data-v3-listing-expand="${escapeAttr(listing.listingId)}" aria-expanded="${String(expanded)}"><span class="v3-listing-source-icon source-${escapeAttr(source)}">${icon(sourceMeta.icon)}</span><span class="v3-listing-primary"><strong>${escapeHTML(product.title || listing.productId)}</strong><small><em class="v3-source-badge source-${escapeAttr(source)}">${escapeHTML(sourceMeta.shortLabel)}</em><em class="v3-owner-badge ${isOwner ? 'owner' : 'market'}">${isOwner ? 'Owner' : 'Marketplace'}</em><span>${escapeHTML(product.providerDockId || listing.listingId)}</span></small></span><span class="v3-listing-summary-metrics"><span><small>Price</small><strong>${escapeHTML(v3ListingPriceLabel(listing.price || {}))}</strong></span><span><small>${isOwner ? 'Readiness' : 'Availability'}</small><strong>${isOwner ? checks.length ? `${passedChecks}/${checks.length} checks` : readiness?.ready ? 'Ready' : 'Pending' : listing.availability?.availableNow === false ? 'Unavailable' : 'Available now'}</strong></span></span><span class="v3-listing-state-pill tone-${escapeAttr(statusMeta.tone)}"><i></i>${escapeHTML(statusMeta.label)}</span><span class="v3-listing-chevron">${toolbarIcons.disclosure}</span></button>${expanded ? `<div class="v3-listing-application-body"><div class="v3-listing-detail-head"><div><small>${isOwner ? 'YOUR LISTING' : 'MARKETPLACE OFFER'}</small><strong>${isOwner ? 'Manage this offer without leaving the market' : 'Review the manifest and use this product manually'}</strong></div><span class="${isOwner ? 'ready' : 'market'}">${isOwner ? `${icon(ShieldCheck)} Owner controls` : `${icon(BadgeCheck)} Public listing`}</span></div><section class="v3-listing-detail-section"><header><span>PRODUCT MANIFEST</span><strong>${escapeHTML(product.description || 'Machine-readable Exora product')}</strong></header>${renderV3ApplicationManifest(source, product.manifest || {})}</section>${isOwner ? `<section class="v3-listing-detail-section"><header><span>PUBLISH READINESS</span><strong>${checks.length ? `${passedChecks} of ${checks.length} checks passed` : 'Waiting for Cloud checks'}</strong></header><div class="v3-listing-checks">${checks.map((check) => `<div class="${check.ready ? 'passed' : 'failed'}"><span>${check.ready ? '✓' : '!'}</span><div><strong>${escapeHTML(check.label)}</strong><small>${escapeHTML(check.detail || '')}</small></div></div>`).join('') || '<div class="failed"><span>!</span><div><strong>No readiness report</strong><small>Refresh to request current checks.</small></div></div>'}</div></section><div class="v3-listing-actions"><span><strong>Owner controls</strong><small>You cannot purchase your own listing.</small></span>${ownerActions}</div>` : renderV3ConsumerPanel(item)}</div>` : ''}</article>`
+  }).join('')
+  return `<section class="v3-listings-page"><section class="v3-listing-overview v3-console-panel"><div class="v3-listings-head"><div><span class="v3-listing-overview-mark">${icon(SquareKanban)}</span><span><strong>Unified marketplace</strong><small>Browse public offers and manage your own listings in one chronological feed.</small></span></div><button class="ghost v3-listing-refresh" type="button" data-v3-action="listings-refresh">${toolbarIcons.refresh}<span>Refresh both</span></button></div><div class="v3-listing-stats"><article><span>${icon(SquareKanban)}</span><div><strong>${items.length}</strong><small>Combined listings</small></div></article><article class="live"><span>${icon(BadgeCheck)}</span><div><strong>${liveCount}</strong><small>Live offers</small></div></article><article class="ready"><span>${icon(Network)}</span><div><strong>${publicCount}</strong><small>Marketplace</small></div></article><article class="attention"><span>${icon(ShieldCheck)}</span><div><strong>${ownCount}</strong><small>Your listings</small></div></article></div></section>${state.v3CatalogError ? `<div class="v3-error">Marketplace: ${escapeHTML(state.v3CatalogError)}</div>` : ''}${state.v3SellerError ? `<div class="v3-error">Your listings: ${escapeHTML(state.v3SellerError)}</div>` : ''}<section class="v3-listing-workspace v3-console-panel"><div class="v3-listing-toolbar unified"><label class="v3-listing-search">${toolbarIcons.search}<input type="search" data-v3-listing-search value="${escapeAttr(state.v3ListingQuery)}" placeholder="Search all market and owner listings"/></label><label><span>Scope</span><select data-v3-listing-filter-scope><option value="all">All listings</option><option value="market">Marketplace</option><option value="mine">Mine</option></select></label><label><span>Kind</span><select data-v3-listing-filter-kind><option value="all">All kinds</option><option value="compute">Compute</option><option value="download">Downloads</option><option value="api_operation">API</option></select></label><label><span>Status</span><select data-v3-listing-filter-status><option value="all">All statuses</option><option value="published">Live</option><option value="draft">Private drafts</option><option value="paused">Paused</option><option value="attention">Needs attention</option><option value="retired">Retired</option></select></label><span class="v3-listing-results">${items.length} listings</span></div>${state.v3CatalogLoading || state.v3ListingsLoading ? '<div class="v3-listing-loading"><span><i></i><b></b><em></em></span><span><i></i><b></b><em></em></span></div>' : rows ? `<div class="v3-listing-list">${rows}</div>` : renderV3ListingEmptyState()}<div class="v3-listing-no-results hidden"><strong>No matching listings</strong><small>Try a different scope, kind, status, or search.</small></div></section></section>`
+}
+
+function renderV3UnifiedListingRow(item: V3UnifiedListingItem) {
+  const { listing, product, application, isOwner } = item
+  const source = application?.source || listing.applicationSource || v3SourceForProduct(product)
+  const sourceMeta = v3ListingSourceMeta(source)
+  const statusMeta = v3ListingStatusMeta(listing.status)
+  const expanded = state.v3ExpandedListingId === listing.listingId
+  const readiness = application?.readiness
+  const checks = readiness?.checks || []
+  const passedChecks = checks.filter((check) => check.ready).length
+  const attention = ['unhealthy', 'provider_busy', 'capacity_insufficient'].includes(listing.status)
+  const searchable = [listing.listingId, product.productId, product.title, product.description, sourceMeta.label, statusMeta.label, isOwner ? 'owner mine' : 'marketplace'].filter(Boolean).join(' ').toLowerCase()
+  const ownerActions = [
+    listing.status === 'draft' ? `<button type="button" data-v3-listing-action="publish" data-listing-id="${escapeAttr(listing.listingId)}" ${readiness?.ready ? '' : 'disabled'}>Publish</button>` : '',
+    listing.status === 'published' ? `<button class="ghost" type="button" data-v3-listing-action="pause" data-listing-id="${escapeAttr(listing.listingId)}">Pause</button>` : '',
+    ['paused', 'unhealthy', 'provider_busy', 'capacity_insufficient'].includes(listing.status) ? `<button type="button" data-v3-listing-action="resume" data-listing-id="${escapeAttr(listing.listingId)}" ${readiness?.ready ? '' : 'disabled'}>Resume</button>` : '',
+    listing.status !== 'retired' ? `<button class="danger ghost" type="button" data-v3-listing-action="retire" data-listing-id="${escapeAttr(listing.listingId)}">Retire</button>` : '',
+  ].join('')
+  const readinessPanel = `<section class="v3-listing-detail-section"><header><span>PUBLISH READINESS</span><strong>${checks.length ? `${passedChecks} of ${checks.length} checks passed` : 'Waiting for Cloud checks'}</strong></header><div class="v3-listing-checks">${checks.map((check) => `<div class="${check.ready ? 'passed' : 'failed'}"><span>${check.ready ? '&#10003;' : '!'}</span><div><strong>${escapeHTML(check.label)}</strong><small>${escapeHTML(check.detail || '')}</small></div></div>`).join('') || '<div class="failed"><span>!</span><div><strong>No readiness report</strong><small>Refresh to request current checks.</small></div></div>'}</div></section>`
+  return `<article class="v3-listing-application ${expanded ? 'expanded' : ''}" data-listing-row="${escapeAttr(listing.listingId)}" data-listing-source="${escapeAttr(source)}" data-listing-kind="${escapeAttr(product.productKind)}" data-listing-status="${escapeAttr(listing.status)}" data-listing-ready="${String(Boolean(readiness?.ready))}" data-listing-attention="${String(attention)}" data-listing-owner="${String(isOwner)}" data-listing-search="${escapeAttr(searchable)}">
+    <button type="button" class="v3-listing-summary" data-v3-listing-expand="${escapeAttr(listing.listingId)}" aria-expanded="${String(expanded)}">
+      <span class="v3-listing-source-icon source-${escapeAttr(source)}">${icon(sourceMeta.icon)}</span>
+      <span class="v3-listing-primary"><strong>${escapeHTML(product.title || listing.productId)}</strong><small><em class="v3-source-badge source-${escapeAttr(source)}">${escapeHTML(sourceMeta.shortLabel)}</em><em class="v3-owner-badge ${isOwner ? 'owner' : 'market'}">${isOwner ? 'Owner' : 'Marketplace'}</em><span>${escapeHTML(product.providerDockId || listing.listingId)}</span></small></span>
+      <span class="v3-listing-summary-metrics"><span><small>Price</small><strong>${escapeHTML(v3ListingPriceLabel(listing.price || {}))}</strong></span><span><small>${isOwner ? 'Readiness' : 'Availability'}</small><strong>${isOwner ? checks.length ? `${passedChecks}/${checks.length} checks` : readiness?.ready ? 'Ready' : 'Pending' : listing.availability?.availableNow === false ? 'Unavailable' : 'Available now'}</strong></span></span>
+      <span class="v3-listing-state-pill tone-${escapeAttr(statusMeta.tone)}"><i></i>${escapeHTML(statusMeta.label)}</span><span class="v3-listing-chevron">${toolbarIcons.disclosure}</span>
+    </button>
+    ${expanded ? `<div class="v3-listing-application-body"><div class="v3-listing-detail-head"><div><small>${isOwner ? 'YOUR LISTING' : 'MARKETPLACE OFFER'}</small><strong>${isOwner ? 'Manage this offer without leaving the market' : 'Review the manifest and use this product manually'}</strong></div><span class="${isOwner ? 'ready' : 'market'}">${isOwner ? `${icon(ShieldCheck)} Owner controls` : `${icon(BadgeCheck)} Public listing`}</span></div><section class="v3-listing-detail-section"><header><span>PRODUCT MANIFEST</span><strong>${escapeHTML(product.description || 'Machine-readable Exora product')}</strong></header>${renderV3ApplicationManifest(source, product.manifest || {})}</section>${isOwner ? `${readinessPanel}<div class="v3-listing-actions"><span><strong>Owner controls</strong><small>You cannot purchase your own listing.</small></span>${ownerActions}</div>` : renderV3ConsumerPanel(item)}</div>` : ''}
+  </article>`
+}
+
+function renderV3UnifiedListingsPageV2() {
+  const items = v3UnifiedListingItems()
+  const isBuyer = state.v3ListingMode === 'buyer'
+  const visibleItems = items.filter((item) => isBuyer ? !item.isOwner : item.isOwner)
+  const rows = visibleItems.map(renderV3UnifiedListingRow).join('')
+  const sourceLoading = isBuyer ? state.v3CatalogLoading : state.v3ListingsLoading
+  const sourceError = isBuyer ? state.v3CatalogError : state.v3SellerError
+  const initialLoading = !rows && sourceLoading ? '<div class="v3-listing-loading"><span><i></i><b></b><em></em></span><span><i></i><b></b><em></em></span></div>' : ''
+  const buyerEmpty = '<div class="v3-marketplace-empty"><span>' + icon(Search) + '</span><strong>No marketplace listings found</strong><small>Published products from other sellers will appear here.</small></div>'
+  const empty = !rows && !sourceLoading && (!isBuyer || !sourceError) ? (isBuyer ? buyerEmpty : renderV3ListingEmptyState()) : ''
+  const placeholder = isBuyer ? 'Search the marketplace' : 'Search your listings and applications'
+  return `<section class="v3-listings-page">
+    <section class="v3-listing-search-switch">
+      <label class="v3-listing-search">${toolbarIcons.search}<input type="search" data-v3-listing-search value="${escapeAttr(state.v3ListingQuery)}" placeholder="${placeholder}" aria-label="${placeholder}"/></label>
+      <div class="v3-listing-mode-switch" role="group" aria-label="Listings view">
+        <button type="button" data-v3-listing-mode="buyer" aria-pressed="${String(isBuyer)}" class="${isBuyer ? 'active' : ''}"><span class="tab-icon">${roleTabIcons.buyer}</span><span>Buyer</span></button>
+        <button type="button" data-v3-listing-mode="seller" aria-pressed="${String(!isBuyer)}" class="${isBuyer ? '' : 'active'}"><span class="tab-icon">${roleTabIcons.seller}</span><span>Seller</span></button>
+      </div>
+    </section>
+    <section class="v3-listing-workspace v3-listing-${state.v3ListingMode}-view">${sourceError ? `<div class="v3-market-view-error">${escapeHTML(sourceError)}</div>` : ''}${rows ? `<div class="v3-listing-list">${rows}</div>` : ''}${initialLoading}${empty}<div class="v3-listing-no-results hidden"><strong>No matching listings</strong><small>Try a different search.</small></div></section>
+  </section>`
+}
+
 function renderV3SellerSurface() {
-  const page = state.v3SellerTab === 'vm' ? renderV3VMPage() : state.v3SellerTab === 'resources' ? renderV3ResourcesPage() : state.v3SellerTab === 'endpoint' ? renderV3EndpointAgentPage() : state.v3SellerTab === 'api_bridge' || state.v3SellerTab === 'openapi' ? renderV3APIBridgePage() : renderV3ListingApplicationsPage()
+  const page = state.v3SellerTab === 'vm' ? renderV3VMPage() : state.v3SellerTab === 'resources' ? renderV3ResourcesPage() : state.v3SellerTab === 'endpoint' ? renderV3EndpointAgentPage() : state.v3SellerTab === 'api_bridge' || state.v3SellerTab === 'openapi' ? renderV3APIBridgePage() : renderV3UnifiedListingsPageV2()
   const headings: Record<V3SellerTab, { kicker: string; title: string; description: string }> = {
     vm: { kicker: 'COMPUTE SUPPLY', title: 'List this computer', description: 'Measure this PC, install a disposable Linux environment, reserve capacity, then submit a private Listing draft.' },
     resources: { kicker: 'DIGITAL RESOURCES', title: 'Package files and data', description: 'Bundle versioned files, define delivery rights and pricing, then submit a private Listing draft.' },
     endpoint: { kicker: 'LOCAL ENDPOINT', title: 'Expose a local or private service', description: 'Connect an HTTP service running on this computer or private network through an outbound Dock tunnel.' },
     api_bridge: { kicker: 'PUBLIC API BRIDGE', title: 'Connect a public provider API', description: 'An Agent converts public API materials into Exora routes, metering and pricing. Then configure its public HTTPS endpoint with a private credential.' },
     openapi: { kicker: 'PUBLIC API BRIDGE', title: 'Connect a public provider API', description: 'An Agent converts public API materials into Exora routes, metering and pricing. Then configure its public HTTPS endpoint with a private credential.' },
-    listings: { kicker: 'MARKET INVENTORY', title: 'Manage your listings', description: 'Review drafts, publish products, pause availability, inspect health, and retire offers from the market.' },
+    listings: { kicker: 'UNIFIED MARKET', title: 'Browse and manage listings', description: 'Discover available products, use them manually, and manage your own drafts and published offers in one list.' },
   }
   const heading = headings[state.v3SellerTab]
-  return `<section class="v3-market-surface v3-seller-surface"><div class="v3-surface-heading"><div><span>${escapeHTML(heading.kicker)}</span><h2>${escapeHTML(heading.title)}</h2><p>${escapeHTML(heading.description)}</p></div></div>${state.v3SellerError ? `<div class="v3-error">${escapeHTML(state.v3SellerError)}</div>` : ''}<div class="v3-seller-page">${page}</div></section>${renderV3EnvironmentCloudModal()}`
+  const surfaceHeading = state.v3SellerTab === 'listings' ? '' : `<div class="v3-surface-heading"><div><span>${escapeHTML(heading.kicker)}</span><h2>${escapeHTML(heading.title)}</h2><p>${escapeHTML(heading.description)}</p></div></div>`
+  return `<section class="v3-market-surface v3-seller-surface">${surfaceHeading}${state.v3SellerTab !== 'listings' && state.v3SellerError ? `<div class="v3-error">${escapeHTML(state.v3SellerError)}</div>` : ''}<div class="v3-seller-page">${page}</div></section>${renderV3EnvironmentCloudModal()}`
 }
 
 type V3ApplicationSource = 'vm' | 'resources' | 'endpoint' | 'api_bridge'
@@ -10226,7 +10649,11 @@ function attachV3SurfaceHandlers() {
   }))
   action('catalog-back', () => { state.v3SelectedProduct = undefined; renderDecisionPanel() })
   action('catalog-refresh', () => void loadV3Catalog())
-  action('listings-refresh', () => void loadV3Listings())
+  action('listings-refresh', () => {
+    state.v3CatalogLoaded = false
+    state.v3ListingsLoaded = false
+    void Promise.all([loadV3Catalog(), loadV3Listings()])
+  })
   const endpointForm = fields.actionView.querySelector<HTMLFormElement>('[data-v3-form="endpoint-agent"]')
   if (endpointForm && !state.v3EndpointMaterialsLoaded) {
     state.v3EndpointMaterialsLoaded = true
@@ -10787,7 +11214,7 @@ function attachV3SurfaceHandlers() {
     clearV3ApplicationAttempt('resources')
     renderDecisionPanel()
   }))
-  fields.actionView.querySelector<HTMLFormElement>('[data-v3-form="vm"]')?.addEventListener('submit', (event) => { event.preventDefault(); const form = event.currentTarget as HTMLFormElement; void run(async () => { if (!state.v3VMTemplate || !state.v3VMTemplate.valid) throw new Error('Install and validate the selected environment first.'); const data = Object.fromEntries(new FormData(form)); const windows = navigator.userAgent.includes('Windows'); if (windows) { const rescanned = await invoke<{ result: Record<string, unknown> }>('provider_host_scan', { input: { reason: 'pre_publish' } }); state.v3VMProbe = rescanned.result; renderDecisionPanel() } const price = { amount: Number(data.price), currency: 'USD', unit: 'minute' }; const hold = windows ? await invoke<Record<string, any>>('provider_environment_reserve', { input: { environmentId: state.v3VMTemplate.environmentId, workspaceGiB: Number(data.workspaceGiB) } }) : undefined; const selected = state.v3EnvironmentImages.find((image) => image.imageId === state.v3VMTemplate?.imageId); const hardware = state.v3VMProbe?.hardware as Record<string, any> || {}; const gpu = state.v3VMProbe?.gpu as Record<string, any> || {}; const network = state.v3VMProbe?.network as Record<string, any> || {}; const title = windows ? `${gpu.name || hardware.Cpu || 'Windows PC'} · ${selected?.manifest?.name || state.v3VMTemplate.imageId}` : String(data.title || 'Verified compute environment'); const description = windows ? `Verified ${selected?.manifest?.os?.distribution || 'Linux'} environment on ${gpu.name || hardware.Cpu || 'Windows hardware'} with ${Number(data.workspaceGiB)} GiB reserved workspace and ${network.downloadMbps || 0} Mbps measured download capacity.` : String(data.description || 'Verified compute environment'); const manifest = windows ? { runtimeBackend: 'wsl2', hostOS: 'windows', isolationClass: 'experimental_shared_host', capacityGuarantee: 'best_effort', gpuAccessMode: state.v3VMTemplate.cuda ? 'wsl_gpu_paravirtualization' : 'none', environmentImageId: state.v3VMTemplate.imageId, environmentImageVersion: state.v3VMTemplate.imageVersion, validationReceipt: state.v3VMTemplate, hardware, network, capacitySnapshot: hold?.capacity, diskReservation: hold?.reservation, price, limits: { minMinutes: 1, maxMinutes: 240 }, workspaceGiB: Number(data.workspaceGiB), region: [network.city, network.region, network.country].filter(Boolean).join(', ') } : { template: state.v3VMTemplate, price }; await v3CreateProductAndListing({ productKind: 'compute', title, description, manifest }, price, true, windows) }) })
+  fields.actionView.querySelector<HTMLFormElement>('[data-v3-form="vm"]')?.addEventListener('submit', (event) => { event.preventDefault(); const form = event.currentTarget as HTMLFormElement; void run(async () => { if (!state.v3VMTemplate || !state.v3VMTemplate.valid) throw new Error('Install and validate the selected environment first.'); const data = Object.fromEntries(new FormData(form)); const windows = navigator.userAgent.includes('Windows'); if (windows) { const rescanned = await invoke<{ result: Record<string, unknown> }>('provider_host_scan', { input: { reason: 'pre_publish' } }); state.v3VMProbe = rescanned.result; renderDecisionPanel() } const price = { amount: Number(data.price), currency: 'USD', unit: 'minute' }; const hold = windows ? await invoke<Record<string, any>>('provider_environment_reserve', { input: { environmentId: state.v3VMTemplate.environmentId, workspaceGiB: Number(data.workspaceGiB) } }) : undefined; const selected = state.v3EnvironmentImages.find((image) => image.imageId === state.v3VMTemplate?.imageId); const hardware = state.v3VMProbe?.hardware as Record<string, any> || {}; const gpu = state.v3VMProbe?.gpu as Record<string, any> || {}; const network = state.v3VMProbe?.network as Record<string, any> || {}; const title = windows ? `${gpu.name || hardware.Cpu || 'Windows PC'} · ${selected?.manifest?.name || state.v3VMTemplate.imageId}` : String(data.title || 'Verified compute environment'); const description = windows ? `Verified ${selected?.manifest?.os?.distribution || 'Linux'} environment on ${gpu.name || hardware.Cpu || 'Windows hardware'} with ${Number(data.workspaceGiB)} GiB reserved workspace and ${network.downloadMbps || 0} Mbps measured download capacity.` : String(data.description || 'Verified compute environment'); const manifest = windows ? { runtimeBackend: 'wsl2', hostOS: 'windows', isolationClass: 'managed_wsl2_shared_host', capacityGuarantee: 'disclosed_best_effort', gpuAccessMode: state.v3VMTemplate.cuda ? 'shared_windows_driver' : 'none', resourceGuarantees: { singleLeasePerHost: true, diskReservation: 'hard', cpuMemory: 'configured_caps', gpu: state.v3VMTemplate.cuda ? 'shared_best_effort' : 'none', hardwarePassthroughExclusive: false }, environmentImageId: state.v3VMTemplate.imageId, environmentImageVersion: state.v3VMTemplate.imageVersion, validationReceipt: state.v3VMTemplate, hardware, network, publicHost: network.publicIP || network.ip || '', capacitySnapshot: hold?.capacity, diskReservation: hold?.reservation, price, limits: { minMinutes: 1, maxMinutes: 240 }, workspaceGiB: Number(data.workspaceGiB), region: [network.city, network.region, network.country].filter(Boolean).join(', ') } : { runtimeBackend: 'kvm_libvirt', isolationClass: 'hardware_virtualized', templateId: state.v3VMTemplate.templateId, template: state.v3VMTemplate, price }; await v3CreateProductAndListing({ productKind: 'compute', title, description, manifest }, price, true, windows) }) })
   resourceForm?.addEventListener('submit', (event) => {
     event.preventDefault()
     void run(async () => {
@@ -10892,32 +11319,152 @@ function attachV3SurfaceHandlers() {
     item.append(term, value)
     details.append(item)
   })
-  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-listing-expand]').forEach((button) => button.addEventListener('click', () => { const id = button.dataset.v3ListingExpand; state.v3ExpandedListingId = state.v3ExpandedListingId === id ? undefined : id; state.v3PublishConfirmListingId = undefined; renderDecisionPanel() }))
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-listing-expand]').forEach((button) => button.addEventListener('click', () => {
+    const id = button.dataset.v3ListingExpand
+    const changed = state.v3ExpandedListingId !== id
+    state.v3ExpandedListingId = changed ? id : undefined
+    state.v3PublishConfirmListingId = undefined
+    if (changed) {
+      state.v3SelectedCatalogListingId = id
+      state.v3ConsumerResponse = undefined
+      state.v3ConsumerError = undefined
+      state.v3ConsumerOperationId = ''
+      state.v3ConsumerParameters = {}
+      state.v3ConsumerGrant = undefined
+      state.v3ConsumerTransferProgress = undefined
+      state.v3ConsumerPurchase = undefined
+      state.v3ConsumerLease = undefined
+      if (state.v3AccountKeyStatus?.configured) void loadV3AccountKeyStatus(true)
+    }
+    renderDecisionPanel()
+  }))
   fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-listing-source]').forEach((button) => button.addEventListener('click', () => { state.v3SellerTab = (button.dataset.v3ListingSource || 'vm') as V3SellerTab; renderDecisionPanel() }))
   const listingSearch = fields.actionView.querySelector<HTMLInputElement>('[data-v3-listing-search]')
-  const listingSourceFilter = fields.actionView.querySelector<HTMLSelectElement>('[data-v3-listing-filter-source]')
-  const listingStatusFilter = fields.actionView.querySelector<HTMLSelectElement>('[data-v3-listing-filter-status]')
   const applyListingFilters = () => {
     const query = listingSearch?.value.trim().toLocaleLowerCase() || ''
-    const source = listingSourceFilter?.value || 'all'
-    const status = listingStatusFilter?.value || 'all'
+    state.v3ListingQuery = listingSearch?.value || ''
     const listings = Array.from(fields.actionView.querySelectorAll<HTMLElement>('.v3-listing-application'))
     let visible = 0
     listings.forEach((listing) => {
-      const sourceMatches = source === 'all' || listing.dataset.listingSource === source
-      const statusMatches = status === 'all' || (status === 'ready' ? listing.dataset.listingReady === 'true' && listing.dataset.listingStatus === 'draft' : status === 'attention' ? listing.dataset.listingAttention === 'true' : listing.dataset.listingStatus === status)
       const searchMatches = !query || (listing.dataset.listingSearch || '').includes(query)
-      const matches = sourceMatches && statusMatches && searchMatches
-      listing.classList.toggle('filtered-out', !matches)
-      if (matches) visible += 1
+      listing.classList.toggle('filtered-out', !searchMatches)
+      if (searchMatches) visible += 1
     })
-    const results = fields.actionView.querySelector<HTMLElement>('.v3-listing-results')
-    if (results) results.textContent = `${visible} of ${listings.length} applications`
-    fields.actionView.querySelector<HTMLElement>('.v3-listing-no-results')?.classList.toggle('hidden', visible > 0)
+    fields.actionView.querySelector<HTMLElement>('.v3-listing-no-results')?.classList.toggle('hidden', listings.length === 0 || visible > 0)
   }
   listingSearch?.addEventListener('input', applyListingFilters)
-  listingSourceFilter?.addEventListener('change', applyListingFilters)
-  listingStatusFilter?.addEventListener('change', applyListingFilters)
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-listing-mode]').forEach((button) => button.addEventListener('click', () => {
+    const mode = button.dataset.v3ListingMode === 'seller' ? 'seller' : 'buyer'
+    if (state.v3ListingMode === mode) return
+    state.v3ListingMode = mode
+    state.v3ListingScopeFilter = mode === 'buyer' ? 'market' : 'mine'
+    state.v3ExpandedListingId = undefined
+    state.v3PublishConfirmListingId = undefined
+    renderDecisionPanel()
+  }))
+  applyListingFilters()
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-consumer-action="settings-key"]').forEach((button) => button.addEventListener('click', () => openWalletModal('key')))
+  fields.actionView.querySelector<HTMLSelectElement>('[data-v3-consumer-operation]')?.addEventListener('change', (event) => {
+    state.v3ConsumerOperationId = (event.currentTarget as HTMLSelectElement).value
+    state.v3ConsumerResponse = undefined
+    state.v3ConsumerError = undefined
+    renderDecisionPanel()
+  })
+  fields.actionView.querySelector<HTMLTextAreaElement>('[data-v3-consumer-form="api"] textarea[name="body"]')?.addEventListener('input', (event) => {
+    state.v3ConsumerRequestBody = (event.currentTarget as HTMLTextAreaElement).value
+  })
+  fields.actionView.querySelectorAll<HTMLInputElement>('[data-v3-consumer-form="api"] input[name^="parameter:"], [data-v3-consumer-form="api"] input[name^="schema:"]').forEach((input) => input.addEventListener('input', () => {
+    state.v3ConsumerParameters[input.name] = input.type === 'checkbox' ? input.checked : input.value
+  }))
+  fields.actionView.querySelector<HTMLFormElement>('[data-v3-consumer-form="api"]')?.addEventListener('submit', (event) => {
+    event.preventDefault()
+    const form = event.currentTarget as HTMLFormElement
+    void runV3Consumer(async () => {
+      const data = new FormData(form)
+      const listingId = String(form.dataset.listingId || '')
+      state.v3ConsumerRequestBody = String(data.get('body') || '{}')
+      let body: unknown
+      try { body = JSON.parse(state.v3ConsumerRequestBody || '{}') } catch { throw new Error('Request body must be valid JSON.') }
+      if (!body || typeof body !== 'object' || Array.isArray(body)) body = { value: body }
+      const query: Record<string, unknown> = {}
+      const headers: Record<string, string> = {}
+      for (const [field, raw] of data.entries()) {
+        if (field.startsWith('schema:')) (body as Record<string, unknown>)[field.slice('schema:'.length)] = raw === 'on' ? true : String(raw)
+        if (!field.startsWith('parameter:')) continue
+        const [, location, ...nameParts] = field.split(':')
+        const name = nameParts.join(':')
+        if (location === 'query') query[name] = String(raw)
+        else if (location === 'header') headers[name] = String(raw)
+        else (body as Record<string, unknown>)[name] = String(raw)
+      }
+      const item = v3UnifiedListingItems().find((candidate) => candidate.listing.listingId === listingId)
+      if (!item || item.isOwner) throw new Error('This marketplace listing is not available for purchase.')
+      return invoke<Record<string, any>>('consumer_invoke_operation', { input: {
+        listingId,
+        operationId: String(data.get('operationId') || 'default'),
+        query,
+        headers,
+        body,
+        idempotencyKey: `desktop:${crypto.randomUUID()}`,
+        maxChargeAtomic: v3ConsumerMaxCharge(item.listing, item.product),
+        activitySessionId: `desktop:${listingId}:${crypto.randomUUID()}`,
+      } })
+    })
+  })
+  fields.actionView.querySelector<HTMLFormElement>('[data-v3-consumer-form="compute"]')?.addEventListener('input', (event) => {
+    const input = (event.target as HTMLElement).closest<HTMLInputElement>('input[name="durationMinutes"]')
+    if (!input) return
+    state.v3ConsumerMinutes = Math.max(1, Math.trunc(Number(input.value || 1)))
+    const item = v3UnifiedListingItems().find((candidate) => candidate.listing.listingId === (event.currentTarget as HTMLFormElement).dataset.listingId)
+    const charge = fields.actionView.querySelector<HTMLElement>('.v3-consumer-charge strong')
+    if (item && charge) charge.textContent = v3AtomicMoney(v3ConsumerMaxCharge(item.listing, item.product, state.v3ConsumerMinutes), 'USDC')
+  })
+  fields.actionView.querySelector<HTMLFormElement>('[data-v3-consumer-form="compute"]')?.addEventListener('submit', (event) => {
+    event.preventDefault()
+    const form = event.currentTarget as HTMLFormElement
+    void runV3Consumer(async () => {
+      const listingId = String(form.dataset.listingId || '')
+      const minutes = Math.max(1, Math.trunc(Number(new FormData(form).get('durationMinutes') || 1)))
+      state.v3ConsumerMinutes = minutes
+      const item = v3UnifiedListingItems().find((candidate) => candidate.listing.listingId === listingId)
+      if (!item || item.isOwner) throw new Error('This marketplace listing is not available for purchase.')
+      const maxChargeAtomic = v3ConsumerMaxCharge(item.listing, item.product, minutes)
+      await invoke('consumer_purchase_estimate', { input: { listingId, durationMinutes: minutes } })
+      const response = await invoke<Record<string, any>>('consumer_purchase_compute', { input: { listingId, durationMinutes: minutes, idempotencyKey: `desktop:${crypto.randomUUID()}`, maxChargeAtomic, activitySessionId: `desktop:${listingId}:${crypto.randomUUID()}` } })
+      state.v3ConsumerPurchase = response.purchase
+      state.v3ConsumerLease = response.lease
+      return response
+    })
+  })
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-consumer-action="purchase-download"]').forEach((button) => button.addEventListener('click', () => void runV3Consumer(async () => {
+    const listingId = String(button.dataset.listingId || '')
+    const item = v3UnifiedListingItems().find((candidate) => candidate.listing.listingId === listingId)
+    if (!item || item.isOwner) throw new Error('This marketplace listing is not available for purchase.')
+    const maxChargeAtomic = v3ConsumerMaxCharge(item.listing, item.product)
+    await invoke('consumer_purchase_estimate', { input: { listingId } })
+    const response = await invoke<Record<string, any>>('consumer_purchase_download', { input: { listingId, idempotencyKey: `desktop:${crypto.randomUUID()}`, maxChargeAtomic, activitySessionId: `desktop:${listingId}:${crypto.randomUUID()}` } })
+    state.v3ConsumerGrant = response.grant
+    return response
+  })))
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-consumer-action="create-transfer"]').forEach((button) => button.addEventListener('click', () => {
+    state.v3ConsumerTransferProgress = { phase: 'starting', bytesDownloaded: 0, sizeBytes: Number(state.v3ConsumerGrant?.sizeBytes || 0) }
+    void runV3Consumer(() => invoke<Record<string, any>>('consumer_create_transfer', { input: { grantId: button.dataset.grantId, download: true } }))
+  }))
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-consumer-action="extend-compute"]').forEach((button) => button.addEventListener('click', () => void runV3Consumer(async () => {
+    const purchaseId = String(button.dataset.purchaseId || '')
+    const item = v3UnifiedListingItems().find((candidate) => candidate.listing.listingId === state.v3ExpandedListingId)
+    if (!purchaseId || !item) throw new Error('Compute purchase is unavailable.')
+    const maxChargeAtomic = v3ConsumerMaxCharge(item.listing, item.product, state.v3ConsumerMinutes)
+    const response = await invoke<Record<string, any>>('consumer_extend_compute', { input: { purchaseId, durationMinutes: state.v3ConsumerMinutes, idempotencyKey: `desktop:${crypto.randomUUID()}`, maxChargeAtomic } })
+    state.v3ConsumerPurchase = response.purchase || state.v3ConsumerPurchase
+    state.v3ConsumerLease = response.lease || state.v3ConsumerLease
+    return response
+  })))
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-consumer-action="release-lease"]').forEach((button) => button.addEventListener('click', () => void runV3Consumer(async () => {
+    const response = await invoke<Record<string, any>>('consumer_release_lease', { input: { leaseId: button.dataset.leaseId } })
+    state.v3ConsumerLease = response.lease || state.v3ConsumerLease
+    return response
+  })))
   fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-publish-request]').forEach((button) => button.addEventListener('click', () => { state.v3PublishConfirmListingId = button.dataset.v3PublishRequest; renderDecisionPanel() }))
   fields.actionView.querySelector<HTMLButtonElement>('[data-v3-publish-cancel]')?.addEventListener('click', () => { state.v3PublishConfirmListingId = undefined; renderDecisionPanel() })
   fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-recreate-source]').forEach((button) => button.addEventListener('click', () => {
@@ -10931,7 +11478,7 @@ function attachV3SurfaceHandlers() {
     showToast('Replacement started — the next submission will create a new private Listing draft')
     renderDecisionPanel()
   }))
-  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-listing-action]').forEach((button) => button.addEventListener('click', () => void run(async () => { await invoke('provider_listing_action', { input: { listingId: button.dataset.listingId, action: button.dataset.v3ListingAction } }); state.v3PublishConfirmListingId = undefined; state.v3ListingsLoaded = false; await loadV3Listings() })))
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-listing-action]').forEach((button) => button.addEventListener('click', () => void run(async () => { await invoke('provider_listing_action', { input: { listingId: button.dataset.listingId, action: button.dataset.v3ListingAction } }); state.v3PublishConfirmListingId = undefined; state.v3ListingsLoaded = false; state.v3CatalogLoaded = false; await Promise.all([loadV3Listings(), loadV3Catalog()]) })))
 }
 
 function renderDecisionPanel() {
@@ -10944,7 +11491,7 @@ function renderDecisionPanel() {
   const showingChat = false
   const showingSettings = state.activeView === 'settings' && !state.pinStep
   const hideMainHeading = showingResourceConsole || (state.activeView === 'market' && !state.pinStep)
-  const showingSellerSurfaceTabs = showingResourceConsole && state.workOrderSide === 'seller' && !showingActivityDetail
+  const showingSellerSurfaceTabs = showingResourceConsole
   fields.appShell.classList.toggle('resource-console-mode', showingResourceConsole)
   fields.appShell.classList.toggle('seller-surface-mode', showingSellerSurfaceTabs)
   fields.sellerSurfaceTabs.classList.toggle('hidden', !showingSellerSurfaceTabs)
@@ -10962,10 +11509,10 @@ function renderDecisionPanel() {
 
   if (showingResourceConsole) {
     fields.actionView.classList.remove('hidden')
-    fields.mainKicker.textContent = showingActivityDetail ? 'Order history' : state.workOrderSide === 'buyer' ? 'AI-first catalog' : 'Provider control'
-    fields.decisionTitle.textContent = showingActivityDetail ? (state.v3ActivityDetail?.productTitle || 'Order detail') : state.workOrderSide === 'buyer' ? 'Resource Market' : 'Seller Workbench'
-    fields.decisionStep.textContent = showingActivityDetail ? 'detail' : state.workOrderSide === 'buyer' ? 'catalog' : state.v3SellerTab
-    fields.decisionContent.innerHTML = showingActivityDetail ? renderV3ActivityDetail() : state.workOrderSide === 'buyer' ? renderV3BuyerSurface() : renderV3SellerSurface()
+    fields.mainKicker.textContent = showingActivityDetail ? 'Order history' : 'Main workspace'
+    fields.decisionTitle.textContent = showingActivityDetail ? (state.v3ActivityDetail?.productTitle || 'Order detail') : 'Exora Workspace'
+    fields.decisionStep.textContent = showingActivityDetail ? 'detail' : state.v3SellerTab
+    fields.decisionContent.innerHTML = showingActivityDetail ? renderV3ActivityDetail() : renderV3SellerSurface()
     attachV3SurfaceHandlers()
     ensureV3SurfaceData()
     renderContextStrip()
@@ -13662,10 +14209,6 @@ function renderViewTabs() {
   fields.folderPickerButton.classList.add('hidden')
   if (state.activeView !== 'settings') renderOrderRoleControls()
   const side = state.workOrderSide
-  const sideLabel = side === 'buyer' ? t('orderSide.buyer') : t('orderSide.seller')
-  fields.sidebarTitle.textContent = state.activeView === 'settings'
-    ? 'Settings'
-    : `${sideLabel} Transactions`
   fields.projectFolderHead.classList.add('hidden')
   fields.newChatButton.classList.add('hidden')
   fields.newChatButton.classList.remove('v3-history-header-refresh', 'is-loading')
@@ -13711,60 +14254,21 @@ function attachSellerStoreSummaryHandlers(root: ParentNode = fields.ledgerList) 
 function renderOrderActivitySidebar() {
   const records = state.v3ActivitySessions[state.workOrderSide]
   const sideLabel = state.workOrderSide === 'buyer' ? t('orderSide.buyer') : t('orderSide.seller')
-  const hasActiveFilters = state.v3ActivityKindFilter !== 'all' || state.v3ActivityStatusFilter !== 'all'
-  fields.sidebarTitle.textContent = uiText('Order history')
-  fields.ledgerCount.classList.remove('hidden')
-  fields.ledgerCount.textContent = String(records.length)
   setLedgerEmpty(false)
   const loading = state.v3ActivityLoading[state.workOrderSide]
   const error = state.v3ActivityErrors[state.workOrderSide]
-  fields.newChatButton.classList.remove('hidden')
-  fields.newChatButton.classList.add('v3-history-header-refresh')
-  fields.newChatButton.classList.toggle('is-loading', loading)
-  fields.newChatButton.style.visibility = 'visible'
-  fields.newChatButton.disabled = loading
-  fields.newChatButton.setAttribute('aria-hidden', 'false')
-  fields.newChatButton.setAttribute('aria-label', 'Refresh history')
-  fields.newChatButton.setAttribute('title', 'Refresh history')
-  fields.newChatButton.tabIndex = 0
-  fields.newChatButton.dataset.mode = 'history-refresh'
-  fields.newChatButton.innerHTML = toolbarIcons.refresh
+  fields.sidebarSectionHead.classList.add('hidden')
   fields.ledgerList.innerHTML = `
     <section class="v3-history-sidebar" aria-label="${escapeAttr(sideLabel)} order history">
-      <div class="v3-history-tools">
-        <span class="v3-history-filter-mark" aria-hidden="true">${toolbarIcons.filter}</span>
-        <div class="v3-history-filter-bar" aria-label="Order history filters">
-          <label class="v3-history-filter ${state.v3ActivityKindFilter !== 'all' ? 'is-active' : ''}">
-            <select data-v3-history-kind aria-label="Filter by product type" title="Filter by product type">
-              <option value="all" ${state.v3ActivityKindFilter === 'all' ? 'selected' : ''}>All types</option>
-              <option value="compute" ${state.v3ActivityKindFilter === 'compute' ? 'selected' : ''}>Compute</option>
-              <option value="download" ${state.v3ActivityKindFilter === 'download' ? 'selected' : ''}>Download</option>
-              <option value="api_operation" ${state.v3ActivityKindFilter === 'api_operation' ? 'selected' : ''}>API</option>
-            </select>
-          </label>
-          <span class="v3-history-filter-divider" aria-hidden="true"></span>
-          <label class="v3-history-filter ${state.v3ActivityStatusFilter !== 'all' ? 'is-active' : ''}">
-            <select data-v3-history-status aria-label="Filter by status" title="Filter by status">
-              <option value="all" ${state.v3ActivityStatusFilter === 'all' ? 'selected' : ''}>All states</option>
-              <option value="active" ${state.v3ActivityStatusFilter === 'active' ? 'selected' : ''}>Active</option>
-              <option value="completed" ${state.v3ActivityStatusFilter === 'completed' ? 'selected' : ''}>Completed</option>
-              <option value="needs_attention" ${state.v3ActivityStatusFilter === 'needs_attention' ? 'selected' : ''}>Needs review</option>
-            </select>
-          </label>
-        </div>
-        ${hasActiveFilters ? `<button class="v3-history-clear-filters" type="button" data-v3-history-clear aria-label="Clear history filters" title="Clear filters">${windowIcons.close}</button>` : ''}
-      </div>
       <div class="v3-history-list ${error && !records.length ? 'is-centered' : ''}" data-v3-history-list aria-live="polite">
         ${loading && !records.length ? '<div class="v3-history-state is-loading"><span class="v3-history-state-spinner" aria-hidden="true"></span><strong>Loading history&hellip;</strong><small>Fetching your latest activity.</small></div>' : ''}
         ${error ? `<div class="v3-history-state error" role="status"><span class="v3-history-state-icon" aria-hidden="true">${toolbarIcons.emptyContent}</span><p>Order history is currently unavailable.</p></div>` : ''}
         ${!loading && !error && !records.length ? `<div class="v3-history-state is-empty"><span class="v3-history-state-icon" aria-hidden="true">${toolbarIcons.emptyContent}</span><strong>No ${escapeHTML(sideLabel.toLowerCase())} orders yet</strong><small>Purchases and resource sessions will appear here.</small></div>` : ''}
-        ${records.length ? '<div class="v3-history-state v3-history-no-results hidden" data-v3-history-no-results><strong>No matching orders</strong><small>Try a different type or state.</small></div>' : ''}
         ${records.map(renderV3HistoryRow).join('')}
       </div>
     </section>
   `
   attachV3HistoryHandlers()
-  applyV3HistoryFilters()
 }
 
 function v3ActivityKindLabel(kind: string) {
@@ -13790,7 +14294,7 @@ function renderV3HistoryRow(record: V3ActivitySession) {
   const active = record.sessionId === state.selectedV3ActivitySessionId
   const statusLabel = v3ActivityStatusLabel(record.status)
   return `
-    <button class="v3-history-row ${active ? 'active' : ''}" type="button" data-v3-history-session="${escapeAttr(record.sessionId)}" data-kind="${escapeAttr(record.productKind)}" data-status="${escapeAttr(record.status)}" title="${escapeAttr([record.productTitle, record.outcome, v3AtomicMoney(record.amountAtomic, record.asset), compactTimestamp(record.updatedAt)].join(' / '))}" aria-pressed="${active}">
+    <button class="v3-history-row ${active ? 'active' : ''}" type="button" data-v3-history-session="${escapeAttr(record.sessionId)}" title="${escapeAttr([record.productTitle, record.outcome, v3AtomicMoney(record.amountAtomic, record.asset), compactTimestamp(record.updatedAt)].join(' / '))}" aria-pressed="${active}">
       <span class="v3-history-kind kind-${escapeAttr(record.productKind)}" aria-hidden="true">${v3ActivityKindLabel(record.productKind)}</span>
       <span class="v3-history-copy">
         <strong>${escapeHTML(record.productTitle || 'Resource session')}</strong>
@@ -13804,34 +14308,9 @@ function renderV3HistoryRow(record: V3ActivitySession) {
   `
 }
 
-function applyV3HistoryFilters() {
-  let visible = 0
-  fields.ledgerList.querySelectorAll<HTMLElement>('[data-v3-history-session]').forEach((row) => {
-    const matches = (state.v3ActivityKindFilter === 'all' || row.dataset.kind === state.v3ActivityKindFilter)
-      && (state.v3ActivityStatusFilter === 'all' || row.dataset.status === state.v3ActivityStatusFilter)
-    row.classList.toggle('hidden', !matches)
-    if (matches) visible += 1
-  })
-  fields.ledgerList.querySelector<HTMLElement>('[data-v3-history-no-results]')?.classList.toggle('hidden', visible > 0)
-  fields.ledgerCount.textContent = String(visible)
-}
-
 function attachV3HistoryHandlers() {
   fields.ledgerList.querySelectorAll<HTMLButtonElement>('[data-v3-history-session]').forEach((button) => {
     button.addEventListener('click', () => selectV3ActivitySession(button.dataset.v3HistorySession || ''))
-  })
-  fields.ledgerList.querySelector<HTMLSelectElement>('[data-v3-history-kind]')?.addEventListener('change', (event) => {
-    state.v3ActivityKindFilter = (event.currentTarget as HTMLSelectElement).value as typeof state.v3ActivityKindFilter
-    renderOrderActivitySidebar()
-  })
-  fields.ledgerList.querySelector<HTMLSelectElement>('[data-v3-history-status]')?.addEventListener('change', (event) => {
-    state.v3ActivityStatusFilter = (event.currentTarget as HTMLSelectElement).value as typeof state.v3ActivityStatusFilter
-    renderOrderActivitySidebar()
-  })
-  fields.ledgerList.querySelector<HTMLButtonElement>('[data-v3-history-clear]')?.addEventListener('click', () => {
-    state.v3ActivityKindFilter = 'all'
-    state.v3ActivityStatusFilter = 'all'
-    renderOrderActivitySidebar()
   })
 }
 
@@ -14525,6 +15004,7 @@ function focusExternalOrderPlan(plan: OrderPlan) {
 function renderAll() {
   applyUserPreferences()
   renderProfileSummary()
+  renderWalletModal()
   renderPermissionControl()
   renderLedger()
   renderContextStrip()
@@ -15785,13 +16265,12 @@ function showToast(message: string) {
 
 function settingsTitles(): Record<SettingsView, { kicker: string; title: string }> {
   return {
-    wallet: { kicker: t('settings.wallet.kicker'), title: t('settings.wallet.title') },
     archives: { kicker: t('settings.archives.kicker'), title: t('settings.archives.title') },
   }
 }
 
 function settingsViewForCardRole(role: AgentCardRole): SettingsView {
-  return 'wallet'
+  return 'archives'
 }
 
 function renderSettingsAgentCardPages() {
@@ -15993,9 +16472,39 @@ function renderSettingsPanel() {
   app.querySelectorAll<HTMLElement>('[data-settings-page]').forEach((page) => {
     page.classList.toggle('hidden', page.dataset.settingsPage !== state.activeSettingsView)
   })
-  renderWalletStatus()
   renderArchiveRecords()
   localize(fields.settingsView)
+}
+
+function renderAccountKeySettings() {
+  const section = app.querySelector<HTMLElement>('[data-account-key-section]')
+  if (!section) return
+  const status = state.v3AccountKeyStatus
+  const stateLabel = fields.walletModal.querySelector<HTMLElement>('[data-account-key-state]')
+  const statusBody = section.querySelector<HTMLElement>('[data-account-key-status]')
+  const note = section.querySelector<HTMLElement>('[data-account-key-storage-note]')
+  const deleteButton = section.querySelector<HTMLButtonElement>('[data-account-key-delete]')
+  const saveButton = section.querySelector<HTMLButtonElement>('[data-account-key-save]')
+  if (!state.v3AccountKeyLoaded) {
+    if (stateLabel) stateLabel.textContent = 'checking'
+    if (statusBody) statusBody.innerHTML = '<div class="wallet-key-summary is-loading"><span>Checking secure storage and Cloud account status...</span></div>'
+    void loadV3AccountKeyStatus()
+    return
+  }
+  const configured = Boolean(status?.configured)
+  if (stateLabel) {
+    stateLabel.textContent = configured ? 'connected' : 'not connected'
+    stateLabel.classList.toggle('ready', configured)
+  }
+  if (deleteButton) deleteButton.disabled = !configured || state.v3ConsumerBusy
+  if (saveButton) saveButton.textContent = configured ? 'Replace from clipboard' : 'Validate from clipboard'
+  const balance = state.v3ConsumerBalance
+  if (statusBody) statusBody.innerHTML = configured
+    ? `<div class="wallet-key-summary ready"><div><strong>${escapeHTML(status?.maskedKey || 'exa_...')}</strong><span>Encrypted for this Desktop</span></div><dl><div><dt>Cloud balance</dt><dd>${balance ? escapeHTML(v3AtomicMoney(balance.availableAtomic, balance.asset || 'USDC')) : 'Unavailable'}</dd></div><div><dt>Saved</dt><dd>${status?.savedAt ? escapeHTML(new Date(status.savedAt).toLocaleDateString()) : 'This session'}</dd></div></dl></div>`
+    : '<div class="wallet-key-summary empty"><strong>No account key connected</strong><span>Add a key to use Cloud purchases, API calls, ledger, and approvals.</span></div>'
+  if (note) note.textContent = status?.storageMode === 'session' || status?.keyStorageAvailable === false
+    ? 'Secure storage is unavailable; the key stays in memory for this session only.'
+    : 'Protected by Electron safeStorage. The raw key is never exposed to the page or logs.'
 }
 
 function renderArchiveRecords() {
@@ -16035,16 +16544,133 @@ function renderWalletStatus() {
   const accountWallet = wallet?.accountBound === true
   const address = accountWallet ? wallet?.address?.trim() || '' : ''
   const readyToReceive = Boolean(address)
+  const balance = walletUSDCBalance(wallet)
+  const balanceStatus = balance?.status?.trim() || ''
+  const decimals = walletUSDCDecimals(wallet)
 
   fields.walletState.textContent = readyToReceive ? uiText('receive ready') : uiText(wallet ? 'preparing' : 'checking')
-  fields.walletReceive.classList.remove('hidden')
+  fields.walletState.classList.toggle('ready', readyToReceive)
   fields.walletAddress.textContent = address || uiText('not configured')
+  fields.walletAddressShort.textContent = address ? compactWalletAddress(address) : uiText('not configured')
+  fields.walletAddressShort.setAttribute('title', address)
+  fields.walletBalance.textContent = formatWalletAtomic(balance?.amountAtomic || 0, decimals)
+  fields.walletBalanceStatus.textContent = balanceStatus && balanceStatus !== 'ready'
+    ? `Balance ${balanceStatus.replaceAll('_', ' ')}`
+    : balance?.updatedAt
+      ? `Updated ${new Date(balance.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+      : readyToReceive ? 'Wallet ready' : 'Preparing your wallet'
   fields.walletCopyButton.disabled = !readyToReceive
+  fields.walletWithdrawButton.disabled = !readyToReceive || state.walletWithdrawalBusy
+  fields.walletWithdrawButton.textContent = state.walletWithdrawalBusy ? 'Authorizing…' : 'Authorize withdrawal'
+  fields.walletWithdrawForm.querySelectorAll<HTMLInputElement>('input').forEach((input) => {
+    input.disabled = state.walletWithdrawalBusy
+  })
+  const fee = wallet?.feePolicy
+  fields.walletFeeNote.textContent = Number(fee?.relayFeeAtomic || 0) > 0
+    ? `Relay fee: ${formatWalletAtomic(Number(fee?.relayFeeAtomic || 0), decimals)} ${fee?.currency || 'USDC'}`
+    : fee?.relayFeeDescription || 'Network fees are covered by Exora.'
+  renderWalletWithdrawalStatus()
 
   if (readyToReceive) {
     void renderWalletQRCode(address)
   } else {
     fields.walletQR.innerHTML = `<span>${escapeHTML(uiText('QR'))}</span>`
+  }
+  renderWalletPINInput()
+}
+
+function walletUSDCBalance(wallet = state.walletStatus) {
+  if (!wallet?.balances) return undefined
+  return wallet.balances.usdc || Object.values(wallet.balances).find((balance) => String(balance.currency || '').toUpperCase() === 'USDC')
+}
+
+function walletUSDCDecimals(wallet = state.walletStatus) {
+  const decimals = Number(walletUSDCBalance(wallet)?.decimals ?? 6)
+  return Number.isInteger(decimals) && decimals >= 0 && decimals <= 12 ? decimals : 6
+}
+
+function formatWalletAtomic(amountAtomic: number, decimals = 6) {
+  const amount = Number(amountAtomic || 0) / (10 ** decimals)
+  return new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 }).format(amount)
+}
+
+function walletAtomicInput(amountAtomic: number, decimals = 6) {
+  const base = 10 ** decimals
+  return (Number(amountAtomic || 0) / base).toFixed(decimals).replace(/\.?0+$/, '') || '0'
+}
+
+function compactWalletAddress(address: string) {
+  return address.length > 18 ? `${address.slice(0, 8)}…${address.slice(-6)}` : address
+}
+
+function renderWalletWithdrawalStatus() {
+  const target = fields.walletWithdrawStatus
+  const withdrawal = state.walletWithdrawal
+  const error = state.walletWithdrawalError
+  target.classList.toggle('hidden', !withdrawal && !error)
+  target.classList.toggle('error', Boolean(error))
+  if (error) {
+    target.innerHTML = `<strong>Withdrawal not authorized</strong><span>${escapeHTML(error)}</span>`
+    return
+  }
+  if (!withdrawal) {
+    target.innerHTML = ''
+    return
+  }
+  const decimals = Number(withdrawal.decimals ?? walletUSDCDecimals())
+  target.innerHTML = withdrawal.status === 'relayer_required'
+    ? `<strong>Ready for relayer</strong><span>${escapeHTML(formatWalletAtomic(Number(withdrawal.amountAtomic || 0), decimals))} ${escapeHTML(withdrawal.currency || 'USDC')} · Signed securely on this Desktop; Exora relayer submission is still required.</span>`
+    : `<strong>Withdrawal authorized</strong><span>${escapeHTML(formatWalletAtomic(Number(withdrawal.amountAtomic || 0), decimals))} ${escapeHTML(withdrawal.currency || 'USDC')} · ${escapeHTML(withdrawal.status || 'Processing')}</span>`
+}
+
+function walletAmountToAtomic(value: string, decimals = 6) {
+  const normalized = value.trim()
+  if (!/^\d+(?:\.\d+)?$/.test(normalized)) throw new Error('Enter a valid USDC amount.')
+  const [whole, fraction = ''] = normalized.split('.')
+  if (fraction.length > decimals) throw new Error(`USDC supports up to ${decimals} decimal places.`)
+  const scale = 10n ** BigInt(decimals)
+  const atomic = BigInt(whole) * scale + BigInt(fraction.padEnd(decimals, '0') || '0')
+  if (atomic <= 0n) throw new Error('Withdrawal amount must be greater than zero.')
+  if (atomic > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('Withdrawal amount is too large.')
+  return Number(atomic)
+}
+
+async function submitWalletWithdrawal(form: HTMLFormElement) {
+  if (state.walletWithdrawalBusy) return
+  const data = new FormData(form)
+  const toAddress = String(data.get('toAddress') || '').trim()
+  const paymentPin = String(data.get('paymentPin') || '').trim()
+  const decimals = walletUSDCDecimals()
+  const amountAtomic = walletAmountToAtomic(String(data.get('amount') || ''), decimals)
+  if (!toAddress) throw new Error('Enter a destination Solana address.')
+  if (!/^\d{6}$/.test(paymentPin)) throw new Error('Payment PIN must be exactly 6 digits.')
+  const balance = walletUSDCBalance()
+  if (balance?.status === 'ready' && amountAtomic > Number(balance.amountAtomic || 0)) {
+    throw new Error('Withdrawal amount exceeds the available balance.')
+  }
+
+  state.walletWithdrawalBusy = true
+  state.walletWithdrawal = undefined
+  state.walletWithdrawalError = undefined
+  renderWalletStatus()
+  try {
+    const response = await invoke<WalletWithdrawalResponse>('wallet_withdraw', {
+      input: { toAddress, amountAtomic, paymentPin },
+    })
+    if (!response.withdrawal) throw new Error('Wallet did not return a withdrawal record.')
+    state.walletWithdrawal = response.withdrawal
+    form.querySelector<HTMLInputElement>('input[name="amount"]')!.value = ''
+    form.querySelector<HTMLInputElement>('input[name="paymentPin"]')!.value = ''
+    await refreshWalletStatus()
+    showToast(response.nextAction === 'submit_to_cloud_relayer'
+      ? 'Withdrawal authorized. Exora relayer submission is still required.'
+      : 'Withdrawal authorized.')
+  } catch (error) {
+    state.walletWithdrawalError = humanizeError(error)
+    throw error
+  } finally {
+    state.walletWithdrawalBusy = false
+    renderWalletStatus()
   }
 }
 
@@ -16071,7 +16697,88 @@ async function renderWalletQRCode(address: string) {
   }
 }
 
+function renderWalletPanelState() {
+  fields.walletPanelTabs.forEach((button) => {
+    const active = button.dataset.walletTab === state.walletPanel
+    button.classList.toggle('active', active)
+    button.setAttribute('aria-selected', String(active))
+    button.tabIndex = active ? 0 : -1
+  })
+  fields.walletPanels.forEach((panel) => {
+    const active = panel.dataset.walletPanel === state.walletPanel
+    panel.classList.toggle('hidden', !active)
+    panel.setAttribute('aria-hidden', String(!active))
+  })
+}
+
+function selectWalletPanel(panel: WalletPanel, focus = false) {
+  state.walletPanel = panel
+  renderWalletPanelState()
+  if (focus) fields.walletPanelTabs.find((button) => button.dataset.walletTab === panel)?.focus()
+}
+
+function renderWalletPINInput() {
+  const digits = fields.walletPinInput.value.replace(/\D/g, '').slice(0, 6)
+  if (fields.walletPinInput.value !== digits) fields.walletPinInput.value = digits
+  const focused = document.activeElement === fields.walletPinInput
+  const activeIndex = Math.min(digits.length, fields.walletPinCells.length - 1)
+  fields.walletPinCells.forEach((cell, index) => {
+    cell.classList.toggle('filled', index < digits.length)
+    cell.classList.toggle('active', focused && index === activeIndex)
+  })
+  fields.walletPinControl.classList.toggle('complete', digits.length === fields.walletPinCells.length)
+  fields.walletPinControl.classList.toggle('disabled', fields.walletPinInput.disabled)
+}
+
+function renderWalletModal() {
+  fields.walletModal.classList.toggle('hidden', !state.walletModalOpen)
+  fields.walletModal.setAttribute('aria-hidden', String(!state.walletModalOpen))
+  if (!state.walletModalOpen) return
+  renderWalletPanelState()
+  renderWalletStatus()
+  renderAccountKeySettings()
+  renderWalletPINInput()
+  localize(fields.walletModal)
+}
+
+function openWalletModal(panel: WalletPanel = state.walletPanel) {
+  closeProfileMenu()
+  closeProjectFolderMenu()
+  closeTaskContextMenu()
+  closePermissionMenu()
+  closeMarketProjectPicker()
+  closeOrderSearch()
+  closeCartModal()
+  state.walletPanel = panel
+  state.walletModalOpen = true
+  renderWalletModal()
+  renderProfileSummary()
+  void refreshWalletModalStatus()
+}
+
+function closeWalletModal() {
+  if (!state.walletModalOpen) return
+  state.walletModalOpen = false
+  fields.walletPinInput.value = ''
+  renderWalletPINInput()
+  renderWalletModal()
+  renderProfileSummary()
+}
+
+async function refreshWalletModalStatus() {
+  if (!state.walletModalOpen) return
+  const walletError = await refreshWalletStatus()
+  if (!state.walletModalOpen) return
+  renderWalletModal()
+  if (walletError) {
+    fields.walletState.textContent = uiText('offline')
+    fields.walletState.classList.remove('ready')
+    fields.walletAddress.textContent = walletError
+  }
+}
+
 function openSettings(view?: SettingsView) {
+  closeWalletModal()
   if (view) state.activeSettingsView = view
   state.profileMenuOpen = false
   state.profileSubmenu = undefined
@@ -16081,7 +16788,6 @@ function openSettings(view?: SettingsView) {
   renderAll()
   refreshSeller({ market: true })
   refreshAgentCards()
-  refreshSettingsStatus()
 }
 
 function returnFromSettings() {
@@ -16102,21 +16808,11 @@ function returnFromSettings() {
   renderAll()
 }
 
-async function refreshSettingsStatus() {
-  if (state.activeView !== 'settings') return
-  const walletError = await refreshWalletStatus()
-  renderSettingsPanel()
-  if (walletError) {
-    fields.walletState.textContent = uiText('offline')
-    fields.walletAddress.textContent = walletError
-  }
-}
-
 async function refreshWalletStatus() {
   const wallet = await invoke<{ wallet?: WalletStatus }>('wallet_status').catch((error) => ({ error: humanizeError(error) }))
   if ('wallet' in wallet) {
     state.walletStatus = wallet.wallet || {}
-    if (state.activeView === 'settings') renderWalletStatus()
+    if (state.walletModalOpen) renderWalletStatus()
     return ''
   }
   return 'error' in wallet ? wallet.error : 'Wallet status unavailable.'
@@ -16177,20 +16873,16 @@ function apiKeyValueForPayload(form: HTMLFormElement) {
 
 function selectOrderSide(side: OrderSide) {
   if (state.workOrderSide === side) return
+  const hadActivityDetail = Boolean(state.selectedV3ActivitySessionId)
   state.workOrderSide = side
   state.selectedV3ActivitySessionId = undefined
   state.v3ActivityDetail = undefined
   state.v3ActivityDetailError = undefined
   state.v3ActivityDetailLoading = false
-  state.sellerWorkspaceMode = 'transactions'
-  state.newConversationDraft = true
-  state.selectedWorkThreadId = undefined
-  state.selectedChatId = undefined
-  state.selectedId = undefined
-  state.pinStep = undefined
   scheduleSaveAppSettings()
   renderLedger()
-  renderDecisionPanel()
+  void loadV3ActivitySessions(side)
+  if (hadActivityDetail) renderDecisionPanel()
   syncTransactionProgressPolling()
 }
 
@@ -16260,6 +16952,10 @@ fields.profileMenu.addEventListener('click', (event) => {
   event.stopPropagation()
   const action = button.dataset.profileAction
   if (action === 'sign-out') signOutProfile()
+  if (action === 'change-pin') {
+    closeProfileMenu()
+    authGate.openPINSettings()
+  }
 })
 
 fields.profileMenu.addEventListener('pointerover', (event) => {
@@ -16345,6 +17041,16 @@ fields.orderSearchModal.addEventListener('click', (event) => {
   }
 })
 
+fields.walletModal.addEventListener('click', (event) => {
+  const target = event.target
+  if (!(target instanceof Element)) return
+  if (target.closest('[data-action="close-wallet"]')) {
+    event.preventDefault()
+    event.stopPropagation()
+    closeWalletModal()
+  }
+})
+
 fields.cartModal.addEventListener('click', (event) => {
   const target = event.target
   if (!(target instanceof Element)) return
@@ -16397,6 +17103,7 @@ document.addEventListener('keydown', (event) => {
     closeMarketProjectPicker()
     closeOrderSearch()
     closeCartModal()
+    closeWalletModal()
   }
 })
 
@@ -16646,13 +17353,33 @@ app.querySelectorAll<HTMLButtonElement>('[data-action="open-settings"]').forEach
   button.addEventListener('click', () => openSettings())
 })
 
+fields.walletButton.addEventListener('click', () => {
+  if (state.walletModalOpen) closeWalletModal()
+  else openWalletModal()
+})
+
+fields.walletPanelTabs.forEach((button, index) => {
+  button.addEventListener('click', () => selectWalletPanel(button.dataset.walletTab as WalletPanel))
+  button.addEventListener('keydown', (event) => {
+    let nextIndex = index
+    if (event.key === 'ArrowRight') nextIndex = (index + 1) % fields.walletPanelTabs.length
+    else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + fields.walletPanelTabs.length) % fields.walletPanelTabs.length
+    else if (event.key === 'Home') nextIndex = 0
+    else if (event.key === 'End') nextIndex = fields.walletPanelTabs.length - 1
+    else return
+    event.preventDefault()
+    selectWalletPanel(fields.walletPanelTabs[nextIndex].dataset.walletTab as WalletPanel, true)
+  })
+})
+
 app.querySelectorAll<HTMLButtonElement>('[data-action="open-api-settings"]').forEach((button) => {
   button.addEventListener('click', () => {
     if (state.activeView === 'settings') {
       returnFromSettings()
       return
     }
-    openSettings('wallet')
+    closeWalletModal()
+    openSettings('archives')
   })
 })
 
@@ -16676,7 +17403,47 @@ function closeLLMProfileMenu() {
 }
 
 app.querySelector<HTMLButtonElement>('[data-action="wallet-refresh"]')!.addEventListener('click', () => {
-  run(() => refreshSettingsStatus())
+  run(() => refreshWalletModalStatus())
+})
+
+fields.walletPinInput.addEventListener('input', renderWalletPINInput)
+fields.walletPinInput.addEventListener('focus', renderWalletPINInput)
+fields.walletPinInput.addEventListener('blur', renderWalletPINInput)
+
+app.querySelector<HTMLButtonElement>('[data-action="wallet-withdraw-max"]')!.addEventListener('click', () => {
+  const balance = walletUSDCBalance()
+  const amountInput = fields.walletWithdrawForm.querySelector<HTMLInputElement>('input[name="amount"]')!
+  amountInput.value = walletAtomicInput(Number(balance?.amountAtomic || 0), walletUSDCDecimals())
+  amountInput.focus()
+})
+
+fields.walletWithdrawForm.addEventListener('submit', (event) => {
+  event.preventDefault()
+  void run(() => submitWalletWithdrawal(fields.walletWithdrawForm))
+})
+
+app.querySelector<HTMLButtonElement>('[data-account-key-save]')?.addEventListener('click', () => {
+  void run(async () => {
+    const response = await invoke<V3AccountKeyStatus & { balance?: V3ConsumerBalance }>('account_key_save')
+    state.v3AccountKeyStatus = response
+    state.v3AccountKeyLoaded = true
+    state.v3ConsumerBalance = response.balance
+    state.v3ConsumerError = undefined
+    renderWalletModal()
+  }, 'Account key validated.')
+})
+
+app.querySelector<HTMLButtonElement>('[data-account-key-delete]')?.addEventListener('click', () => {
+  void run(async () => {
+    state.v3AccountKeyStatus = await invoke<V3AccountKeyStatus>('account_key_delete')
+    state.v3AccountKeyLoaded = true
+    state.v3ConsumerBalance = undefined
+    state.v3ConsumerResponse = undefined
+    state.v3ConsumerGrant = undefined
+    state.v3ConsumerPurchase = undefined
+    state.v3ConsumerLease = undefined
+    renderWalletModal()
+  }, 'Account key deleted.')
 })
 
 fields.chatAgentButton.addEventListener('click', (event) => {
@@ -16739,7 +17506,28 @@ agentQuery.addEventListener('keydown', (event) => {
 agentQuery.addEventListener('input', resizeAgentComposer)
 fields.chatView.addEventListener('wheel', routeExpandedTransactionStageWheel, { passive: false })
 
-async function bootstrap() {
+let workspaceBootstrapped = false
+
+const authGate = createAuthGate(app, {
+  invoke,
+  language: () => state.language,
+  onAuthenticated: (authState) => {
+    state.authAccount = authState.account
+    state.signedOut = false
+    renderProfileSummary()
+    void bootstrapWorkspace()
+  },
+  onSignedOut: () => {
+    state.authAccount = undefined
+    state.signedOut = true
+    state.profileMenuOpen = false
+    renderProfileSummary()
+  },
+})
+
+async function bootstrapWorkspace() {
+  if (workspaceBootstrapped) return
+  workspaceBootstrapped = true
   await hydrateDesktopPersistence()
   localAgentEventUnsubscribe = window.exora?.onLocalAgentEvent?.(handleLocalAgentEventPayload)
   v3ProgressUnsubscribe = window.exora?.onV3Progress?.((payload) => {
@@ -16760,17 +17548,22 @@ async function bootstrap() {
         sourceBytes: event.sourceBytes,
         outputBytes: event.outputBytes,
       }
-      if (state.workOrderSide === 'seller' && state.v3SellerTab === 'resources') renderDecisionPanel()
+      if (state.v3SellerTab === 'resources') renderDecisionPanel()
       return
     }
     if (event.kind === 'asset_upload' && typeof event.completed === 'number' && typeof event.total === 'number') {
       state.v3AssetProgress = { phase: 'uploading', percent: event.total > 0 ? Math.round(event.completed / event.total * 100) : 0, completed: event.completed, total: event.total }
-      if (state.workOrderSide === 'seller' && state.v3SellerTab === 'resources') renderDecisionPanel()
+      if (state.v3SellerTab === 'resources') renderDecisionPanel()
+      return
+    }
+    if (event.kind === 'marketplace_download' && event.phase && typeof event.bytesDownloaded === 'number') {
+      state.v3ConsumerTransferProgress = { phase: event.phase, bytesDownloaded: event.bytesDownloaded, sizeBytes: Number(event.sizeBytes || 0) }
+      if (state.v3SellerTab === 'listings') renderDecisionPanel()
       return
     }
     if (event.kind !== 'environment_image' || !event.imageId || !event.phase) return
     state.v3ImageProgress = { imageId: event.imageId, phase: event.phase, bytesDownloaded: event.bytesDownloaded, sizeBytes: event.sizeBytes }
-    if (state.workOrderSide === 'seller' && state.v3SellerTab === 'vm') renderDecisionPanel()
+    if (state.v3SellerTab === 'vm') renderDecisionPanel()
   })
   applyUserPreferences()
   renderChat()
@@ -16785,6 +17578,14 @@ async function bootstrap() {
   window.setTimeout(() => refreshWorkspace({ quiet: true }), 250)
   setInterval(refreshStatus, 5000)
   setInterval(() => refreshWorkspace({ quiet: true }), 12000)
+}
+
+async function bootstrap() {
+  applyUserPreferences()
+  window.exora?.onAuthStateChanged?.((payload) => {
+    if (payload && typeof payload === 'object') authGate.applyState(payload as CloudAuthState)
+  })
+  await authGate.initialize()
 }
 
 void bootstrap()

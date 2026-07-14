@@ -144,6 +144,14 @@ func (s Server) dispatch(ctx context.Context, cmd string, in map[string]any) (ma
 		return s.clone(ctx, in)
 	case "reset_test_clone":
 		return s.reset(ctx, in)
+	case "lease_recheck":
+		return persistentWorkerCommand(s.DataDir, cmd, in, func() (map[string]any, error) { return s.leaseRecheck(ctx, in) })
+	case "provision_lease":
+		return persistentWorkerCommand(s.DataDir, cmd, in, func() (map[string]any, error) { return s.provisionLease(ctx, in) })
+	case "renew_lease_epoch":
+		return persistentWorkerCommand(s.DataDir, cmd, in, func() (map[string]any, error) { return s.renewLease(ctx, in) })
+	case "reset_lease":
+		return persistentWorkerCommand(s.DataDir, cmd, in, func() (map[string]any, error) { return s.resetLease(ctx, in) })
 	case "delete_template":
 		p, err := s.managedPath(str(in, "templateId") + ".qcow2")
 		if err != nil {
@@ -358,6 +366,224 @@ func (s Server) reset(ctx context.Context, in map[string]any) (map[string]any, e
 		return nil, err
 	}
 	return map[string]any{"cloneId": clone, "writeLayerDeleted": true, "encryptionKeyDestroyed": true, "state": "verified", "completedAt": time.Now().UTC()}, nil
+}
+
+func linuxInt64(in map[string]any, key string) int64 {
+	switch value := in[key].(type) {
+	case int64:
+		return value
+	case float64:
+		return int64(value)
+	case json.Number:
+		result, _ := value.Int64()
+		return result
+	case string:
+		result, _ := strconv.ParseInt(value, 10, 64)
+		return result
+	}
+	return 0
+}
+
+func nestedWorkerMap(value any) map[string]any { result, _ := value.(map[string]any); return result }
+
+func linuxLeaseProduct(in map[string]any) (map[string]any, map[string]any) {
+	product := nestedWorkerMap(in["product"])
+	return product, nestedWorkerMap(product["manifest"])
+}
+
+func (s Server) leaseRecheck(ctx context.Context, in map[string]any) (map[string]any, error) {
+	if _, err := os.Stat("/dev/kvm"); err != nil {
+		return nil, fmt.Errorf("KVM is unavailable")
+	}
+	if !iommuReady() {
+		return nil, fmt.Errorf("IOMMU is unavailable")
+	}
+	capacity, err := s.capacity(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if busy, _ := capacity["providerBusy"].(bool); busy {
+		return nil, fmt.Errorf("provider GPU is busy")
+	}
+	leaseID := str(in, "leaseId")
+	if !safeID.MatchString(leaseID) {
+		return nil, fmt.Errorf("invalid leaseId")
+	}
+	return map[string]any{"healthy": true, "providerBusy": false, "leaseId": leaseID, "checkLevel": "lease_recheck", "checkedAt": time.Now().UTC()}, nil
+}
+
+func randomLeaseUUID() string {
+	raw := make([]byte, 16)
+	_, _ = rand.Read(raw)
+	raw[6] = (raw[6] & 0x0f) | 0x40
+	raw[8] = (raw[8] & 0x3f) | 0x80
+	hexValue := hex.EncodeToString(raw)
+	return hexValue[:8] + "-" + hexValue[8:12] + "-" + hexValue[12:16] + "-" + hexValue[16:20] + "-" + hexValue[20:]
+}
+
+func replaceLeaseDomainXML(source, leaseID, diskPath, secretUUID, seedPath string) string {
+	source = regexp.MustCompile(`<name>[^<]+</name>`).ReplaceAllString(source, "<name>"+leaseID+"</name>")
+	source = regexp.MustCompile(`(?s)<uuid>.*?</uuid>`).ReplaceAllString(source, "")
+	source = regexp.MustCompile(`<source\s+file=['\"][^'\"]+['\"]\s*/>`).ReplaceAllString(source, "<source file='"+diskPath+"'/>")
+	encryption := "<encryption format='luks'><secret type='passphrase' uuid='" + secretUUID + "'/></encryption>"
+	source = strings.Replace(source, "</disk>", encryption+"</disk>", 1)
+	seed := "<disk type='file' device='cdrom'><driver name='qemu' type='raw'/><source file='" + seedPath + "'/><target dev='sdb' bus='sata'/><readonly/></disk>"
+	return strings.Replace(source, "</devices>", seed+"</devices>", 1)
+}
+
+func (s Server) provisionLease(ctx context.Context, in map[string]any) (map[string]any, error) {
+	if _, err := s.leaseRecheck(ctx, in); err != nil {
+		return nil, err
+	}
+	leaseID := str(in, "leaseId")
+	_, manifest := linuxLeaseProduct(in)
+	templateID, _ := manifest["templateId"].(string)
+	if templateID == "" {
+		templateID, _ = manifest["environmentImageId"].(string)
+	}
+	if !safeID.MatchString(templateID) {
+		return nil, fmt.Errorf("compute manifest requires a valid templateId")
+	}
+	base, err := s.managedPath(templateID + ".qcow2")
+	if err != nil {
+		return nil, err
+	}
+	templateXMLPath, err := s.managedPath(templateID + ".xml")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(base); err != nil {
+		return nil, fmt.Errorf("golden image is unavailable: %w", err)
+	}
+	templateXML, err := os.ReadFile(templateXMLPath)
+	if err != nil {
+		return nil, fmt.Errorf("golden domain XML is unavailable: %w", err)
+	}
+	diskPath, _ := s.managedPath(leaseID + ".qcow2")
+	keyPath, _ := s.managedPath(leaseID + ".key")
+	secretPath, _ := s.managedPath(leaseID + ".secret.xml")
+	domainPath, _ := s.managedPath(leaseID + ".lease.xml")
+	seedPath, _ := s.managedPath(leaseID + ".seed.iso")
+	privateKeyPath, _ := s.managedPath(leaseID + ".ssh")
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, err
+	}
+	encodedKey := base64.StdEncoding.EncodeToString(key)
+	if err := os.WriteFile(keyPath, []byte(encodedKey), 0600); err != nil {
+		return nil, err
+	}
+	if _, err := s.Runner.Run(ctx, "qemu-img", "create", "--object", "secret,id=sec0,data="+encodedKey, "-f", "qcow2", "-F", "qcow2", "-b", base, "-o", "encrypt.format=luks,encrypt.key-secret=sec0", diskPath); err != nil {
+		_ = os.Remove(keyPath)
+		return nil, err
+	}
+	secretUUID := randomLeaseUUID()
+	secretXML := "<secret ephemeral='no' private='yes'><uuid>" + secretUUID + "</uuid><usage type='volume'><name>exora-" + leaseID + "</name></usage></secret>"
+	if err := os.WriteFile(secretPath, []byte(secretXML), 0600); err != nil {
+		return nil, err
+	}
+	if _, err := s.Runner.Run(ctx, "virsh", "secret-define", "--file", secretPath); err != nil {
+		return nil, err
+	}
+	if _, err := s.Runner.Run(ctx, "virsh", "secret-set-value", "--secret", secretUUID, "--base64", encodedKey); err != nil {
+		return nil, err
+	}
+	sshPublicKey := str(in, "sshPublicKey")
+	privateKey := ""
+	if sshPublicKey == "" {
+		if _, err := s.Runner.Run(ctx, "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", privateKeyPath); err != nil {
+			return nil, err
+		}
+		publicRaw, readErr := os.ReadFile(privateKeyPath + ".pub")
+		if readErr != nil {
+			return nil, readErr
+		}
+		sshPublicKey = strings.TrimSpace(string(publicRaw))
+		privateRaw, readErr := os.ReadFile(privateKeyPath)
+		if readErr != nil {
+			return nil, readErr
+		}
+		privateKey = string(privateRaw)
+	}
+	userDataPath, _ := s.managedPath(leaseID + ".user-data")
+	metaDataPath, _ := s.managedPath(leaseID + ".meta-data")
+	userData := "#cloud-config\nusers:\n  - name: exora\n    sudo: ALL=(ALL) NOPASSWD:ALL\n    shell: /bin/bash\n    ssh_authorized_keys:\n      - " + sshPublicKey + "\nssh_pwauth: false\n"
+	_ = os.WriteFile(userDataPath, []byte(userData), 0600)
+	_ = os.WriteFile(metaDataPath, []byte("instance-id: "+leaseID+"\nlocal-hostname: "+leaseID+"\n"), 0600)
+	if _, err := s.Runner.Run(ctx, "cloud-localds", seedPath, userDataPath, metaDataPath); err != nil {
+		return nil, fmt.Errorf("cloud-init seed creation failed: %w", err)
+	}
+	domainXML := replaceLeaseDomainXML(string(templateXML), leaseID, diskPath, secretUUID, seedPath)
+	if err := os.WriteFile(domainPath, []byte(domainXML), 0600); err != nil {
+		return nil, err
+	}
+	if _, err := s.Runner.Run(ctx, "virsh", "define", domainPath); err != nil {
+		return nil, err
+	}
+	if _, err := s.Runner.Run(ctx, "virsh", "start", leaseID); err != nil {
+		return nil, err
+	}
+	state, err := s.Runner.Run(ctx, "virsh", "domstate", leaseID)
+	if err != nil || !strings.Contains(strings.ToLower(state), "running") {
+		return nil, fmt.Errorf("guest verification failed")
+	}
+	addresses, _ := s.Runner.Run(ctx, "virsh", "domifaddr", leaseID, "--source", "agent")
+	host := ""
+	if match := regexp.MustCompile(`\b((?:\d{1,3}\.){3}\d{1,3})/\d+`).FindStringSubmatch(addresses); len(match) == 2 {
+		host = match[1]
+	}
+	metadata := map[string]any{"leaseId": leaseID, "secretUUID": secretUUID, "privateKeyPath": privateKeyPath, "seedPath": seedPath, "domainPath": domainPath, "keyPath": keyPath, "diskPath": diskPath}
+	metadataRaw, _ := json.Marshal(metadata)
+	metadataPath, _ := s.managedPath(leaseID + ".lease.json")
+	_ = os.WriteFile(metadataPath, metadataRaw, 0600)
+	_ = os.Remove(privateKeyPath)
+	_ = os.Remove(privateKeyPath + ".pub")
+	_ = os.Remove(userDataPath)
+	_ = os.Remove(metaDataPath)
+	for i := range key {
+		key[i] = 0
+	}
+	capability := map[string]any{"protocol": "ssh", "host": host, "port": 22, "username": "exora", "leaseEpoch": linuxInt64(in, "leaseEpoch")}
+	if privateKey != "" {
+		capability["privateKeyPem"] = privateKey
+	}
+	return map[string]any{"leaseId": leaseID, "state": "active", "guestVerified": true, "backend": "kvm_libvirt", "isolationClass": "hardware_virtualized", "capability": capability}, nil
+}
+
+func (s Server) renewLease(ctx context.Context, in map[string]any) (map[string]any, error) {
+	leaseID := str(in, "leaseId")
+	if !safeID.MatchString(leaseID) {
+		return nil, fmt.Errorf("invalid leaseId")
+	}
+	state, err := s.Runner.Run(ctx, "virsh", "domstate", leaseID)
+	if err != nil || !strings.Contains(strings.ToLower(state), "running") {
+		return nil, fmt.Errorf("lease guest is not running")
+	}
+	return map[string]any{"leaseId": leaseID, "leaseEpoch": linuxInt64(in, "leaseEpoch"), "state": "active", "renewedAt": time.Now().UTC()}, nil
+}
+
+func (s Server) resetLease(ctx context.Context, in map[string]any) (map[string]any, error) {
+	leaseID := str(in, "leaseId")
+	if !safeID.MatchString(leaseID) {
+		return nil, fmt.Errorf("invalid leaseId")
+	}
+	metadataPath, _ := s.managedPath(leaseID + ".lease.json")
+	metadata := map[string]any{}
+	if raw, err := os.ReadFile(metadataPath); err == nil {
+		_ = json.Unmarshal(raw, &metadata)
+	}
+	_, _ = s.Runner.Run(ctx, "virsh", "destroy", leaseID)
+	_, _ = s.Runner.Run(ctx, "virsh", "undefine", leaseID, "--nvram")
+	if secretUUID, _ := metadata["secretUUID"].(string); secretUUID != "" {
+		_, _ = s.Runner.Run(ctx, "virsh", "secret-undefine", secretUUID)
+	}
+	for _, suffix := range []string{".qcow2", ".key", ".secret.xml", ".lease.xml", ".seed.iso", ".lease.json", ".ssh", ".ssh.pub", ".user-data", ".meta-data"} {
+		path, _ := s.managedPath(leaseID + suffix)
+		if path != "" {
+			_ = os.Remove(path)
+		}
+	}
+	return map[string]any{"leaseId": leaseID, "state": "verified", "resetReceipt": map[string]any{"writeLayerDeleted": true, "encryptionKeyDestroyed": true, "guestCredentialsDestroyed": true, "completedAt": time.Now().UTC()}}, nil
 }
 
 var _ = strconv.Itoa

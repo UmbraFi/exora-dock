@@ -18,6 +18,7 @@ import (
 
 type TokenFile struct {
 	DockID     string `json:"dockId"`
+	AccountID  string `json:"accountId,omitempty"`
 	CloudURL   string `json:"cloudUrl"`
 	CloudToken string `json:"cloudToken"`
 	LinkedAt   string `json:"linkedAt"`
@@ -127,7 +128,7 @@ func Link(ctx context.Context, cloudURL, tokenPath string, req DeviceLinkRequest
 		status, err := postJSONStatus(ctx, client, cloudURL+"/v1/device-links/token", "", map[string]string{"deviceCode": link.DeviceCode}, &token)
 		if err == nil && status == http.StatusOK && strings.TrimSpace(token.CloudToken) != "" {
 			err = SaveToken(tokenPath, TokenFile{
-				DockID: token.DockID, CloudURL: cloudURL, CloudToken: token.CloudToken,
+				DockID: token.DockID, AccountID: token.AccountID, CloudURL: cloudURL, CloudToken: token.CloudToken,
 				LinkedAt: time.Now().UTC().Format(time.RFC3339),
 			})
 			return link, token, err

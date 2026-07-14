@@ -125,7 +125,11 @@ func (s *Server) handle(ctx context.Context, req rpcRequest) any {
 			return nil
 		}
 		if s.v2Surface() {
-			return rpcResult(req.ID, map[string]any{"tools": v2ToolDefinitions()})
+			definitions := v2ToolDefinitions()
+			if !s.v2Automation() {
+				definitions = append(definitions, marketplaceToolDefinitions()...)
+			}
+			return rpcResult(req.ID, map[string]any{"tools": definitions})
 		}
 		return rpcResult(req.ID, map[string]any{"tools": s.toolDefinitions()})
 	case "tools/call":
@@ -222,7 +226,7 @@ func (s *Server) callToolInner(ctx context.Context, name string, args map[string
 			return successResult(map[string]any{"recorded": true, "sessionId": s.opts.AgentSessionID, "waitingFor": "plan_review", "plans": plans}), nil
 		}
 	}
-	if s.v2Surface() {
+	if s.v2Surface() && (!isMarketplaceTool(name) || s.v2Automation()) {
 		if !s.v2Automation() {
 			shortName := strings.TrimPrefix(strings.TrimSpace(name), "exora.")
 			for _, allowed := range v2ToolShortNames {
@@ -235,6 +239,68 @@ func (s *Server) callToolInner(ctx context.Context, name string, args map[string
 		return s.callV2Tool(ctx, name, args)
 	}
 	switch name {
+	case "exora.search_products":
+		query := url.Values{}
+		copyStringArg(query, args, "q")
+		copyStringArg(query, args, "kind")
+		return s.proxy(ctx, http.MethodGet, "/v3/catalog/listings", query, nil)
+	case "exora.get_product_manifest":
+		listingID := firstString(args, "listingId")
+		if listingID == "" {
+			return errorResult("listingId required", nil), nil
+		}
+		return s.proxy(ctx, http.MethodGet, "/v3/catalog/listings/"+url.PathEscape(listingID), nil, nil)
+	case "exora.estimate_purchase":
+		if firstString(args, "listingId") == "" {
+			return errorResult("listingId required", nil), nil
+		}
+		return s.proxy(ctx, http.MethodPost, "/v3/purchase-estimates", nil, args)
+	case "exora.purchase_compute_minutes":
+		if firstString(args, "listingId") == "" || firstString(args, "idempotencyKey") == "" {
+			return errorResult("listingId and idempotencyKey required", nil), nil
+		}
+		return s.proxy(ctx, http.MethodPost, "/v3/compute-purchases", nil, args)
+	case "exora.extend_compute_minutes":
+		purchaseID := firstString(args, "purchaseId")
+		if purchaseID == "" || firstString(args, "idempotencyKey") == "" {
+			return errorResult("purchaseId and idempotencyKey required", nil), nil
+		}
+		body := cloneArgs(args)
+		delete(body, "purchaseId")
+		return s.proxy(ctx, http.MethodPost, "/v3/compute-purchases/"+url.PathEscape(purchaseID)+"/extend", nil, body)
+	case "exora.purchase_download":
+		if firstString(args, "listingId") == "" || firstString(args, "idempotencyKey") == "" {
+			return errorResult("listingId and idempotencyKey required", nil), nil
+		}
+		return s.proxy(ctx, http.MethodPost, "/v3/download-grants", nil, args)
+	case "exora.create_download_transfer":
+		grantID := firstString(args, "grantId")
+		if grantID == "" {
+			return errorResult("grantId required", nil), nil
+		}
+		return s.proxy(ctx, http.MethodPost, "/v3/download-grants/"+url.PathEscape(grantID)+"/transfers", nil, map[string]any{})
+	case "exora.invoke_operation":
+		if firstString(args, "listingId") == "" || firstString(args, "operationId") == "" || firstString(args, "idempotencyKey") == "" {
+			return errorResult("listingId, operationId, and idempotencyKey required", nil), nil
+		}
+		return s.proxy(ctx, http.MethodPost, "/v3/invocations", nil, args)
+	case "exora.get_lease":
+		leaseID := firstString(args, "leaseId")
+		if leaseID == "" {
+			return errorResult("leaseId required", nil), nil
+		}
+		return s.proxy(ctx, http.MethodGet, "/v3/leases/"+url.PathEscape(leaseID), nil, nil)
+	case "exora.release_lease":
+		leaseID := firstString(args, "leaseId")
+		if leaseID == "" {
+			return errorResult("leaseId required", nil), nil
+		}
+		return s.proxy(ctx, http.MethodPost, "/v3/leases/"+url.PathEscape(leaseID)+"/release", nil, map[string]any{})
+	case "exora.get_usage":
+		if leaseID := firstString(args, "leaseId"); leaseID != "" {
+			return s.proxy(ctx, http.MethodGet, "/v3/leases/"+url.PathEscape(leaseID), nil, nil)
+		}
+		return s.proxy(ctx, http.MethodGet, "/v3/ledger", nil, nil)
 	case "exora.save_api_bridge_draft":
 		// Deliberately forwards only the public draft schema. Provider credentials,
 		// seller attestation, listing creation, and publishing are UI-only actions.
@@ -246,10 +312,13 @@ func (s *Server) callToolInner(ctx context.Context, name string, args map[string
 	case "exora.invoke_api_bridge":
 		listingID := firstString(args, "listingId")
 		operationID := firstString(args, "operationId")
-		if listingID == "" || operationID == "" {
-			return errorResult("listingId and operationId required", nil), nil
+		if listingID == "" || operationID == "" || firstString(args, "idempotencyKey") == "" {
+			return errorResult("listingId, operationId, and idempotencyKey required", nil), nil
 		}
-		return s.proxy(ctx, http.MethodPost, "/v3/gateway-invoke", nil, args)
+		if _, ok := args["maxChargeAtomic"]; !ok {
+			return errorResult("maxChargeAtomic required", nil), nil
+		}
+		return s.proxy(ctx, http.MethodPost, "/v3/invocations", nil, args)
 	case "exora.get_my_agent_card":
 		return s.proxy(ctx, http.MethodGet, "/v1/agent-cards/mine", nil, nil)
 	case "exora.search_agent_cards":
@@ -1698,6 +1767,26 @@ func V2ToolNames() []string {
 	return out
 }
 
+var marketplaceToolNames = map[string]bool{
+	"exora.search_products": true, "exora.get_product_manifest": true, "exora.estimate_purchase": true,
+	"exora.purchase_compute_minutes": true, "exora.extend_compute_minutes": true, "exora.purchase_download": true,
+	"exora.create_download_transfer": true, "exora.invoke_operation": true, "exora.get_lease": true,
+	"exora.release_lease": true, "exora.get_usage": true,
+}
+
+func isMarketplaceTool(name string) bool { return marketplaceToolNames[strings.TrimSpace(name)] }
+
+func marketplaceToolDefinitions() []toolDefinition {
+	all := toolDefinitions()
+	out := make([]toolDefinition, 0, len(marketplaceToolNames))
+	for _, definition := range all {
+		if isMarketplaceTool(definition.Name) {
+			out = append(out, definition)
+		}
+	}
+	return out
+}
+
 func v2ToolDefinitions() []toolDefinition {
 	definitions := []toolDefinition{
 		{
@@ -1748,6 +1837,17 @@ func strictObjectSchema(properties map[string]any, required []string) map[string
 
 func toolDefinitions() []toolDefinition {
 	return []toolDefinition{
+		{Name: "exora.search_products", Title: "Search Exora Products", Description: "Browse the same published listing catalog shown in Exora Dock.", InputSchema: strictObjectSchema(map[string]any{"q": stringProp("Optional title or description query."), "kind": stringProp("Optional compute, download, or api_operation kind.")}, nil)},
+		{Name: "exora.get_product_manifest", Title: "Get Product Manifest", Description: "Read a published listing, its manifest, price, availability, and isolation disclosure.", InputSchema: strictObjectSchema(map[string]any{"listingId": stringProp("Published listing id.")}, []string{"listingId"})},
+		{Name: "exora.estimate_purchase", Title: "Estimate Purchase", Description: "Estimate the authoritative charge, balance, and approval requirement before spending.", InputSchema: strictObjectSchema(map[string]any{"listingId": stringProp("Published listing id."), "durationMinutes": integerProp("Positive whole minutes for compute products.")}, []string{"listingId"})},
+		{Name: "exora.purchase_compute_minutes", Title: "Purchase Compute Minutes", Description: "Reserve funds and provision a KVM or disclosed managed WSL lease through the canonical consumer API.", InputSchema: strictObjectSchema(map[string]any{"listingId": stringProp("Published compute listing id."), "durationMinutes": integerProp("Positive whole minutes."), "idempotencyKey": stringProp("Stable retry key."), "maxChargeAtomic": integerProp("Maximum authorized USDC atomic charge."), "approvalId": stringProp("Approved over-budget request id, when required."), "activitySessionId": stringProp("Stable history grouping id."), "sshPublicKey": stringProp("Optional SSH public key installed in the guest.")}, []string{"listingId", "durationMinutes", "idempotencyKey", "maxChargeAtomic"})},
+		{Name: "exora.extend_compute_minutes", Title: "Extend Compute Minutes", Description: "Purchase additional whole minutes for an active lease.", InputSchema: strictObjectSchema(map[string]any{"purchaseId": stringProp("Original compute purchase id."), "durationMinutes": integerProp("Additional whole minutes."), "idempotencyKey": stringProp("Stable retry key."), "maxChargeAtomic": integerProp("Maximum authorized charge."), "approvalId": stringProp("Approved over-budget request id, when required.")}, []string{"purchaseId", "durationMinutes", "idempotencyKey", "maxChargeAtomic"})},
+		{Name: "exora.purchase_download", Title: "Purchase Download", Description: "Charge once and issue a non-transferable DownloadGrant for an asset or model.", InputSchema: strictObjectSchema(map[string]any{"listingId": stringProp("Published download listing id."), "idempotencyKey": stringProp("Stable retry key."), "maxChargeAtomic": integerProp("Maximum authorized charge."), "approvalId": stringProp("Approved over-budget request id, when required."), "activitySessionId": stringProp("Stable history grouping id.")}, []string{"listingId", "idempotencyKey", "maxChargeAtomic"})},
+		{Name: "exora.create_download_transfer", Title: "Create Download Transfer", Description: "Issue a short-lived resumable transfer URL from an active DownloadGrant without charging again.", InputSchema: strictObjectSchema(map[string]any{"grantId": stringProp("Active download grant id.")}, []string{"grantId"})},
+		{Name: "exora.invoke_operation", Title: "Invoke Marketplace Operation", Description: "Invoke a paid API operation with the same idempotency, maximum charge, budget, approval, and ledger path as the Desktop.", InputSchema: strictObjectSchema(map[string]any{"listingId": stringProp("Published API listing id."), "operationId": stringProp("Declared operation id."), "idempotencyKey": stringProp("Stable retry key."), "maxChargeAtomic": integerProp("Maximum authorized charge."), "approvalId": stringProp("Approved request id when required."), "activitySessionId": stringProp("Stable history grouping id."), "query": objectProp("Query parameters."), "headers": objectProp("Safe request headers."), "body": objectProp("JSON request body.")}, []string{"listingId", "operationId", "idempotencyKey", "maxChargeAtomic"})},
+		{Name: "exora.get_lease", Title: "Get Lease", Description: "Read lease state, expiry, backend disclosure, and current guest capability.", InputSchema: strictObjectSchema(map[string]any{"leaseId": stringProp("Lease id.")}, []string{"leaseId"})},
+		{Name: "exora.release_lease", Title: "Release Lease", Description: "End an active lease and request provider reset. Voluntary early release has no refund.", InputSchema: strictObjectSchema(map[string]any{"leaseId": stringProp("Lease id.")}, []string{"leaseId"})},
+		{Name: "exora.get_usage", Title: "Get Marketplace Usage", Description: "Read an active lease or the account's append-only marketplace ledger.", InputSchema: strictObjectSchema(map[string]any{"leaseId": stringProp("Optional lease id; omit for account ledger.")}, nil)},
 		{
 			Name: "exora.save_api_bridge_draft", Title: "Save API Bridge Draft",
 			Description: "Create or version-update a seller API Bridge or Dock Endpoint draft. The Agent standardizes routes, metering, and pricing but cannot submit credentials, attest seller responsibility, create a Listing, or publish.",
@@ -1765,11 +1865,13 @@ func toolDefinitions() []toolDefinition {
 			Description: "Invoke a published API Bridge operation through the same metered transparent Gateway used by HTTP clients.",
 			InputSchema: strictObjectSchema(map[string]any{
 				"listingId": stringProp("Published listing id."), "operationId": stringProp("Declared operation id."),
+				"idempotencyKey":    stringProp("Stable unique key for this logical invocation; reuse it on retries."),
+				"maxChargeAtomic":   integerProp("Maximum authorized USDC atomic charge."),
 				"activitySessionId": stringProp("Stable caller-generated id that groups related invocations into one human history record. Reuse it only for the same resource task."),
 				"query":             objectProp("Optional query parameters."), "headers": objectProp("Optional safe provider request headers."),
 				"body": objectProp("Optional JSON request body."), "artifacts": arrayProp("Optional artifact references."),
 				"maxBudgetAtomic": numberProp("Optional buyer-side USDC atomic budget cap."),
-			}, []string{"listingId", "operationId"}),
+			}, []string{"listingId", "operationId", "idempotencyKey", "maxChargeAtomic"}),
 		},
 		{
 			Name:        "exora.get_my_agent_card",

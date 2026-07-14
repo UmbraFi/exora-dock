@@ -2,7 +2,11 @@ package endpoint
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +17,7 @@ import (
 	"time"
 
 	"github.com/exora-dock/exora-dock/internal/cloudlink"
+	"github.com/exora-dock/exora-dock/internal/providerworker"
 	"github.com/gorilla/websocket"
 )
 
@@ -32,6 +37,18 @@ type Frame struct {
 	Error      string              `json:"error,omitempty"`
 	TimeoutSec int                 `json:"timeoutSeconds,omitempty"`
 	Endpoints  []TunnelStatus      `json:"endpoints,omitempty"`
+	Control    *ControlCommand     `json:"control,omitempty"`
+	Result     map[string]any      `json:"result,omitempty"`
+}
+
+type ControlCommand struct {
+	CommandID  string         `json:"commandId"`
+	Command    string         `json:"command"`
+	LeaseID    string         `json:"leaseId,omitempty"`
+	LeaseEpoch int64          `json:"leaseEpoch"`
+	Deadline   time.Time      `json:"deadline"`
+	Input      map[string]any `json:"input,omitempty"`
+	Signature  string         `json:"signature"`
 }
 
 type TunnelStatus struct {
@@ -57,6 +74,7 @@ type TunnelClient struct {
 	requests   map[string]*requestState
 	semaphores map[string]chan struct{}
 	notify     chan struct{}
+	controlKey []byte
 }
 
 func NewTunnelClient(cloudURL, tokenPath string, store *Store) *TunnelClient {
@@ -101,6 +119,9 @@ func (c *TunnelClient) runConnection(ctx context.Context) error {
 	if err != nil || strings.TrimSpace(token.CloudToken) == "" {
 		return errors.New("Cloud link is not configured")
 	}
+	c.stateMu.Lock()
+	c.controlKey = []byte(strings.TrimSpace(token.CloudToken))
+	c.stateMu.Unlock()
 	base := c.CloudURL
 	if base == "" {
 		base = strings.TrimRight(strings.TrimSpace(token.CloudURL), "/")
@@ -186,6 +207,8 @@ func (c *TunnelClient) send(conn *websocket.Conn, frame Frame) error {
 
 func (c *TunnelClient) handleFrame(ctx context.Context, conn *websocket.Conn, frame Frame) error {
 	switch frame.Type {
+	case "control_command":
+		return c.handleControl(ctx, conn, frame)
 	case "request_start":
 		return c.startRequest(ctx, conn, frame)
 	case "request_chunk":
@@ -210,6 +233,60 @@ func (c *TunnelClient) handleFrame(ctx context.Context, conn *websocket.Conn, fr
 		}
 	case "cancel":
 		c.finishRequest(frame.RequestID, true)
+	}
+	return nil
+}
+
+func (c *TunnelClient) handleControl(ctx context.Context, conn *websocket.Conn, frame Frame) error {
+	command := frame.Control
+	if command == nil || command.CommandID == "" || command.CommandID != frame.RequestID {
+		return errors.New("invalid control command envelope")
+	}
+	if command.Deadline.IsZero() || time.Now().After(command.Deadline) {
+		return c.send(conn, Frame{Version: frameVersion, Type: "control_error", RequestID: frame.RequestID, Error: "control command deadline has expired"})
+	}
+	c.stateMu.Lock()
+	key := append([]byte(nil), c.controlKey...)
+	c.stateMu.Unlock()
+	if err := verifyControlCommandSignature(*command, key); err != nil {
+		return err
+	}
+	workerCommand := map[string]string{"ProvisionLease": "provision_lease", "RenewLeaseEpoch": "renew_lease_epoch", "ResetVM": "reset_lease", "CapacityRecheck": "lease_recheck"}[command.Command]
+	if workerCommand == "" {
+		return c.send(conn, Frame{Version: frameVersion, Type: "control_error", RequestID: frame.RequestID, Error: "unsupported provider control command"})
+	}
+	input := map[string]any{}
+	for key, value := range command.Input {
+		input[key] = value
+	}
+	input["commandId"] = command.CommandID
+	input["leaseId"] = command.LeaseID
+	input["leaseEpoch"] = command.LeaseEpoch
+	input["deadline"] = command.Deadline.UTC().Format(time.RFC3339Nano)
+	commandCtx, cancel := context.WithDeadline(ctx, command.Deadline)
+	defer cancel()
+	result, callErr := (providerworker.Client{}).Call(commandCtx, workerCommand, input)
+	if callErr != nil {
+		return c.send(conn, Frame{Version: frameVersion, Type: "control_error", RequestID: frame.RequestID, Error: callErr.Error()})
+	}
+	return c.send(conn, Frame{Version: frameVersion, Type: "control_result", RequestID: frame.RequestID, Result: result})
+}
+
+func verifyControlCommandSignature(command ControlCommand, key []byte) error {
+	if len(key) == 0 {
+		return errors.New("provider control signing key is unavailable")
+	}
+	want, err := hex.DecodeString(command.Signature)
+	if err != nil {
+		return errors.New("invalid control command signature")
+	}
+	unsigned := command
+	unsigned.Signature = ""
+	raw, _ := json.Marshal(unsigned)
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write(raw)
+	if !hmac.Equal(want, mac.Sum(nil)) {
+		return errors.New("invalid control command signature")
 	}
 	return nil
 }
