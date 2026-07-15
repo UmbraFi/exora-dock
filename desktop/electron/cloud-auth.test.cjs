@@ -21,8 +21,8 @@ function harness(routes, settings = {}) {
   }
   const auth = createCloudAuth({
     safeStorage,
-    isPackaged: false,
-    envCloudURL: 'https://cloud.test',
+    isPackaged: settings.isPackaged === true,
+    envCloudURL: settings.envCloudURL === undefined ? 'https://cloud.test' : settings.envCloudURL,
     getPaths: async () => ({ rootDir: '/tmp/exora' }),
     readState: async () => state,
     writeState: async (_paths, value) => { state = value },
@@ -141,4 +141,43 @@ test('a 401 clears the encrypted session and broadcasts expiry', async () => {
   assert.equal(result.phase, 'signed_out')
   assert.equal(h.state.cloudAuth, undefined)
   assert.ok(h.broadcasts.some((value) => value.reason === 'session_expired'))
+})
+
+test('packaged builds default to the official API and never expose devCode', async () => {
+  const routes = {
+    'POST /v1/auth/registrations': jsonResponse(202, { challengeId: 'emc_prod', email: 'prod@example.com', devCode: '654321' }),
+  }
+  const h = harness(routes, { isPackaged: true, envCloudURL: '' })
+  const challenge = await h.auth.registrationStart({ input: {
+    email: 'prod@example.com', password: 'long secure password', passwordConfirm: 'long secure password', pin: '123456', pinConfirm: '123456',
+  } })
+  assert.equal(new URL(h.requests[0].url).origin, 'https://api.exoradock.com')
+  assert.equal(challenge.devCode, undefined)
+})
+
+test('offline logout stores an encrypted pending revocation and retries it', async () => {
+  let revokeAttempts = 0
+  const routes = {
+    'POST /v1/auth/sessions/password': jsonResponse(200, {
+      account: { accountId: 'acct_1', email: 'user@example.com' }, session: { sessionId: 'sess_1' }, sessionToken: 'token-to-revoke',
+    }),
+    'GET /v1/auth/providers': jsonResponse(200, { password: true, social: [] }),
+    'GET /v1/me': jsonResponse(200, { account: { accountId: 'acct_1', email: 'user@example.com' }, session: { sessionId: 'sess_1' } }),
+    'DELETE /v1/auth/sessions/current': () => {
+      revokeAttempts += 1
+      if (revokeAttempts === 1) throw new Error('offline')
+      return jsonResponse(204)
+    },
+  }
+  const h = harness(routes)
+  await h.auth.login({ input: { email: 'user@example.com', password: 'long secure password' } })
+  const result = await h.auth.logout()
+  assert.equal(result.pendingRevocation, true)
+  assert.equal(h.state.cloudAuth, undefined)
+  assert.equal(h.state.pendingSessionRevocations.length, 1)
+  assert.equal(JSON.stringify(h.state).includes('token-to-revoke'), false)
+  const afterRetry = await h.auth.status({ validate: false })
+  assert.equal(afterRetry.pendingRevocation, false)
+  assert.equal(h.state.pendingSessionRevocations, undefined)
+  assert.equal(revokeAttempts, 2)
 })

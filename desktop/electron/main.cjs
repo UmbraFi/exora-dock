@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage, shell, Tray } = require('electron')
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage, screen, shell, Tray } = require('electron')
 const { spawn, execFile } = require('node:child_process')
 const crypto = require('node:crypto')
 const fs = require('node:fs')
@@ -12,7 +12,7 @@ const {
   installNavigationGuards,
   isTrustedIpcSender,
 } = require('./security.cjs')
-const { createWorkspaceSnapshot } = require('./workspace.cjs')
+const { cleanupLegacyFrontendData } = require('./legacy-frontend-cleanup.cjs')
 const {
   MAX_RESOURCE_ARCHIVE_BYTES,
   cleanupResourceArchive,
@@ -21,24 +21,13 @@ const {
   createResourceArchive,
   validateResourceArchiveForUpload,
 } = require('./resource-archive.cjs')
-const {
-  cachedLocalAgentForBinding,
-  createLocalAgentScanSnapshot,
-  localAgentDriver,
-  restoreLocalAgentScanSnapshot,
-  scanLocalAgents,
-  scanLocalAgentsGlobal,
-  verifyLocalAgentInstallation,
-} = require('./local-agents.cjs')
 
 const APP_ID = 'io.exora.dock'
 const BASE_URL = 'http://127.0.0.1:8080'
 const DAEMON_NAME = 'exora-dockd'
 const DAEMON_LOG_NAME = 'daemon.log'
-const DEFAULT_PROJECT_NAME = 'AgenStaff'
 const DESKTOP_STATE_NAME = 'desktop-state.json'
 const PERSISTENCE_DIR_NAME = 'exora-data'
-const WORK_MCP_LEASE_LIMIT = 100
 const v3SelectedArchives = new Map()
 const v3EnvironmentDownloads = new Map()
 const DEV_URL = process.env.EXORA_DOCK_DESKTOP_DEV_URL || 'http://127.0.0.1:1420'
@@ -52,16 +41,16 @@ const APP_URL_POLICY = createAppURLPolicy({
 })
 const STARTUP_LANGUAGE = readStartupLanguageSync()
 const MASKED_API_KEY_VALUE = '************'
+const WINDOW_PROFILES = Object.freeze({
+  auth: Object.freeze({ width: 1440, height: 900, minWidth: 560, minHeight: 600 }),
+  workspace: Object.freeze({ width: 1440, height: 900, minWidth: 1080, minHeight: 720 }),
+})
 app.commandLine.appendSwitch('lang', chromiumLocaleForLanguage(STARTUP_LANGUAGE))
 
 let mainWindow
+let activeWindowMode = 'auth'
 let tray
 let appIsQuitting = false
-let localAgentScanInFlight
-let localAgentGlobalScanController
-let localAgentGlobalScanPromise
-let localAgentGlobalScanPaused = false
-let localAgentScanPauseRequested = false
 let sessionAccountKey = ''
 const cloudAuth = createCloudAuth({
   safeStorage,
@@ -79,9 +68,6 @@ const cloudAuth = createCloudAuth({
   clearDockLink,
   broadcast: (payload) => mainWindow?.webContents.send('exora:auth-state-changed', payload),
 })
-const localAgentGlobalScanPauseWaiters = []
-const localAgentSessionStreams = new Map()
-const localAgentSessionEventBacklogs = new Map()
 
 if (!app.requestSingleInstanceLock()) {
   app.exit(0)
@@ -93,30 +79,20 @@ if (!app.requestSingleInstanceLock()) {
     mainWindow.focus()
   })
 }
-const workspaceSnapshotService = createWorkspaceSnapshot({
-  dockPaths,
-  ensureLocalLayout,
-  projectFoldersStatus,
-  activeWorkMCPLeases,
-  healthOk,
-  localOwnerToken,
-  httpJson,
-  addConnectionProjectFolders,
-  addActivityProjectFolders,
-  errorMessage,
-})
-
 if (process.platform === 'win32') {
   app.setAppUserModelId(APP_ID)
 }
 
 function createWindow() {
   const isMac = process.platform === 'darwin'
+  const profile = WINDOW_PROFILES.auth
+  const startupSize = windowSizeForWorkArea(profile, screen.getPrimaryDisplay().workArea)
+  activeWindowMode = 'auth'
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 920,
-    minWidth: 1080,
-    minHeight: 720,
+    width: startupSize.width,
+    height: startupSize.height,
+    minWidth: profile.minWidth,
+    minHeight: profile.minHeight,
     center: true,
     show: false,
     frame: isMac,
@@ -153,11 +129,11 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   registerIpc()
+  await migrateLegacyFrontendData().catch((error) => {
+    console.error('Failed to remove retired frontend data; cleanup will retry next launch:', error)
+  })
   await cleanupStaleResourceArchives(resourceArchiveTempRoot(), { maxAgeMs: 1 }).catch((error) => {
     console.error('Failed to clean stale resource archives:', error)
-  })
-  await initializeLocalProjectFolder().catch((error) => {
-    console.error('Failed to initialize the default project folder:', error)
   })
   await ensureWindowsWSLBroker().catch((error) => {
     console.error('Failed to start the Windows WSL broker:', error)
@@ -170,13 +146,11 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
-  // Exora continues supervising local Agent sessions from the tray.
+  // Exora continues supervising Dock runtime services from the tray.
 })
 
 app.on('before-quit', () => {
   appIsQuitting = true
-  for (const controller of localAgentSessionStreams.values()) controller.abort()
-  localAgentSessionStreams.clear()
   for (const archive of v3SelectedArchives.values()) {
     try { cleanupResourceArchiveSync(archive) } catch (error) { console.error('Failed to remove a temporary resource archive:', error) }
   }
@@ -207,6 +181,7 @@ function createIpcHandlerGroups() {
       window_minimize,
       window_toggle_maximize,
       window_close,
+      window_set_mode,
     },
     cloudIdentity: {
       auth_status,
@@ -239,42 +214,11 @@ function createIpcHandlerGroups() {
       copy_opencode_config,
       copy_rest_base_url,
     },
-    localWork: {
-      workspace_snapshot,
-      buyer_flow_action,
-      create_work_mcp_uid,
-      release_work_mcp_lease,
-      stop_work_run,
-      project_folder_status,
-      choose_project_folder,
-      open_project_folder,
-      rename_project_folder,
-      archive_project_chats,
-      remove_project_folder,
-    },
-    localAgents: {
-      local_agent_snapshot,
-      local_agent_scan,
-      local_agent_binding,
-      bind_local_agent,
-      unbind_local_agent,
-      local_agent_session_start,
-      local_agent_session_get,
-      local_agent_session_send,
-      local_agent_session_interrupt,
-      local_agent_session_stop,
-      local_agent_session_resume,
-      local_agent_session_subscribe,
-      local_agent_session_unsubscribe,
-    },
     persistence: {
-      desktop_persistence_load,
+      app_settings_load,
       save_app_settings,
       locale_status,
       set_locale,
-      save_chat_thread,
-      archive_chat_threads,
-      save_transactions,
     },
     v3Market: {
       catalog_products,
@@ -337,42 +281,6 @@ function createIpcHandlerGroups() {
       provider_listing_save,
       provider_listing_action,
     },
-    llmAndSeller: {
-      seller_settings,
-      save_seller_settings,
-      llm_profiles,
-      save_llm_profile,
-      delete_llm_profile,
-      apply_llm_profile,
-      test_llm_connection,
-      list_llm_models,
-    },
-    agentCardsAndMarket: {
-      agent_cards_mine,
-      agent_card_diagnostics,
-      agent_card_draft,
-      save_agent_card,
-      publish_agent_card,
-      seller_market_status,
-      market_rail_cards,
-      agent_card_search,
-      agent_search_sellers,
-    },
-    ownerLedger: {
-      cloud_transactions,
-      list_approvals,
-      decide_approval,
-      list_order_plans,
-      list_tasks,
-      get_task,
-      list_payments,
-      get_payment,
-      select_order_plan,
-      cancel_order_plan,
-      payment_pin_status,
-      set_payment_pin,
-      verify_payment_pin,
-    },
     walletAndSecurity: {
       wallet_status,
       wallet_create,
@@ -396,6 +304,39 @@ async function window_toggle_maximize() {
 
 async function window_close() {
   mainWindow?.hide()
+}
+
+async function window_set_mode(payload = {}) {
+  const mode = payload?.mode
+  if (!Object.prototype.hasOwnProperty.call(WINDOW_PROFILES, mode)) {
+    throw new Error(`unsupported window mode: ${String(mode)}`)
+  }
+  if (!mainWindow || mainWindow.isDestroyed()) return { mode }
+
+  const profile = WINDOW_PROFILES[mode]
+  mainWindow.setMinimumSize(profile.minWidth, profile.minHeight)
+
+  if (mode !== activeWindowMode && !mainWindow.isMaximized() && !mainWindow.isFullScreen()) {
+    const display = screen.getDisplayMatching(mainWindow.getBounds())
+    const size = windowSizeForWorkArea(profile, display.workArea)
+    mainWindow.setBounds({
+      x: display.workArea.x + Math.max(0, Math.floor((display.workArea.width - size.width) / 2)),
+      y: display.workArea.y + Math.max(0, Math.floor((display.workArea.height - size.height) / 2)),
+      width: size.width,
+      height: size.height,
+    }, true)
+  }
+
+  activeWindowMode = mode
+  const [minWidth, minHeight] = mainWindow.getMinimumSize()
+  return { mode, bounds: mainWindow.getBounds(), minWidth, minHeight }
+}
+
+function windowSizeForWorkArea(profile, workArea) {
+  return {
+    width: Math.max(profile.minWidth, Math.min(profile.width, workArea.width)),
+    height: Math.max(profile.minHeight, Math.min(profile.height, workArea.height)),
+  }
 }
 
 async function auth_status() { return cloudAuth.status() }
@@ -522,781 +463,13 @@ async function copy_rest_base_url() {
   return BASE_URL
 }
 
-async function seller_settings() {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  return sellerSettingsFromConfig(paths)
-}
-
-async function llm_profiles() {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  await ensureLLMProfiles(paths)
-  return llmProfileStatus(paths)
-}
-
-async function save_llm_profile(payload = {}) {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  const input = objectOr(payload.input || payload)
-  await ensureLLMProfiles(paths)
-  const state = await readDesktopState(paths)
-  const profiles = Array.isArray(state.llmProfiles) ? state.llmProfiles : []
-  const now = new Date().toISOString()
-  const id = String(input.id || '').trim() || `llm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  const existing = profiles.find((profile) => profile.id === id) || {}
-  const requestedName = String(input.name || existing.name || '').trim() || defaultLLMProfileName(input)
-  const name = uniqueLLMProfileName(requestedName, profiles, id)
-  const profile = normalizeStoredLLMProfile({
-    ...existing,
-    ...input,
-    id,
-    name,
-    createdAt: existing.createdAt || now,
-    updatedAt: now,
-  })
-  const apiKey = explicitApiKeyInput(input)
-  if (input.clearApiKey) {
-    delete profile.encryptedApiKey
-    delete profile.keyStorage
-  } else if (apiKey) {
-    if (!safeStorage.isEncryptionAvailable()) {
-      throw new Error('Secure API key storage is not available on this system.')
-    }
-    profile.encryptedApiKey = safeStorage.encryptString(apiKey).toString('base64')
-    profile.keyStorage = 'safeStorage'
-  } else {
-    const cloneKeyFromId = String(input.cloneKeyFromId || '').trim()
-    const source = cloneKeyFromId ? profiles.find((item) => item.id === cloneKeyFromId) : undefined
-    if (source?.encryptedApiKey) {
-      profile.encryptedApiKey = source.encryptedApiKey
-      profile.keyStorage = source.keyStorage
-    }
-  }
-  state.llmProfiles = [profile, ...profiles.filter((item) => item.id !== id)]
-  state.activeLLMProfileId = state.activeLLMProfileId || id
-  const hasBuyerRole = Object.prototype.hasOwnProperty.call(input, 'useForBuyer')
-  const hasSellerRole = Object.prototype.hasOwnProperty.call(input, 'useForSeller')
-  if (hasBuyerRole) {
-    if (input.useForBuyer) state.buyerLLMProfileId = id
-    else if (state.buyerLLMProfileId === id) state.buyerLLMProfileId = ''
-  }
-  if (hasSellerRole) {
-    if (input.useForSeller) state.sellerLLMProfileId = id
-    else if (state.sellerLLMProfileId === id) state.sellerLLMProfileId = ''
-  }
-  state.llmProfileRoleDefaultsInitialized = true
-  await writeDesktopState(paths, state)
-  return llmProfileStatus(paths)
-}
-
-async function delete_llm_profile(payload = {}) {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  await ensureLLMProfiles(paths)
-  const input = objectOr(payload.input || payload)
-  const id = String(input.id || '').trim()
-  const state = await readDesktopState(paths)
-  const wasForBuyer = state.buyerLLMProfileId === id
-  const wasForSeller = state.sellerLLMProfileId === id
-  const profiles = (Array.isArray(state.llmProfiles) ? state.llmProfiles : []).filter((profile) => profile.id !== id)
-  state.llmProfiles = profiles
-  if (wasForBuyer) state.buyerLLMProfileId = ''
-  if (wasForSeller) state.sellerLLMProfileId = ''
-  if (state.activeLLMProfileId === id) state.activeLLMProfileId = profiles[0]?.id || ''
-  state.llmProfileRoleDefaultsInitialized = true
-  if (wasForBuyer || wasForSeller) {
-    const raw = await readTextOr(paths.configPath, defaultLocalConfig(paths))
-    const value = objectOr(YAML.parse(raw) || {})
-    if (wasForBuyer) delete value.buyer_llm
-    if (wasForSeller) delete value.seller_llm
-    await fsp.writeFile(paths.configPath, ensureTrailingNewline(YAML.stringify(value)))
-    await writeDiscoveryManifest(paths)
-    if (await trackedDaemonRunning(paths)) {
-      await stopTrackedDaemon(paths)
-      await start_dock()
-    }
-  }
-  await writeDesktopState(paths, state)
-  await ensureLLMProfiles(paths)
-  return llmProfileStatus(paths)
-}
-
-async function apply_llm_profile(payload = {}) {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  await ensureLLMProfiles(paths)
-  const input = objectOr(payload.input || payload)
-  const id = String(input.id || '').trim()
-  const state = await readDesktopState(paths)
-  const profile = (Array.isArray(state.llmProfiles) ? state.llmProfiles : []).find((item) => item.id === id)
-  if (!profile) throw new Error('API profile not found.')
-  const apiKey = decryptLLMProfileKey(profile)
-  const roles = llmProfileRolesFromInput(input)
-  const previousRoles = {
-    buyer: Boolean(input.wasForBuyer) || state.buyerLLMProfileId === profile.id,
-    seller: Boolean(input.wasForSeller) || state.sellerLLMProfileId === profile.id,
-  }
-  const shouldTouchConfig = roles.buyer || roles.seller || previousRoles.buyer || previousRoles.seller
-  if (shouldTouchConfig) {
-    const raw = await readTextOr(paths.configPath, defaultLocalConfig(paths))
-    const updated = updateRoleLLMSettingsYaml(raw, profile, apiKey, roles, previousRoles)
-    await fsp.writeFile(paths.configPath, updated)
-  }
-  if (roles.buyer) state.buyerLLMProfileId = profile.id
-  else if (previousRoles.buyer) state.buyerLLMProfileId = ''
-  if (roles.seller) state.sellerLLMProfileId = profile.id
-  else if (previousRoles.seller) state.sellerLLMProfileId = ''
-  if (roles.buyer || roles.seller) state.activeLLMProfileId = profile.id
-  state.llmProfileRoleDefaultsInitialized = true
-  await writeDesktopState(paths, state)
-  if (shouldTouchConfig) await writeDiscoveryManifest(paths)
-  if (shouldTouchConfig && await trackedDaemonRunning(paths)) {
-    await stopTrackedDaemon(paths)
-    await start_dock()
-  }
-  return llmProfileStatus(paths)
-}
-
-async function local_agent_snapshot() {
-  const paths = await dockPaths()
-  await ensurePersistenceLayout(paths)
-  return localAgentSnapshotResponse(paths)
-}
-
-async function local_agent_scan(_payload = {}, event) {
-  if (localAgentScanInFlight) return localAgentScanInFlight
-  localAgentScanPauseRequested = false
-  const scanPromise = performLocalAgentScan(event?.sender)
-  localAgentScanInFlight = scanPromise
-  try {
-    return await scanPromise
-  } finally {
-    if (localAgentScanInFlight === scanPromise) localAgentScanInFlight = undefined
-  }
-}
-
-async function local_agent_scan_restart(_payload = {}, event) {
-  localAgentScanPauseRequested = false
-  localAgentGlobalScanPaused = false
-  for (const resolve of localAgentGlobalScanPauseWaiters.splice(0)) resolve()
-  localAgentGlobalScanController?.abort()
-  if (localAgentGlobalScanPromise) await localAgentGlobalScanPromise.catch(() => undefined)
-  if (localAgentScanInFlight) await localAgentScanInFlight.catch(() => undefined)
-  localAgentGlobalScanController?.abort()
-  if (localAgentGlobalScanPromise) await localAgentGlobalScanPromise.catch(() => undefined)
-  return local_agent_scan({}, event)
-}
-
-function local_agent_scan_pause() {
-  if (!localAgentGlobalScanController || localAgentGlobalScanController.signal.aborted) {
-    if (localAgentScanInFlight) {
-      localAgentScanPauseRequested = true
-      return { paused: true, indexing: true }
-    }
-    return { paused: false, indexing: false }
-  }
-  localAgentScanPauseRequested = true
-  localAgentGlobalScanPaused = true
-  return { paused: true, indexing: true }
-}
-
-async function local_agent_scan_resume(_payload = {}, event) {
-  if (localAgentGlobalScanController && !localAgentGlobalScanController.signal.aborted) {
-    localAgentScanPauseRequested = false
-    localAgentGlobalScanPaused = false
-    const waiters = localAgentGlobalScanPauseWaiters.splice(0)
-    for (const resolve of waiters) resolve()
-    return { paused: false, indexing: true }
-  }
-  if (localAgentScanInFlight) {
-    localAgentScanPauseRequested = false
-    return { paused: false, indexing: true }
-  }
-  const result = await local_agent_scan({}, event)
-  return { ...result, paused: false }
-}
-
-function waitWhileLocalAgentScanPaused(signal) {
-  if (!localAgentGlobalScanPaused || signal?.aborted) return Promise.resolve()
-  return new Promise((resolve) => {
-    const done = () => resolve()
-    localAgentGlobalScanPauseWaiters.push(done)
-    signal?.addEventListener('abort', done, { once: true })
-  })
-}
-
-async function performLocalAgentScan(sender) {
-  const paths = await dockPaths()
-  await ensurePersistenceLayout(paths)
-  const emptySnapshot = createLocalAgentScanSnapshot({ agents: [], scannedAt: new Date().toISOString(), index: { backend: 'full-scan-fallback', journalCursors: {} } })
-  await writeJsonAtomic(paths.localAgentScanPath, emptySnapshot)
-  const result = await scanLocalAgents()
-  const snapshot = createLocalAgentScanSnapshot({ ...result, index: { backend: 'full-scan-fallback', journalCursors: {} } })
-  await writeJsonAtomic(paths.localAgentScanPath, snapshot)
-  localAgentGlobalScanController?.abort()
-  localAgentGlobalScanPaused = localAgentScanPauseRequested
-  for (const resolve of localAgentGlobalScanPauseWaiters.splice(0)) resolve()
-  const controller = new AbortController()
-  localAgentGlobalScanController = controller
-  const continuation = continueLocalAgentGlobalScan(paths, snapshot, sender, controller)
-  localAgentGlobalScanPromise = continuation
-  void continuation
-  return { ...(await localAgentSnapshotResponse(paths, snapshot)), indexing: process.platform === 'win32', indexMode: process.platform === 'win32' ? 'background-full-scan' : 'quick-scan' }
-}
-
-async function continueLocalAgentGlobalScan(paths, quickSnapshot, sender, controller) {
-  try {
-    const global = await scanLocalAgentsGlobal({
-      signal: controller.signal,
-      waitWhilePaused: () => waitWhileLocalAgentScanPaused(controller.signal),
-      onProgress: async (progress) => {
-        if (controller.signal.aborted || localAgentGlobalScanController !== controller) return
-        const checkpoint = await persistLocalAgentScanCheckpoint(paths, quickSnapshot, progress.agents || [])
-        if (controller.signal.aborted || localAgentGlobalScanController !== controller) return
-        sendLocalAgentScanEvent(sender, { type: 'scan_progress', found: checkpoint.agents.length, visitedDirectories: progress.visitedDirectories, volume: progress.volume, progress: progress.progress, snapshot: await localAgentSnapshotResponse(paths, checkpoint) })
-      },
-    })
-    if (controller.signal.aborted) return
-    const current = await readLocalAgentScanSnapshot(paths) || quickSnapshot
-    const merged = new Map(current.agents.map((agent) => [agent.installationId, agent]))
-    for (const agent of global.agents) {
-      const previous = merged.get(agent.installationId)
-      merged.set(agent.installationId, previous ? { ...agent, discoveredAt: previous.discoveredAt, ...(previous.verificationState === 'verified' && previous.fingerprint === agent.fingerprint ? {
-        status: previous.status, authState: previous.authState, version: previous.version, verificationState: previous.verificationState, lastVerifiedAt: previous.lastVerifiedAt,
-      } : {}) } : agent)
-    }
-    const snapshot = createLocalAgentScanSnapshot({ agents: [...merged.values()], scannedAt: global.scannedAt, index: global.index })
-    await writeJsonAtomic(paths.localAgentScanPath, snapshot)
-    sendLocalAgentScanEvent(sender, { type: 'scan_complete', snapshot: await localAgentSnapshotResponse(paths, snapshot), visitedDirectories: global.visitedDirectories || 0 })
-  } catch (error) {
-    if (!controller.signal.aborted) sendLocalAgentScanEvent(sender, { type: 'scan_failed', error: errorMessage(error) })
-  } finally {
-    if (localAgentGlobalScanController === controller) {
-      localAgentGlobalScanController = undefined
-      localAgentGlobalScanPromise = undefined
-      localAgentGlobalScanPaused = false
-      localAgentScanPauseRequested = false
-      for (const resolve of localAgentGlobalScanPauseWaiters.splice(0)) resolve()
-    }
-  }
-}
-
-async function persistLocalAgentScanCheckpoint(paths, fallbackSnapshot, discoveredAgents) {
-  const current = await readLocalAgentScanSnapshot(paths) || fallbackSnapshot
-  const merged = new Map(current.agents.map((agent) => [agent.installationId, agent]))
-  for (const agent of discoveredAgents) {
-    const previous = merged.get(agent.installationId)
-    merged.set(agent.installationId, previous ? { ...agent, discoveredAt: previous.discoveredAt, ...(previous.verificationState === 'verified' && previous.fingerprint === agent.fingerprint ? {
-      status: previous.status, authState: previous.authState, version: previous.version, verificationState: previous.verificationState, lastVerifiedAt: previous.lastVerifiedAt,
-    } : {}) } : agent)
-  }
-  const snapshot = createLocalAgentScanSnapshot({ agents: [...merged.values()].slice(0, 512), scannedAt: new Date().toISOString(), index: current.index })
-  await writeJsonAtomic(paths.localAgentScanPath, snapshot)
-  return snapshot
-}
-
-function sendLocalAgentScanEvent(sender, event) {
-  if (sender && !sender.isDestroyed()) sender.send('exora:local-agent-event', Object.freeze({ scope: 'local-agent-scan', ...event }))
-}
-
-async function localAgentSnapshotResponse(paths, providedSnapshot) {
-  const snapshot = providedSnapshot || await readLocalAgentScanSnapshot(paths)
-  const bindings = await readLocalAgentBindings(paths)
-  const agents = (snapshot?.agents || []).map((agent) => ({
-    ...agent,
-    bound: Object.values(bindings).some((binding) => binding?.installationId === agent.installationId),
-    boundRoles: ['buyer', 'seller'].filter((role) => bindings[role]?.installationId === agent.installationId),
-  }))
-  const result = {
-    agents,
-    binding: presentLocalAgentBinding(bindings.buyer, agents.find((agent) => agent.installationId === bindings.buyer?.installationId)),
-    bindings: Object.fromEntries(['buyer', 'seller'].map((role) => [role, presentLocalAgentBinding(bindings[role], agents.find((agent) => agent.installationId === bindings[role]?.installationId))])),
-    scannedAt: snapshot?.scannedAt || null,
-    hasSnapshot: Boolean(snapshot),
-    indexing: Boolean(localAgentGlobalScanController && !localAgentGlobalScanController.signal.aborted),
-    paused: Boolean(localAgentGlobalScanController && localAgentGlobalScanPaused),
-  }
-}
-
-async function local_agent_binding(payload = {}) {
-  const role = normalizeLocalAgentRole(objectOr(payload.input || payload).role || 'buyer')
-  const paths = await dockPaths()
-  await ensurePersistenceLayout(paths)
-  const snapshot = await readLocalAgentScanSnapshot(paths)
-  const bindings = await readLocalAgentBindings(paths)
-  const storedBinding = bindings[role]
-  if (!storedBinding) {
-    return { binding: null, bindings: presentLocalAgentBindings(bindings, snapshot), agent: null, checkedAt: snapshot?.scannedAt || null }
-  }
-  const agent = snapshot?.agents.find((candidate) => candidate.installationId === storedBinding.installationId)
-  return {
-    binding: presentLocalAgentBinding(storedBinding, agent),
-    bindings: presentLocalAgentBindings(bindings, snapshot),
-    agent: agent ? { ...agent, bound: true } : null,
-    checkedAt: snapshot?.scannedAt || null,
-  }
-}
-
-async function bind_local_agent(payload = {}) {
-  const input = objectOr(payload.input || payload)
-  const inputKeys = Object.keys(input)
-  if (inputKeys.some((key) => key !== 'installationId' && key !== 'role')) {
-    throw new Error('Local agent binding only accepts a role and discovered installation ID.')
-  }
-  const installationId = String(input.installationId || '').trim()
-  const role = normalizeLocalAgentRole(input.role)
-
-  const paths = await dockPaths()
-  await ensurePersistenceLayout(paths)
-  const snapshot = await readLocalAgentScanSnapshot(paths)
-  if (!snapshot) throw new Error('Scan local agents before choosing a binding.')
-  const discoveredAgent = cachedLocalAgentForBinding(snapshot, installationId)
-  if (!discoveredAgent) throw new Error('The selected local Agent installation was not found in the saved scan.')
-  const driver = localAgentDriver(discoveredAgent.driverId)
-  if (!driver?.bindable) throw new Error(`${driver?.name || discoveredAgent.driverId} can currently be detected but not bound.`)
-  const agent = await verifyLocalAgentInstallation(discoveredAgent)
-  const updatedSnapshot = createLocalAgentScanSnapshot({ ...snapshot, agents: snapshot.agents.map((candidate) => candidate.installationId === installationId ? agent : candidate), scannedAt: snapshot.scannedAt, index: snapshot.index })
-  await writeJsonAtomic(paths.localAgentScanPath, updatedSnapshot)
-  if (agent.status === 'login_required') throw new Error(`Sign in to ${driver.name}, then bind this installation again.`)
-  if (!localAgentCanBind(agent)) throw new Error(`${driver.name} could not be verified and was not bound.`)
-
-  const current = await readLocalAgentBinding(paths, role)
-  const selectedAt = new Date().toISOString()
-  const binding = {
-    bindingId: current?.installationId === installationId ? current.bindingId : `local-agent-${crypto.randomUUID()}`,
-    installationId,
-    driverId: agent.driverId,
-    executablePath: agent.resolvedTargetPath || agent.executablePath,
-    resolvedTargetPath: agent.resolvedTargetPath || '',
-    fingerprint: agent.resolvedTargetFingerprint || agent.fingerprint,
-    source: agent.source,
-    version: agent.version || '',
-    boundAt: current?.installationId === installationId ? current.boundAt : selectedAt,
-    lastVerifiedAt: selectedAt,
-  }
-  await writeLocalAgentBinding(paths, role, binding)
-  const bindings = await readLocalAgentBindings(paths)
-  return {
-    binding: presentLocalAgentBinding(binding, agent),
-    bindings: presentLocalAgentBindings(bindings, updatedSnapshot),
-    agent: { ...agent, bound: true },
-  }
-}
-
-async function readLocalAgentScanSnapshot(paths) {
-  return restoreLocalAgentScanSnapshot(await readJsonOr(paths.localAgentScanPath, null))
-}
-
-async function unbind_local_agent(payload = {}) {
-  const role = normalizeLocalAgentRole(objectOr(payload.input || payload).role)
-  const paths = await dockPaths()
-  await ensurePersistenceLayout(paths)
-  const bindings = await readLocalAgentBindings(paths)
-  delete bindings[role]
-  await writeLocalAgentBindings(paths, bindings)
-  return { unbound: true, role }
-}
-
-const localAgentModelCache = new Map()
-
-async function local_agent_models(payload = {}) {
-  const role = normalizeLocalAgentRole(objectOr(payload.input || payload).role || 'buyer')
-  const paths = await dockPaths()
-  const binding = await readLocalAgentBinding(paths, role)
-  if (!binding) throw new Error('Bind a local Agent before loading models.')
-  if (binding.driverId !== 'codex') return { driverId: binding.driverId, models: [], selectedModel: '' }
-  const key = `${binding.bindingId}:${binding.fingerprint}`
-  if (localAgentModelCache.has(key)) return localAgentModelCache.get(key)
-  const models = await codexAppServerModels(binding.executablePath)
-  const result = { driverId: binding.driverId, models, selectedModel: models.find((model) => model.isDefault)?.id || models[0]?.id || '' }
-  localAgentModelCache.set(key, result)
-  return result
-}
-
-function codexAppServerModels(executablePath) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(executablePath, ['app-server', '--stdio'], { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true, shell: false })
-    let buffer = ''
-    let settled = false
-    const finish = (error, value) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      child.kill()
-      error ? reject(error) : resolve(value)
-    }
-    const send = (value) => child.stdin.write(`${JSON.stringify(value)}\n`)
-    child.on('error', (error) => finish(error))
-    child.stdout.on('data', (chunk) => {
-      buffer += chunk.toString('utf8')
-      let newline
-      while ((newline = buffer.indexOf('\n')) >= 0) {
-        const line = buffer.slice(0, newline).trim()
-        buffer = buffer.slice(newline + 1)
-        let message
-        try { message = JSON.parse(line) } catch { continue }
-        if (message.id === 1) {
-          if (message.error) return finish(new Error(message.error.message || 'Codex initialize failed.'))
-          send({ method: 'initialized', params: {} })
-          send({ id: 2, method: 'model/list', params: { includeHidden: false, limit: 100 } })
-        } else if (message.id === 2) {
-          if (message.error) return finish(new Error(message.error.message || 'Codex model/list failed.'))
-          const models = Array.isArray(message.result?.data) ? message.result.data.map((model) => ({
-            id: String(model.id || model.model || ''), displayName: String(model.displayName || model.id || ''),
-            description: String(model.description || ''), isDefault: Boolean(model.isDefault),
-            supportedReasoningEfforts: Array.isArray(model.supportedReasoningEfforts) ? model.supportedReasoningEfforts.map((item) => String(item?.reasoningEffort || '')).filter((value) => /^[a-z]{1,16}$/.test(value)) : [],
-            defaultReasoningEffort: String(model.defaultReasoningEffort || ''),
-          })).filter((model) => /^[A-Za-z0-9._-]{1,100}$/.test(model.id)) : []
-          finish(null, models)
-        }
-      }
-    })
-    const timer = setTimeout(() => finish(new Error('Codex model list timed out.')), 15000)
-    send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'exora-dock', title: 'Exora Dock', version: '2.0.0' } } })
-  })
-}
-
-async function local_agent_session_start(payload = {}) {
-  const input = objectOr(payload.input || payload)
-  assertLocalAgentSessionInput(input, ['conversationId', 'role', 'purpose', 'workspace', 'permissionMode', 'model', 'reasoningEffort', 'transactionId', 'runId', 'workUid', 'idempotencyKey'])
-  const conversationId = cleanLocalAgentIdentifier(input.conversationId, 'conversationId')
-  const role = String(input.role || '').trim().toLowerCase()
-  if (role !== 'buyer' && role !== 'seller') throw new Error('Local agent session role must be buyer or seller.')
-  const purpose = String(input.purpose || '').trim().toLowerCase()
-  if (purpose && purpose !== 'seller_card') throw new Error('Local agent session purpose is unsupported.')
-  const transactionId = String(input.transactionId || '').trim()
-  if (role === 'seller' && !transactionId && purpose !== 'seller_card') throw new Error('Select a seller transaction before connecting a local Agent.')
-
-  const paths = await dockPaths()
-  await ensurePersistenceLayout(paths)
-  await ensureDockReady()
-  const binding = await readLocalAgentBinding(paths, role)
-  if (!binding) throw new Error('Bind a local Agent in Settings before connecting this chat.')
-  const driver = localAgentDriver(binding.driverId)
-  if (!driver?.bindable || driver.protocolState === 'unsupported' || driver.protocolState === 'limited') {
-    throw new Error(`${driver?.name || binding.driverId} is detection-only and cannot run an Exora chat session.`)
-  }
-  if (!binding.executablePath || !path.isAbsolute(binding.executablePath) || !fs.existsSync(binding.executablePath)) {
-    throw new Error('The saved local Agent executable is unavailable. Scan and bind it again.')
-  }
-  const currentStat = fs.statSync(binding.executablePath)
-  if (binding.fingerprint && binding.fingerprint !== `${currentStat.size}:${Math.trunc(currentStat.mtimeMs)}`) {
-    throw new Error('The bound local Agent executable changed. Scan and bind this installation again.')
-  }
-  const requestedModel = String(input.model || '').trim()
-  const requestedReasoningEffort = String(input.reasoningEffort || '').trim().toLowerCase()
-  if (requestedModel) {
-    const catalog = await local_agent_models()
-    const selectedModel = catalog.models.find((model) => model.id === requestedModel)
-    if (!selectedModel) throw new Error('The selected model is not available for this bound Agent.')
-    if (requestedReasoningEffort && !selectedModel.supportedReasoningEfforts.includes(requestedReasoningEffort)) throw new Error('The selected reasoning effort is not supported by this model.')
-  }
-  const workspace = normalizeProjectPath(paths, input.workspace || '') || (await activeProjectFolder(paths)).path
-  const allowedFolders = await readProjectFolders(paths)
-  if (!allowedFolders.some((folder) => sameResolvedPath(folder.path, workspace))) {
-    throw new Error('The chat workspace is not one of the user-selected Exora project folders.')
-  }
-  const idempotencyKey = String(input.idempotencyKey || `connect:${conversationId}:${role}`).trim()
-  const response = await httpJson('POST', '/v1/local-agent-sessions', {
-    conversationId,
-    role,
-    purpose,
-    binding: {
-      bindingId: binding.bindingId,
-      driver: binding.driverId,
-      version: binding.version || '',
-      lastVerifiedAt: binding.lastVerifiedAt,
-    },
-    executablePath: binding.executablePath,
-    workspace,
-    permissionMode: normalizeLocalAgentPermissionMode(input.permissionMode),
-    permissionProfile: localAgentPermissionProfile(input.permissionMode),
-    model: requestedModel,
-    reasoningEffort: requestedReasoningEffort,
-    transactionId,
-    runId: String(input.runId || '').trim(),
-    workUid: String(input.workUid || '').trim(),
-    idempotencyKey,
-  }, await localOwnerToken(paths), { timeoutMs: 45000 })
-  return response
-}
-
-async function local_agent_session_get(payload = {}) {
-  const input = objectOr(payload.input || payload)
-  assertLocalAgentSessionInput(input, ['sessionId'])
-  const sessionId = cleanLocalAgentIdentifier(input.sessionId, 'sessionId')
-  const paths = await dockPaths()
-  return httpJson('GET', `/v1/local-agent-sessions/${encodeURIComponent(sessionId)}`, undefined, await localOwnerToken(paths), { timeoutMs: 5000 })
-}
-
-async function local_agent_session_send(payload = {}) {
-  const input = objectOr(payload.input || payload)
-  assertLocalAgentSessionInput(input, ['sessionId', 'clientMessageId', 'text', 'idempotencyKey'])
-  const sessionId = cleanLocalAgentIdentifier(input.sessionId, 'sessionId')
-  const clientMessageId = cleanLocalAgentIdentifier(input.clientMessageId, 'clientMessageId')
-  const text = String(input.text || '').trim()
-  if (!text || text.length > 200000) throw new Error('Local Agent message must contain 1-200000 characters.')
-  const paths = await dockPaths()
-  return httpJson('POST', `/v1/local-agent-sessions/${encodeURIComponent(sessionId)}/messages`, {
-    clientMessageId,
-    text,
-    idempotencyKey: String(input.idempotencyKey || `message:${clientMessageId}`).trim(),
-  }, await localOwnerToken(paths), { timeoutMs: 45000 })
-}
-
-async function local_agent_session_interrupt(payload = {}) {
-  return localAgentSessionAction(payload, 'interrupt')
-}
-
-async function local_agent_session_stop(payload = {}) {
-  const result = await localAgentSessionAction(payload, 'stop')
-  const sessionId = String(objectOr(payload.input || payload).sessionId || '').trim()
-  stopLocalAgentSessionStream(sessionId)
-  return result
-}
-
-async function local_agent_session_resume(payload = {}) {
-  return localAgentSessionAction(payload, 'resume', 45000)
-}
-
-async function localAgentSessionAction(payload, action, timeoutMs = 10000) {
-  const input = objectOr(payload.input || payload)
-  assertLocalAgentSessionInput(input, ['sessionId'])
-  const sessionId = cleanLocalAgentIdentifier(input.sessionId, 'sessionId')
-  const paths = await dockPaths()
-  return httpJson('POST', `/v1/local-agent-sessions/${encodeURIComponent(sessionId)}/${action}`, {}, await localOwnerToken(paths), { timeoutMs })
-}
-
-async function local_agent_session_subscribe(payload = {}, event) {
-  const input = objectOr(payload.input || payload)
-  assertLocalAgentSessionInput(input, ['sessionId', 'after'])
-  const sessionId = cleanLocalAgentIdentifier(input.sessionId, 'sessionId')
-  const after = Math.max(0, Number.parseInt(String(input.after || '0'), 10) || 0)
-  stopLocalAgentSessionStream(sessionId)
-  const controller = new AbortController()
-  localAgentSessionStreams.set(sessionId, controller)
-  void forwardLocalAgentSessionStream(sessionId, after, controller, event?.sender)
-  return { subscribed: true, sessionId }
-}
-
-async function local_agent_session_events(payload = {}) {
-  const input = objectOr(payload.input || payload)
-  assertLocalAgentSessionInput(input, ['sessionId', 'after'])
-  const sessionId = cleanLocalAgentIdentifier(input.sessionId, 'sessionId')
-  const after = Math.max(0, Number.parseInt(String(input.after || '0'), 10) || 0)
-  const events = (localAgentSessionEventBacklogs.get(sessionId) || []).filter((item) => Number(item?.seq || 0) > after)
-  return { sessionId, events }
-}
-
-async function local_agent_session_unsubscribe(payload = {}) {
-  const input = objectOr(payload.input || payload)
-  assertLocalAgentSessionInput(input, ['sessionId'])
-  const sessionId = cleanLocalAgentIdentifier(input.sessionId, 'sessionId')
-  stopLocalAgentSessionStream(sessionId)
-  return { subscribed: false, sessionId }
-}
-
-async function forwardLocalAgentSessionStream(sessionId, after, controller, sender) {
-  try {
-    const paths = await dockPaths()
-    const token = await localOwnerToken(paths)
-    const response = await fetch(`${BASE_URL}/v1/local-agent-sessions/${encodeURIComponent(sessionId)}/stream?after=${after}`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' },
-      signal: controller.signal,
-    })
-    if (!response.ok || !response.body) throw new Error(`local Agent event stream returned ${response.status}`)
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    while (!controller.signal.aborted) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      let boundary
-      while ((boundary = buffer.indexOf('\n\n')) >= 0) {
-        const block = buffer.slice(0, boundary).replace(/\r/g, '')
-        buffer = buffer.slice(boundary + 2)
-        const data = block.split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('\n')
-        if (!data) continue
-        let parsed
-        try { parsed = JSON.parse(data) } catch { continue }
-        const backlog = localAgentSessionEventBacklogs.get(sessionId) || []
-        backlog.push(parsed)
-        if (backlog.length > 2000) backlog.splice(0, backlog.length - 2000)
-        localAgentSessionEventBacklogs.set(sessionId, backlog)
-        if (sender && !sender.isDestroyed()) sender.send('exora:local-agent-event', Object.freeze({ sessionId, event: parsed }))
-      }
-    }
-  } catch (error) {
-    if (!controller.signal.aborted && sender && !sender.isDestroyed()) {
-      sender.send('exora:local-agent-event', Object.freeze({ sessionId, error: errorMessage(error) }))
-    }
-  } finally {
-    if (localAgentSessionStreams.get(sessionId) === controller) localAgentSessionStreams.delete(sessionId)
-  }
-}
-
-function stopLocalAgentSessionStream(sessionId) {
-  const controller = localAgentSessionStreams.get(String(sessionId || '').trim())
-  if (controller) controller.abort()
-  localAgentSessionStreams.delete(String(sessionId || '').trim())
-}
-
-function assertLocalAgentSessionInput(input, allowedKeys) {
-  const allowed = new Set(allowedKeys)
-  if (Object.keys(input).some((key) => !allowed.has(key))) throw new Error('Local Agent session request contains unsupported fields.')
-}
-
-function cleanLocalAgentIdentifier(value, label) {
-  const text = String(value || '').trim()
-  if (!text || text.length > 240 || /[\u0000-\u001f\u007f]/.test(text)) throw new Error(`${label} is invalid.`)
-  return text
-}
-
-function normalizeLocalAgentPermissionMode(value) {
-  const mode = String(value || 'ask').trim().toLowerCase()
-  return ['ask', 'approve', 'full', 'custom'].includes(mode) ? mode : 'ask'
-}
-
-function localAgentPermissionProfile(value) {
-  switch (normalizeLocalAgentPermissionMode(value)) {
-    case 'approve': return 'workspace-write'
-    case 'full': return 'danger-full-access'
-    case 'custom': return ''
-    default: return 'read-only'
-  }
-}
-
-function localAgentCanBind(agent) {
-  return Boolean(
-    agent?.installed &&
-    agent.bindable &&
-    (agent.status === 'ready' || agent.status === 'available') &&
-    agent.executablePath,
-  )
-}
-
-function normalizeLocalAgentRole(value) {
-  const role = String(value || '').trim().toLowerCase()
-  if (role !== 'buyer' && role !== 'seller') throw new Error('Local Agent role must be buyer or seller.')
-  return role
-}
-
-async function readLocalAgentBindings(paths) {
-  const document = objectOr(await readJsonOr(paths.localAgentBindingPath, {}))
-  const legacy = objectOr(document.binding || (document.driverId ? document : {}))
-  const inputs = document.bindings && typeof document.bindings === 'object'
-    ? objectOr(document.bindings)
-    : Object.keys(legacy).length ? { buyer: legacy, seller: legacy } : {}
-  const bindings = {}
-  for (const role of ['buyer', 'seller']) {
-    const binding = await normalizeStoredLocalAgentBinding(paths, objectOr(inputs[role]))
-    if (binding) bindings[role] = binding
-  }
-  return bindings
-}
-
-async function readLocalAgentBinding(paths, role = 'buyer') {
-  return (await readLocalAgentBindings(paths))[normalizeLocalAgentRole(role)]
-}
-
-async function normalizeStoredLocalAgentBinding(paths, input) {
-  const driver = localAgentDriver(input.driverId)
-  if (!driver) return undefined
-  const executablePath = String(input.executablePath || '').trim()
-  let installationId = String(input.installationId || '').trim()
-  if (!/^agent-installation-[a-f0-9]{32}$/.test(installationId)) {
-    const snapshot = await readLocalAgentScanSnapshot(paths)
-    installationId = snapshot?.agents.find((agent) => sameResolvedPath(agent.executablePath, executablePath))?.installationId || ''
-  }
-  return {
-    bindingId: /^local-agent-[0-9a-f-]{36}$/i.test(String(input.bindingId || ''))
-      ? String(input.bindingId)
-      : `local-agent-${crypto.randomUUID()}`,
-    driverId: driver.id,
-    installationId,
-    executablePath: path.isAbsolute(executablePath) ? executablePath : '',
-    resolvedTargetPath: path.isAbsolute(String(input.resolvedTargetPath || '')) ? String(input.resolvedTargetPath) : '',
-    fingerprint: String(input.fingerprint || '').trim().slice(0, 128),
-    source: String(input.source || '').trim().slice(0, 80),
-    version: String(input.version || '').trim().slice(0, 160),
-    boundAt: validIsoOrNow(input.boundAt),
-    lastVerifiedAt: validIsoOrNow(input.lastVerifiedAt || input.boundAt),
-  }
-}
-
-async function writeLocalAgentBinding(paths, role, binding) {
-  const bindings = await readLocalAgentBindings(paths)
-  bindings[normalizeLocalAgentRole(role)] = binding
-  await writeLocalAgentBindings(paths, bindings)
-}
-
-async function writeLocalAgentBindings(paths, bindings) {
-  const persisted = {}
-  for (const role of ['buyer', 'seller']) {
-    const binding = bindings[role]
-    if (!binding) continue
-    persisted[role] = {
-      bindingId: binding.bindingId,
-      installationId: binding.installationId,
-      driverId: binding.driverId,
-      executablePath: binding.executablePath,
-      resolvedTargetPath: binding.resolvedTargetPath || '',
-      fingerprint: binding.fingerprint || '',
-      source: binding.source || '',
-      version: binding.version || '',
-      boundAt: binding.boundAt,
-      lastVerifiedAt: binding.lastVerifiedAt,
-    }
-  }
-  await writeJsonAtomic(paths.localAgentBindingPath, {
-    version: 3,
-    bindings: persisted,
-  })
-}
-
-function presentLocalAgentBindings(bindings, snapshot) {
-  return Object.fromEntries(['buyer', 'seller'].map((role) => {
-    const binding = bindings[role]
-    const agent = snapshot?.agents?.find((candidate) => candidate.installationId === binding?.installationId)
-    return [role, presentLocalAgentBinding(binding, agent)]
-  }))
-}
-
-function presentLocalAgentBinding(binding, agent) {
-  if (!binding) return null
-  const driver = localAgentDriver(binding.driverId)
-  if (!driver) return null
-  return {
-    bindingId: binding.bindingId,
-    driverId: driver.id,
-    installationId: binding.installationId,
-    name: driver.name,
-    vendor: driver.vendor,
-    executablePath: agent?.executablePath || binding.executablePath,
-    source: agent?.source || binding.source || '',
-    version: agent?.version || binding.version || '',
-    protocol: driver.protocol,
-    protocolState: driver.protocolState,
-    protocolLabel: driver.protocolLabel,
-    capabilities: [...driver.capabilities],
-    boundAt: binding.boundAt,
-    lastVerifiedAt: binding.lastVerifiedAt,
-    status: agent?.status || 'not_installed',
-    authState: agent?.authState || 'unknown',
-    valid: localAgentCanBind(agent),
-  }
-}
-
-async function desktop_persistence_load() {
+async function app_settings_load() {
   const paths = await dockPaths()
   await ensurePersistenceLayout(paths)
   const settingsDoc = await readJsonOr(paths.appSettingsPath, {})
   return {
-    version: 1,
-    settings: objectOr(settingsDoc.settings || settingsDoc),
-    conversations: await readConversationRecords(paths),
+    version: 2,
+    settings: normalizeAppSettingsV2(settingsDoc.settings || settingsDoc),
   }
 }
 
@@ -1304,13 +477,28 @@ async function save_app_settings(payload = {}) {
   const paths = await dockPaths()
   await ensurePersistenceLayout(paths)
   const input = objectOr(payload.input || payload)
-  const settings = objectOr(input.settings || input)
+  const settings = normalizeAppSettingsV2(input.settings || input)
   await writeJsonAtomic(paths.appSettingsPath, {
-    version: 1,
+    version: 2,
     savedAt: new Date().toISOString(),
     settings,
   })
   return { saved: true, path: paths.appSettingsPath }
+}
+
+function normalizeAppSettingsV2(value) {
+  const input = objectOr(value)
+  const language = input.language === 'zh' ? 'zh' : 'en'
+  const theme = input.theme === 'dark' ? 'dark' : 'light'
+  const workOrderSide = input.workOrderSide === 'seller' ? 'seller' : 'buyer'
+  const sidebarWidth = Math.max(224, Math.min(440, Number.parseInt(String(input.sidebarWidth || 280), 10) || 280))
+  return {
+    language,
+    theme,
+    workOrderSide,
+    sidebarCollapsed: Boolean(input.sidebarCollapsed),
+    sidebarWidth,
+  }
 }
 
 async function locale_status() {
@@ -1350,497 +538,6 @@ async function set_locale(payload = {}) {
   }
 }
 
-async function save_chat_thread(payload = {}) {
-  const paths = await dockPaths()
-  await ensurePersistenceLayout(paths)
-  const input = objectOr(payload.input || payload)
-  const thread = objectOr(input.thread)
-  const record = conversationRecordFromThread(thread)
-  if (!record) return { saved: false }
-  const previousStorageKeys = Array.isArray(input.previousStorageKeys)
-    ? input.previousStorageKeys.map((item) => String(item || '').trim()).filter(Boolean)
-    : []
-  const filePath = conversationPathForStorageKey(paths, record.storageKey)
-  await writeJsonAtomic(filePath, record)
-  await removePreviousConversationFiles(paths, record.storageKey, previousStorageKeys)
-  return { saved: true, storageKey: record.storageKey, path: filePath }
-}
-
-async function archive_chat_threads(payload = {}) {
-  const paths = await dockPaths()
-  await ensurePersistenceLayout(paths)
-  const input = objectOr(payload.input || payload)
-  const archivedAt = validIsoOrNow(input.archivedAt)
-  const threads = Array.isArray(input.threads) ? input.threads : []
-  const extraStorageKeys = Array.isArray(input.storageKeys) ? input.storageKeys.map((item) => String(item || '').trim()).filter(Boolean) : []
-  const archiveDir = await archiveConversationFiles(paths, threads, archivedAt, extraStorageKeys)
-  return { archivedCount: threads.length, archivePath: archiveDir }
-}
-
-async function save_transactions(payload = {}) {
-  const paths = await dockPaths()
-  await ensurePersistenceLayout(paths)
-  const input = objectOr(payload.input || payload)
-  const records = Array.isArray(input.records) ? input.records : []
-  const savedAt = validIsoOrNow(input.savedAt)
-  const filePath = paths.transactionsPath
-  await writeJsonAtomic(filePath, {
-    version: 1,
-    savedAt,
-    records,
-  })
-  return { saved: true, count: records.length, path: filePath }
-}
-
-async function save_seller_settings(payload) {
-  const input = payload?.input ?? {}
-  const restart = payload?.restart !== false && input.restart !== false
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  const raw = await readTextOr(paths.configPath, defaultLocalConfig(paths))
-  const updated = updateSellerSettingsYaml(raw, input)
-  await fsp.writeFile(paths.configPath, updated)
-  await writeDiscoveryManifest(paths)
-  if (restart && await trackedDaemonRunning(paths)) {
-    await stopTrackedDaemon(paths)
-    return start_dock()
-  }
-  return app_status()
-}
-
-async function test_llm_connection(payload) {
-  const input = payload?.input ?? {}
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  const raw = await readTextOr(paths.configPath, defaultLocalConfig(paths))
-  const apiKey = await effectiveLlmApiKeyForInput(paths, raw, input)
-  const model = defaultIfBlank(input.researchModel, 'gpt-5.5')
-  const baseUrl = String(input.llmBaseUrl || '').trim()
-  const providerPreset = normalizeProviderPreset(input.providerPreset || inferProviderPreset(baseUrl))
-  const preferredWire = normalizeWireApi(input.wireApi || defaultWireForPreset(providerPreset))
-  let last = { message: 'LLM request failed', route: preferredWire === 'responses' ? '/responses' : '/chat/completions' }
-  for (const wire of uniqueList([preferredWire, preferredWire === 'responses' ? 'chat_completions' : 'responses'])) {
-    const route = wire === 'responses' ? '/responses' : '/chat/completions'
-    const body = wire === 'responses'
-      ? { model, instructions: 'Reply with exactly: ok', input: 'connection test', store: false }
-      : { model, messages: [{ role: 'user', content: 'Reply with exactly: ok' }], max_tokens: 8 }
-    try {
-      const posted = await llmPostJsonWithBase(baseUrl, route, apiKey, body)
-      let models = []
-      try {
-        models = await llmGetModels(posted.baseUrl, apiKey)
-      } catch {
-        models = []
-      }
-      return {
-        ok: true,
-        status: 'ready',
-        message: `LLM provider responded successfully using ${wire === 'responses' ? 'Responses' : 'Chat Completions'}.`,
-        route,
-        llmBaseUrl: posted.baseUrl,
-        wireApi: wire,
-        providerPreset,
-        capabilities: capabilitiesForWire(providerPreset, wire),
-        models,
-      }
-    } catch (error) {
-      const message = errorMessage(error)
-      const status = classifyLlmError(message)
-      last = { message, route, status }
-      if (status === 'auth_failed') break
-    }
-  }
-  return { ok: false, status: last.status || classifyLlmError(last.message), message: last.message, route: last.route }
-}
-
-async function list_llm_models(payload) {
-  const input = payload?.input ?? {}
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  const raw = await readTextOr(paths.configPath, defaultLocalConfig(paths))
-  const apiKey = await effectiveLlmApiKeyForInput(paths, raw, input)
-  try {
-    const result = await llmGetModelsWithBase(input.llmBaseUrl, apiKey)
-    return { ok: true, models: result.models, llmBaseUrl: result.baseUrl, message: 'Model list loaded.' }
-  } catch (error) {
-    return { ok: false, models: [], message: errorMessage(error) }
-  }
-}
-
-async function agent_cards_mine() {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  return httpJson('GET', '/v1/agent-cards/mine', undefined, await localOwnerToken(paths))
-}
-
-async function agent_card_diagnostics() {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  await ensureLLMProfiles(paths)
-  await ensureDockReady()
-  return agentCardDiagnosticsWithDesktop(paths)
-}
-
-async function agent_card_draft(payload) {
-  const input = payload?.input ?? {}
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  await ensureLLMProfiles(paths)
-  await ensureDockReady()
-  const requestInput = { ...input }
-  if (!requestInput.diagnostics?.collectedAt) {
-    const body = await agentCardDiagnosticsWithDesktop(paths)
-    requestInput.diagnostics = body.diagnostics
-  }
-  return httpJson('POST', '/v1/agent-cards/draft', requestInput, await localOwnerToken(paths), { timeoutMs: 20000 })
-}
-
-async function agentCardDiagnosticsWithDesktop(paths) {
-  const body = await httpJson('POST', '/v1/agent-cards/diagnostics', {}, await localOwnerToken(paths), { timeoutMs: 20000 })
-  return {
-    ...body,
-    diagnostics: mergeAgentCardDiagnostics(body?.diagnostics, await desktopAgentCardDiagnostics()),
-  }
-}
-
-async function desktopAgentCardDiagnostics() {
-  const packagePath = path.join(__dirname, '..', 'package.json')
-  const lockPath = path.join(__dirname, '..', 'package-lock.json')
-  const packageJson = objectOr(await readJsonOr(packagePath, {}))
-  const packageLock = objectOr(await readJsonOr(lockPath, {}))
-  const codeEnvironment = [
-    dependencyInfo('Exora Dock Desktop', String(packageJson.version || app.getVersion() || ''), 'desktop package'),
-    dependencyInfo('Electron', process.versions.electron ? `Electron ${process.versions.electron}` : '', 'desktop runtime'),
-    dependencyInfo('Chromium', process.versions.chrome ? `Chromium ${process.versions.chrome}` : '', 'desktop runtime'),
-    dependencyInfo('Electron Node.js', process.versions.node ? `Node ${process.versions.node}` : '', 'desktop runtime'),
-    dependencyInfo('V8', process.versions.v8 ? `V8 ${process.versions.v8}` : '', 'desktop runtime'),
-  ].filter(Boolean)
-  return {
-    codeEnvironment,
-    dependencies: desktopPackageDependencies(packageJson, packageLock),
-  }
-}
-
-function desktopPackageDependencies(packageJson, packageLock) {
-  const packages = objectOr(packageLock.packages)
-  const out = []
-  for (const [section, source] of [
-    ['dependencies', 'desktop dependency'],
-    ['devDependencies', 'desktop devDependency'],
-  ]) {
-    const deps = objectOr(packageJson[section])
-    for (const name of Object.keys(deps).sort()) {
-      const locked = objectOr(packages[`node_modules/${name}`])
-      const version = String(locked.version || deps[name] || '').trim()
-      const item = dependencyInfo(name, version, source)
-      if (item) out.push(item)
-    }
-  }
-  return out
-}
-
-function mergeAgentCardDiagnostics(diagnostics, desktop) {
-  if (!diagnostics || typeof diagnostics !== 'object') return diagnostics
-  return {
-    ...diagnostics,
-    codeEnvironment: mergeDependencyInfo(diagnostics.codeEnvironment, desktop.codeEnvironment),
-    dependencies: mergeDependencyInfo(desktop.dependencies, diagnostics.dependencies),
-  }
-}
-
-function mergeDependencyInfo(primary, secondary) {
-  const out = []
-  const seen = new Set()
-  for (const item of [...asArray(primary), ...asArray(secondary)]) {
-    if (!item || typeof item !== 'object') continue
-    const normalized = dependencyInfo(item.name, item.version, item.source, item.location)
-    if (!normalized) continue
-    const key = `${normalized.source || ''}:${normalized.name}`.toLowerCase()
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(normalized)
-  }
-  return out
-}
-
-function dependencyInfo(name, version, source, location) {
-  name = String(name || '').trim()
-  version = String(version || '').trim()
-  source = String(source || '').trim()
-  location = String(location || '').trim()
-  if (!name || !version) return undefined
-  const item = { name, version, source }
-  if (location) item.location = location
-  return item
-}
-
-function asArray(value) {
-  return Array.isArray(value) ? value : []
-}
-
-async function save_agent_card(payload) {
-  const input = payload?.input ?? {}
-  const role = String(input.role || input.card?.role || '').trim()
-  if (!['buyer', 'seller'].includes(role)) throw new Error('role must be buyer or seller')
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  return httpJson('PUT', `/v1/agent-cards/${encodeURIComponent(role)}`, { card: input.card }, await localOwnerToken(paths), { timeoutMs: 10000 })
-}
-
-async function publish_agent_card(payload) {
-  const input = payload?.input ?? {}
-  const role = String(input.role || '').trim()
-  if (!['buyer', 'seller'].includes(role)) throw new Error('role must be buyer or seller')
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  return httpJson('POST', `/v1/agent-cards/${encodeURIComponent(role)}/publish`, {}, await localOwnerToken(paths), { timeoutMs: 15000 })
-}
-
-async function seller_market_status() {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  const settings = await sellerSettingsFromConfig(paths)
-  const token = await localOwnerToken(paths)
-  const provider = String(settings.providerId || '').trim()
-  const route = provider ? `/v1/resources?provider=${encodeURIComponent(provider)}` : '/v1/resources'
-  const resources = await httpJson('GET', route, undefined, token)
-  const count = Array.isArray(resources.resources) ? resources.resources.length : 0
-  return {
-    discoverable: settings.enabled && settings.hasApiKey && count > 0,
-    resourceListingCount: count,
-    providerId: settings.providerId,
-  }
-}
-
-async function market_rail_cards() {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  return httpJson('GET', '/v1/market/rail-cards', undefined, await localOwnerToken(paths), { timeoutMs: 10000 })
-}
-
-async function agent_card_search(payload) {
-  const input = payload?.input ?? {}
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  const params = new URLSearchParams()
-  const role = String(input.role || 'seller').trim()
-  const query = String(input.q || input.query || '').trim()
-  if (role) params.set('role', role)
-  if (query) params.set('q', query)
-  const suffix = params.toString() ? `?${params.toString()}` : ''
-  return httpJson('GET', `/v1/agent-cards/search${suffix}`, undefined, await localAgentToken(paths), { timeoutMs: 10000 })
-}
-
-async function agent_search_sellers(payload) {
-  const input = payload?.input ?? {}
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  const token = await localAgentToken(paths)
-  const negotiationFirst = input.negotiationFirst !== false
-  const body = {
-    query: input.query,
-    projectPath: input.projectPath,
-    workUid: input.workUid,
-    agentId: String(input.agentId || '').trim() || 'exora-desktop-agent',
-    buyerAgentCardId: String(input.buyerAgentCardId || '').trim() || undefined,
-    prePlanConfirmed: Boolean(input.prePlanConfirmed),
-    approvalId: String(input.approvalId || '').trim() || undefined,
-    planId: String(input.planId || '').trim() || undefined,
-    manifestHash: String(input.manifestHash || '').trim() || undefined,
-    maxResults: input.maxResults ?? 8,
-    maxCandidates: input.maxCandidates ?? 3,
-    maxOptions: input.maxOptions ?? 6,
-    taskTemplate: input.taskTemplate || undefined,
-  }
-  if (negotiationFirst) {
-    return httpJson('POST', '/v1/agent/buyer-work', body, token)
-  }
-  return httpJson('POST', '/v1/agent/search-sellers', {
-    ...body,
-    prepareOrderOptions: true,
-    createSelectionRequest: true,
-  }, token)
-}
-
-async function list_approvals() {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  return httpJson('GET', '/v1/approvals?status=pending', undefined, await localOwnerToken(paths))
-}
-
-async function decide_approval(payload) {
-  const input = payload?.input ?? {}
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  const body = {
-    approved: Boolean(input.approved),
-    decidedBy: 'exora-desktop',
-    userNote: input.userNote || '',
-  }
-  if (input.paymentPin) body.paymentPin = input.paymentPin
-  return httpJson('POST', `/v1/approvals/${encodeURIComponent(input.approvalId)}/decide`, body, await localOwnerToken(paths))
-}
-
-async function list_order_plans() {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  return httpJson('GET', '/v1/order-plans?status=pending_selection', undefined, await localOwnerToken(paths))
-}
-
-async function workspace_snapshot() {
-  return workspaceSnapshotService.snapshot()
-}
-
-async function buyer_flow_action(payload = {}) {
-  const input = objectOr(payload.input || payload)
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  await ensureDockReady()
-  const token = await localOwnerToken(paths)
-  const flowId = encodeURIComponent(String(input.flowId || '').trim())
-  const quoteId = encodeURIComponent(String(input.quoteId || '').trim())
-  const questionId = encodeURIComponent(String(input.questionId || '').trim())
-  const routes = {
-    create: ['/v1/buyer-flows', input.body],
-    approve_plans: [`/v1/buyer-flows/${flowId}/plans/approve`, {}],
-    prepare: [`/v1/buyer-flows/${flowId}/preparation/start`, {}],
-    approve_bundle: [`/v1/buyer-flows/${flowId}/bundle/approve`, {}],
-    start_matching: [`/v1/buyer-flows/${flowId}/matching/start`, {}],
-    select_quote: [`/v1/buyer-flows/${flowId}/quotes/${quoteId}/select`, {}],
-    publish_quote: [`/v1/buyer-flows/${flowId}/quotes/${quoteId}/publish`, {}],
-    update_quote: [`/v1/buyer-flows/${flowId}/quotes/${quoteId}/update`, input.quote],
-    withdraw_quote: [`/v1/buyer-flows/${flowId}/quotes/${quoteId}/withdraw`, {}],
-    review_question: [`/v1/buyer-flows/${flowId}/review/questions`, { sellerId: input.sellerId, prompt: input.prompt, options: input.options }],
-    fund: [`/v1/buyer-flows/${flowId}/payment/fund`, { paymentPin: input.paymentPin || '' }],
-    answer_question: [`/v1/buyer-flows/${flowId}/execution/questions/${questionId}/answer`, { answer: input.answer || '' }],
-    simulate_question: [`/v1/buyer-flows/${flowId}/execution/questions`, { prompt: input.prompt || '请选择交付格式', options: input.options || [{ label: 'Markdown', value: 'markdown' }, { label: 'PDF', value: 'pdf' }] }],
-    simulate_delivery: [`/v1/buyer-flows/${flowId}/execution/deliver`, { artifacts: input.artifacts || ['delivery/report.md'], summary: input.summary || 'Local protocol seller completed the approved task.' }],
-    decide_acceptance: [`/v1/buyer-flows/${flowId}/acceptance/decide`, { decision: input.decision, note: input.note || '' }],
-    resolve_dispute: [`/v1/buyer-flows/${flowId}/dispute/resolve`, { resolution: input.resolution }],
-    rate: [`/v1/buyer-flows/${flowId}/rating`, { stars: input.stars, comment: input.comment || '' }],
-  }
-  const selected = routes[String(input.action || '')]
-  if (!selected) throw new Error('Unsupported buyer flow action')
-  return httpJson('POST', selected[0], selected[1], token)
-}
-
-async function create_work_mcp_uid(payload = {}) {
-  const input = objectOr(payload.input || payload)
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  const active = await activeProjectFolder(paths)
-  const folder = projectFolderFromPath(input.projectPath || active.path)
-  await saveProjectFolder(paths, folder, { select: false })
-  const state = await readDesktopState(paths)
-  const now = new Date().toISOString()
-  const workUid = `work-${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${crypto.randomBytes(6).toString('hex')}`}`
-  const entry = {
-    workUid,
-    projectPath: folder.path,
-    projectName: folder.name,
-    task: String(input.task || '').trim(),
-    createdAt: now,
-    updatedAt: now,
-  }
-  const previous = Array.isArray(state.workMcpUids) ? state.workMcpUids : []
-  state.workMcpUids = [entry, ...previous.filter((item) => item?.workUid !== workUid)].slice(0, 100)
-  await writeDesktopState(paths, state)
-  return entry
-}
-
-async function release_work_mcp_lease(payload = {}) {
-  const input = objectOr(payload.input || payload)
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  const state = await readDesktopState(paths)
-  const workUid = String(input.workUid || input.uid || '').trim()
-  const projectPath = normalizeProjectPath(paths, input.projectPath || '')
-  const now = new Date().toISOString()
-  let released = 0
-  const leases = Array.isArray(state.workMcpLeases) ? state.workMcpLeases : []
-  state.workMcpLeases = leases.map((item) => {
-    const lease = objectOr(item)
-    const sameUid = workUid && String(lease.workUid || '').trim() === workUid
-    const samePath = projectPath && lease.projectPath && sameResolvedPath(lease.projectPath, projectPath)
-    if (!sameUid && !samePath) return item
-    released += 1
-    return {
-      ...lease,
-      status: 'released',
-      releasedAt: now,
-      expiresAt: now,
-      updatedAt: now,
-    }
-  }).slice(0, WORK_MCP_LEASE_LIMIT)
-  await writeDesktopState(paths, state)
-  return {
-    released,
-    workMcpLeases: await activeWorkMCPLeases(paths),
-  }
-}
-
-async function stop_work_run(payload = {}) {
-  const input = objectOr(payload.input || payload)
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  const token = await localOwnerToken(paths)
-  let runId = String(input.runId || '').trim()
-  const workUid = String(input.workUid || input.uid || '').trim()
-  if (!runId && workUid) {
-    const listed = await httpJson('GET', `/v1/work-runs?workUid=${encodeURIComponent(workUid)}`, undefined, token)
-    const runs = Array.isArray(listed.workRuns) ? listed.workRuns : []
-    runId = String(runs[0]?.runId || '').trim()
-  }
-  if (!runId) throw new Error('work run id required')
-  const stopped = await httpJson('POST', `/v1/work-runs/${encodeURIComponent(runId)}/stop`, {
-    reason: String(input.reason || 'Stopped from Exora Dock owner control.'),
-  }, token)
-  if (workUid || input.projectPath) {
-    await release_work_mcp_lease({ input: { workUid, projectPath: input.projectPath } })
-  }
-  return stopped
-}
-
-async function list_tasks() {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  return httpJson('GET', '/v1/tasks', undefined, await localOwnerToken(paths))
-}
-
-async function get_task(payload) {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  return httpJson('GET', `/v1/tasks/${encodeURIComponent(payload?.id || '')}`, undefined, await localOwnerToken(paths))
-}
-
-async function list_payments() {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  return httpJson('GET', '/v1/payments', undefined, await localOwnerToken(paths))
-}
-
-async function get_payment(payload) {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  return httpJson('GET', `/v1/payments/${encodeURIComponent(payload?.id || '')}`, undefined, await localOwnerToken(paths))
-}
-
-async function select_order_plan(payload) {
-  const input = payload?.input ?? {}
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  const body = { optionId: input.optionId, userNote: input.userNote || '' }
-  if (input.paymentPin) body.paymentPin = input.paymentPin
-  return httpJson('POST', `/v1/order-plans/${encodeURIComponent(input.planId)}/select`, body, await localOwnerToken(paths))
-}
-
-async function cancel_order_plan(payload) {
-  const input = payload?.input ?? {}
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  return httpJson('POST', `/v1/order-plans/${encodeURIComponent(input.planId)}/cancel`, { userNote: input.userNote || '' }, await localOwnerToken(paths))
-}
-
 async function payment_pin_status() {
   const paths = await dockPaths()
   await ensureLocalLayout(paths)
@@ -1866,96 +563,66 @@ async function verify_payment_pin(pin, accountId) {
 }
 
 async function wallet_status() {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  return ensureDefaultWallet(paths)
+  const [balanceResult, addressResult, custodyResult, depositsResult, withdrawalsResult] = await Promise.all([
+    cloudAuth.apiRequest('GET', '/v3/billing/balance'),
+    cloudAuth.apiRequest('GET', '/v3/billing/deposit-address'),
+    cloudAuth.apiRequest('GET', '/v3/billing/custody-status'),
+    cloudAuth.apiRequest('GET', '/v3/billing/deposits'),
+    cloudAuth.apiRequest('GET', '/v3/billing/withdrawals'),
+  ])
+  const balance = objectOr(balanceResult.balance || balanceResult)
+  const address = String(addressResult.address || '').trim()
+  return {
+    wallet: {
+      configured: Boolean(address),
+      accountBound: true,
+      platformCustody: true,
+      address,
+      network: String(addressResult.network || custodyResult.network || ''),
+      usdcMint: String(addressResult.mint || custodyResult.mint || ''),
+      balances: {
+        usdc: {
+          amountAtomic: Number(balance.availableAtomic || 0),
+          reservedAtomic: Number(balance.withdrawalReservedAtomic || balance.reservedAtomic || 0),
+          decimals: 6,
+          currency: 'USDC',
+          mint: String(addressResult.mint || custodyResult.mint || ''),
+          status: custodyResult.mode === 'open' && !custodyResult.accountFrozen ? 'ready' : String(custodyResult.accountFrozen ? 'account_frozen' : custodyResult.mode || 'disabled'),
+          updatedAt: new Date().toISOString(),
+        },
+      },
+      feePolicy: { currency: 'USDC', relayFeeAtomic: 0, relayFeeDescription: 'The final network and service fees are shown in the withdrawal quote.', gasPaidBy: 'platform' },
+      custody: custodyResult,
+      deposits: Array.isArray(depositsResult.deposits) ? depositsResult.deposits : [],
+      withdrawals: Array.isArray(withdrawalsResult.withdrawals) ? withdrawalsResult.withdrawals : [],
+    },
+  }
 }
 
-async function wallet_create(payload) {
-  const input = payload?.input ?? {}
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  const recoveryPassword = input.recoveryPassword || await desktopWalletRecoveryPassword(paths)
-  return httpJson('POST', '/v1/wallet/create', {
-    recoveryPassword,
-    overwrite: input.overwrite === true,
-  }, await localOwnerToken(paths))
-}
-
-async function wallet_unlock(payload) {
-  const input = payload?.input ?? {}
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  const recoveryPassword = input.recoveryPassword || await desktopWalletRecoveryPassword(paths)
-  return httpJson('POST', '/v1/wallet/unlock', { recoveryPassword }, await localOwnerToken(paths))
-}
-
-async function wallet_restore(payload) {
-  const input = payload?.input ?? {}
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  return httpJson('POST', '/v1/wallet/restore', { recoveryPassword: input.recoveryPassword || '', backup: input.backup }, await localOwnerToken(paths))
-}
+async function wallet_create() { throw new Error('Local Solana wallets are retired; Exora now uses platform custody.') }
+async function wallet_unlock() { throw new Error('Local Solana wallets are retired; Exora now uses platform custody.') }
+async function wallet_restore() { throw new Error('Local Solana wallets are retired; Exora now uses platform custody.') }
 
 async function wallet_withdraw(payload) {
   const input = payload?.input ?? {}
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  return httpJson('POST', '/v1/wallet/withdraw', {
-    toAddress: input.toAddress || '',
-    amountAtomic: Number(input.amountAtomic || 0),
-    paymentPin: input.paymentPin || '',
-  }, await localOwnerToken(paths))
-}
-
-async function ensureDefaultWallet(paths) {
-  const token = await localOwnerToken(paths)
-  let response = await httpJson('GET', '/v1/wallet', undefined, token)
-  const status = objectOr(response.wallet)
-  if (status.configured !== true || status.boundOnly === true) {
-    const recoveryPassword = await desktopWalletRecoveryPassword(paths)
-    return httpJson('POST', '/v1/wallet/create', {
-      recoveryPassword,
-      overwrite: status.configured === true || status.boundOnly === true,
-    }, token)
+  const challengeId = String(input.challengeId || '').trim()
+  const quoteId = String(input.quoteId || '').trim()
+  const code = String(input.code || '').trim()
+  if (!challengeId || !quoteId || !code) {
+    const quote = await cloudAuth.apiRequest('POST', '/v3/billing/withdrawal-quotes', {
+      destination: String(input.toAddress || '').trim(),
+      amountAtomic: Number(input.amountAtomic || 0),
+    })
+    const challenge = await cloudAuth.apiRequest('POST', '/v3/billing/withdrawal-challenges', { quoteId: quote.quoteId })
+    return { quote, challenge, nextAction: 'enter_email_code' }
   }
-  if (status.accountBound !== false && status.unlocked !== true && String(status.encryptedKeypairPath || '').trim()) {
-    const recoveryPassword = await desktopWalletRecoveryPassword(paths)
-    try {
-      response = await httpJson('POST', '/v1/wallet/unlock', { recoveryPassword }, token)
-    } catch {
-      // Existing wallets created with a user-set password still show their receive address.
-    }
-  }
-  return response
-}
-
-async function desktopWalletRecoveryPassword(paths) {
-  const state = await readDesktopState(paths)
-  const existing = objectOr(state.walletAutoRecovery)
-  if (existing.keyStorage === 'safeStorage' && existing.encryptedSecret && safeStorage.isEncryptionAvailable()) {
-    try {
-      return safeStorage.decryptString(Buffer.from(String(existing.encryptedSecret), 'base64'))
-    } catch {
-      // Fall through and rotate the local auto recovery secret.
-    }
-  }
-  if (existing.secret) return String(existing.secret)
-
-  const secret = `exora-wallet-${crypto.randomBytes(32).toString('base64url')}`
-  const record = {
-    createdAt: new Date().toISOString(),
-    keyStorage: 'plain',
-    secret,
-  }
-  if (safeStorage.isEncryptionAvailable()) {
-    record.keyStorage = 'safeStorage'
-    record.encryptedSecret = safeStorage.encryptString(secret).toString('base64')
-    delete record.secret
-  }
-  state.walletAutoRecovery = record
-  await writeDesktopState(paths, state)
-  return secret
+  const withdrawal = await cloudAuth.apiRequest('POST', '/v3/billing/withdrawals', {
+    quoteId,
+    challengeId,
+    code,
+    idempotencyKey: String(input.idempotencyKey || `electron-${crypto.randomUUID()}`),
+  })
+  return { withdrawal, nextAction: withdrawal.status === 'manual_review' ? 'manual_review' : 'processing' }
 }
 
 async function security_status() {
@@ -1999,127 +666,6 @@ async function open_console() {
   await open_health()
 }
 
-async function project_folder_status() {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  const folder = defaultProjectFolder(paths)
-  await saveProjectFolder(paths, folder, { select: false })
-  return folder
-}
-
-async function choose_project_folder(payload = {}) {
-  const input = objectOr(payload.input || payload)
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  const current = await activeProjectFolder(paths)
-  const properties = ['openDirectory']
-  if (input.allowCreate !== false) properties.push('createDirectory')
-  const result = await dialog.showOpenDialog(mainWindow, {
-    title: String(input.title || 'Choose project folder'),
-    defaultPath: current.path,
-    properties,
-  })
-  if (result.canceled || !result.filePaths?.[0]) return input.cancelReturnsUndefined ? undefined : current
-  const selectedPath = result.filePaths[0]
-  await fsp.mkdir(selectedPath, { recursive: true })
-  const folder = projectFolderFromPath(selectedPath)
-  return saveProjectFolder(paths, folder, { select: input.select !== false })
-}
-
-async function open_project_folder(payload = {}) {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  const input = objectOr(payload.input || payload)
-  const requestedPath = normalizeProjectPath(paths, input.path || input.projectPath || '')
-  const folder = requestedPath ? projectFolderFromPath(requestedPath) : await activeProjectFolder(paths)
-  await openFolderPath(folder.path)
-  return folder
-}
-
-async function rename_project_folder(payload = {}) {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  const input = objectOr(payload.input || payload)
-  const nextName = validateProjectFolderName(input.name)
-  const current = await activeProjectFolder(paths)
-  const nextPath = path.join(path.dirname(current.path), nextName)
-  if (sameResolvedPath(current.path, nextPath)) return current
-
-  try {
-    await fsp.access(nextPath)
-    throw new Error(`A project folder named "${nextName}" already exists.`)
-  } catch (error) {
-    if (error?.code !== 'ENOENT') throw error
-  }
-
-  await fsp.mkdir(path.dirname(nextPath), { recursive: true })
-  await fsp.rename(current.path, nextPath)
-  return replaceProjectFolder(paths, current.path, projectFolderFromPath(nextPath))
-}
-
-async function archive_project_chats(payload = {}) {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  await ensurePersistenceLayout(paths)
-  const folder = await activeProjectFolder(paths)
-  const input = objectOr(payload.input || payload)
-  const threads = Array.isArray(input.threads) ? input.threads : []
-  const archivedAt = validIsoOrNow(input.archivedAt)
-  if (!threads.length) return { folder, archivedCount: 0 }
-
-  const archiveDir = await archiveConversationFiles(paths, threads, archivedAt)
-  await fsp.mkdir(archiveDir, { recursive: true })
-  const archivePath = path.join(archiveDir, 'archive.json')
-  const archive = {
-    version: 1,
-    project: folder,
-    archivedAt,
-    threadCount: threads.length,
-    threads,
-  }
-  await writeJsonAtomic(archivePath, archive)
-  return { folder, archivedCount: threads.length, archivePath }
-}
-
-async function remove_project_folder() {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  const current = await activeProjectFolder(paths)
-  return removeProjectFolderFromState(paths, current.path)
-}
-
-function validateProjectFolderName(value) {
-  const name = String(value || '').trim()
-  if (!name) throw new Error('Project name is required.')
-  if (/[<>:"/\\|?*\x00-\x1F]/.test(name) || /[. ]$/.test(name)) {
-    throw new Error('Project name contains characters that cannot be used in a folder name.')
-  }
-  const reserved = new Set(['con', 'prn', 'aux', 'nul', 'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9', 'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9'])
-  if (reserved.has(name.toLowerCase())) throw new Error('Project name is reserved by the operating system.')
-  return name
-}
-
-function sameResolvedPath(left, right) {
-  const a = path.resolve(left)
-  const b = path.resolve(right)
-  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
-}
-
-function validIsoOrNow(value) {
-  const date = new Date(String(value || ''))
-  return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString()
-}
-
-function archiveFileStamp(isoValue) {
-  return String(isoValue).replace(/[:.]/g, '-')
-}
-
-async function initializeLocalProjectFolder() {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  return activeProjectFolder(paths)
-}
-
 async function dockPaths() {
   const rootDir = appDataRoot()
   const persistenceDir = path.join(app.getPath('userData'), PERSISTENCE_DIR_NAME)
@@ -2137,275 +683,12 @@ async function dockPaths() {
     localAgentScanPath: path.join(persistenceDir, 'settings', 'local-agent-scan.json'),
     providerHostSnapshotPath: path.join(persistenceDir, 'settings', 'provider-host-snapshot.json'),
     providerEnvironmentSettingsPath: path.join(persistenceDir, 'settings', 'provider-environment.json'),
-    conversationsDir: path.join(persistenceDir, 'conversations', 'tasks'),
-    conversationArchivesDir: path.join(persistenceDir, 'conversations', 'archives'),
-    transactionsPath: path.join(persistenceDir, 'transactions', 'transactions.json'),
+    legacyConversationsRoot: path.join(persistenceDir, 'conversations'),
+    legacyTransactionsRoot: path.join(persistenceDir, 'transactions'),
     helperPath,
     wslBrokerPath: resolveBundledBinary('exora-wsl-broker'),
     pidPath: path.join(rootDir, 'exora-dockd.pid'),
   }
-}
-
-function defaultProjectFolder(paths) {
-  return projectFolderFromPath(path.join(paths.dataDir, 'jobs', DEFAULT_PROJECT_NAME))
-}
-
-function defaultJobsRoot(paths) {
-  return path.join(paths.dataDir, 'jobs')
-}
-
-function projectFolderFromPath(folderPath) {
-  const normalized = path.resolve(String(folderPath || '').trim())
-  return {
-    name: path.basename(normalized) || DEFAULT_PROJECT_NAME,
-    path: normalized,
-  }
-}
-
-async function projectFoldersStatus(paths) {
-  const folders = await readProjectFolders(paths)
-  const active = await activeProjectFolder(paths, folders)
-  return {
-    projectFolder: active,
-    projectFolders: folders,
-    activeProjectFolderPath: active.path,
-  }
-}
-
-async function activeProjectFolder(paths, knownFolders) {
-  const state = await readDesktopState(paths)
-  const folders = knownFolders || await readProjectFolders(paths)
-  const defaultFolder = defaultProjectFolder(paths)
-  const requested = normalizeProjectPath(paths, state.activeProjectFolderPath || state.projectFolderPath || '')
-  const active = (requested ? folders.find((folder) => sameResolvedPath(folder.path, requested)) : undefined) || defaultFolder
-  await fsp.mkdir(active.path, { recursive: true })
-  if (!sameResolvedPath(state.activeProjectFolderPath || '', active.path)) {
-    state.activeProjectFolderPath = active.path
-    state.projectFolders = folders
-    delete state.projectFolderPath
-    await writeDesktopState(paths, state)
-  }
-  return active
-}
-
-async function readProjectFolders(paths) {
-  const state = await readDesktopState(paths)
-  const folders = []
-  const pushFolder = (value) => {
-    const normalized = normalizeProjectPath(paths, typeof value === 'string' ? value : value?.path)
-    if (!normalized) return
-    if (folders.some((folder) => sameResolvedPath(folder.path, normalized))) return
-    folders.push(projectFolderFromPath(normalized))
-  }
-  pushFolder(defaultProjectFolder(paths).path)
-  for (const item of Array.isArray(state.projectFolders) ? state.projectFolders : []) {
-    pushFolder(item)
-  }
-  if (state.projectFolderPath) pushFolder(state.projectFolderPath)
-  if (state.activeProjectFolderPath) pushFolder(state.activeProjectFolderPath)
-  for (const folder of folders) {
-    await fsp.mkdir(folder.path, { recursive: true })
-  }
-  const requested = normalizeProjectPath(paths, state.activeProjectFolderPath || state.projectFolderPath || '')
-  const active = (requested ? folders.find((folder) => sameResolvedPath(folder.path, requested)) : undefined) || folders[0]
-  const normalizedState = {
-    ...state,
-    projectFolders: folders,
-    activeProjectFolderPath: active.path,
-  }
-  delete normalizedState.projectFolderPath
-  await writeDesktopState(paths, normalizedState)
-  return folders
-}
-
-async function saveProjectFolder(paths, folder, options = {}) {
-  await fsp.mkdir(folder.path, { recursive: true })
-  const state = await readDesktopState(paths)
-  const folders = await readProjectFolders(paths)
-  if (!folders.some((item) => sameResolvedPath(item.path, folder.path))) {
-    folders.push(projectFolderFromPath(folder.path))
-  }
-  state.projectFolders = folders
-  if (options.select) state.activeProjectFolderPath = projectFolderFromPath(folder.path).path
-  else state.activeProjectFolderPath = normalizeProjectPath(paths, state.activeProjectFolderPath || '') || defaultProjectFolder(paths).path
-  delete state.projectFolderPath
-  await writeDesktopState(paths, state)
-  return projectFolderFromPath(options.select ? state.activeProjectFolderPath : folder.path)
-}
-
-async function replaceProjectFolder(paths, previousPath, folder) {
-  await fsp.mkdir(folder.path, { recursive: true })
-  await fsp.mkdir(defaultProjectFolder(paths).path, { recursive: true })
-  const state = await readDesktopState(paths)
-  const folders = (await readProjectFolders(paths)).map((item) => sameResolvedPath(item.path, previousPath) ? projectFolderFromPath(folder.path) : item)
-  if (!folders.some((item) => sameResolvedPath(item.path, folder.path))) {
-    folders.push(projectFolderFromPath(folder.path))
-  }
-  state.projectFolders = dedupeProjectFolders(paths, folders)
-  state.activeProjectFolderPath = projectFolderFromPath(folder.path).path
-  delete state.projectFolderPath
-  await writeDesktopState(paths, state)
-  return projectFolderFromPath(folder.path)
-}
-
-async function removeProjectFolderFromState(paths, folderPath) {
-  const state = await readDesktopState(paths)
-  const defaultFolder = defaultProjectFolder(paths)
-  const folders = (await readProjectFolders(paths)).filter((folder) => sameResolvedPath(folder.path, defaultFolder.path) || !sameResolvedPath(folder.path, folderPath))
-  state.projectFolders = dedupeProjectFolders(paths, folders)
-  state.activeProjectFolderPath = defaultFolder.path
-  delete state.projectFolderPath
-  await writeDesktopState(paths, state)
-  return defaultFolder
-}
-
-async function addConnectionProjectFolders(paths, connections) {
-  const buyerPaths = []
-  for (const connection of Array.isArray(connections) ? connections : []) {
-    const role = String(connection?.role || 'buyer').trim().toLowerCase()
-    const projectPath = normalizeProjectPath(paths, connection?.projectPath || '')
-    if (role !== 'buyer' || !projectPath) continue
-    buyerPaths.push(projectPath)
-  }
-  if (!buyerPaths.length) return
-  const state = await readDesktopState(paths)
-  const folders = await readProjectFolders(paths)
-  for (const projectPath of buyerPaths) {
-    if (!folders.some((folder) => sameResolvedPath(folder.path, projectPath))) {
-      await fsp.mkdir(projectPath, { recursive: true })
-      folders.push(projectFolderFromPath(projectPath))
-    }
-  }
-  state.projectFolders = dedupeProjectFolders(paths, folders)
-  state.activeProjectFolderPath = normalizeProjectPath(paths, state.activeProjectFolderPath || '') || defaultProjectFolder(paths).path
-  delete state.projectFolderPath
-  await writeDesktopState(paths, state)
-}
-
-async function addActivityProjectFolders(paths, ...groups) {
-  const activityPaths = []
-  for (const group of groups) {
-    for (const item of Array.isArray(group) ? group : []) {
-      const projectPath = normalizeProjectPath(paths, item?.projectPath || item?.task?.projectPath || '')
-      if (projectPath) activityPaths.push(projectPath)
-    }
-  }
-  if (!activityPaths.length) return
-  const state = await readDesktopState(paths)
-  const folders = await readProjectFolders(paths)
-  for (const projectPath of activityPaths) {
-    if (!folders.some((folder) => sameResolvedPath(folder.path, projectPath))) {
-      await fsp.mkdir(projectPath, { recursive: true })
-      folders.push(projectFolderFromPath(projectPath))
-    }
-  }
-  state.projectFolders = dedupeProjectFolders(paths, folders)
-  state.activeProjectFolderPath = normalizeProjectPath(paths, state.activeProjectFolderPath || '') || defaultProjectFolder(paths).path
-  delete state.projectFolderPath
-  await writeDesktopState(paths, state)
-}
-
-async function activeWorkMCPLeases(paths) {
-  const state = await readDesktopState(paths)
-  const leases = Array.isArray(state.workMcpLeases) ? state.workMcpLeases : []
-  const nowMs = Date.now()
-  let changed = false
-  const stored = []
-  const active = []
-  for (const item of leases) {
-    const lease = normalizeWorkMCPLease(paths, item)
-    if (!lease) {
-      stored.push(item)
-      continue
-    }
-    if (lease.status === 'active' && lease.expiresAt && Date.parse(lease.expiresAt) <= nowMs) {
-      lease.status = 'expired'
-      lease.updatedAt = new Date(nowMs).toISOString()
-      changed = true
-    }
-    stored.push(lease)
-    if (workMCPLeaseIsActive(lease, nowMs)) active.push(lease)
-  }
-  if (changed || stored.length > WORK_MCP_LEASE_LIMIT) {
-    state.workMcpLeases = stored.slice(0, WORK_MCP_LEASE_LIMIT)
-    await writeDesktopState(paths, state)
-  }
-  return active.sort((a, b) => leaseTimeValue(b) - leaseTimeValue(a))
-}
-
-function normalizeWorkMCPLease(paths, item) {
-  const lease = objectOr(item)
-  const workUid = String(lease.workUid || lease.uid || '').trim()
-  const projectPath = normalizeProjectPath(paths, lease.projectPath || '')
-  if (!workUid || !projectPath) return undefined
-  return {
-    ...lease,
-    workUid,
-    projectPath,
-    projectName: String(lease.projectName || '').trim() || path.basename(projectPath),
-    controller: String(lease.controller || 'external-mcp').trim(),
-    status: String(lease.status || 'active').trim(),
-  }
-}
-
-function workMCPLeaseIsActive(lease, nowMs = Date.now()) {
-  if (!lease || lease.status !== 'active') return false
-  const expiresAt = Date.parse(lease.expiresAt || '')
-  return Number.isFinite(expiresAt) && expiresAt > nowMs
-}
-
-function leaseTimeValue(lease) {
-  const parsed = Date.parse(lease?.lastSeenAt || lease?.updatedAt || lease?.startedAt || '')
-  return Number.isFinite(parsed) ? parsed : 0
-}
-
-function dedupeProjectFolders(paths, folders) {
-  const out = []
-  const push = (folder) => {
-    const normalized = normalizeProjectPath(paths, folder?.path || '')
-    if (!normalized || out.some((item) => sameResolvedPath(item.path, normalized))) return
-    out.push(projectFolderFromPath(normalized))
-  }
-  push(defaultProjectFolder(paths))
-  for (const folder of folders) push(folder)
-  return out
-}
-
-function normalizeProjectPath(paths, value) {
-  const raw = String(value || '').trim()
-  if (!raw) return ''
-  const normalized = isDefaultJobsRoot(paths, raw) ? defaultProjectFolder(paths).path : raw
-  return path.resolve(normalized)
-}
-
-async function providerWorkspaceDirFromConfig(paths) {
-  try {
-    const raw = await fsp.readFile(paths.configPath, 'utf8')
-    const value = YAML.parse(raw) || {}
-    return String(value?.provider?.workspace_dir || '').trim()
-  } catch {
-    return ''
-  }
-}
-
-async function writeProviderWorkspaceDir(paths, workspaceDir) {
-  const raw = fs.existsSync(paths.configPath) ? await fsp.readFile(paths.configPath, 'utf8') : defaultLocalConfig(paths)
-  let value
-  try {
-    value = YAML.parse(raw) || {}
-  } catch {
-    value = {}
-  }
-  if (typeof value !== 'object' || Array.isArray(value)) value = {}
-  value.provider = objectOr(value.provider)
-  value.provider.workspace_dir = workspaceDir
-  await fsp.mkdir(paths.rootDir, { recursive: true })
-  await fsp.writeFile(paths.configPath, ensureTrailingNewline(YAML.stringify(value)))
-}
-
-function isDefaultJobsRoot(paths, value) {
-  if (!String(value || '').trim()) return true
-  return path.resolve(String(value)) === path.resolve(defaultJobsRoot(paths))
 }
 
 async function readDesktopState(paths) {
@@ -2423,12 +706,7 @@ async function writeDesktopState(paths, value) {
 }
 
 async function ensurePersistenceLayout(paths) {
-  await Promise.all([
-    fsp.mkdir(path.dirname(paths.appSettingsPath), { recursive: true }),
-    fsp.mkdir(paths.conversationsDir, { recursive: true }),
-    fsp.mkdir(paths.conversationArchivesDir, { recursive: true }),
-    fsp.mkdir(path.dirname(paths.transactionsPath), { recursive: true }),
-  ])
+  await fsp.mkdir(path.dirname(paths.appSettingsPath), { recursive: true })
 }
 
 async function readJsonOr(file, fallback) {
@@ -2449,6 +727,11 @@ async function writeJsonAtomic(file, value) {
   } finally {
     await fsp.rm(tmp, { force: true }).catch(() => undefined)
   }
+}
+
+async function migrateLegacyFrontendData() {
+  const paths = await dockPaths()
+  return cleanupLegacyFrontendData({ paths, readJson: readJsonOr, writeJson: writeJsonAtomic })
 }
 
 function resolveBundledBinary(baseName) {
@@ -2482,168 +765,9 @@ async function ensureWindowsWSLBroker() {
   }
 }
 
-async function cloud_transactions() {
-  const paths = await dockPaths()
-  return httpJson('GET', '/v1/cloud/transactions', undefined, await localOwnerToken(paths), { timeoutMs: 5000 })
-}
-
-async function readConversationRecords(paths) {
-  await fsp.mkdir(paths.conversationsDir, { recursive: true })
-  const entries = await fsp.readdir(paths.conversationsDir, { withFileTypes: true }).catch(() => [])
-  const records = []
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.json')) continue
-    const filePath = path.join(paths.conversationsDir, entry.name)
-    const record = await readJsonOr(filePath, undefined)
-    if (!record || typeof record !== 'object' || Array.isArray(record)) continue
-    if (!record.thread || typeof record.thread !== 'object') continue
-    records.push({ ...record, path: filePath })
-  }
-  return records.sort((left, right) => {
-    const a = Number(left?.thread?.updatedAt || left?.thread?.createdAt || 0)
-    const b = Number(right?.thread?.updatedAt || right?.thread?.createdAt || 0)
-    return b - a
-  })
-}
-
-function conversationRecordFromThread(thread) {
-  const normalized = normalizeConversationThread(thread)
-  if (!normalized || !normalized.messages.length) return undefined
-  const storageKey = conversationStorageKey(normalized)
-  return {
-    version: 1,
-    storageKey,
-    savedAt: new Date().toISOString(),
-    thread: normalized,
-    messageCount: normalized.messages.length,
-    taskIds: normalized.taskIds,
-    orderId: normalized.orderId || '',
-    projectPath: normalized.projectPath || '',
-  }
-}
-
-function normalizeConversationThread(thread) {
-  const value = objectOr(thread)
-  const id = String(value.id || '').trim()
-  if (!id) return undefined
-  const messages = Array.isArray(value.messages)
-    ? value.messages.map(normalizeConversationMessage).filter(Boolean)
-    : []
-  const taskIds = Array.isArray(value.taskIds) ? value.taskIds.map((item) => String(item || '').trim()).filter(Boolean) : []
-  const participants = Array.isArray(value.participants)
-    ? value.participants.map((item) => String(item || '').trim()).filter((item) => ['buyer_agent', 'seller_agent', 'buyer_human', 'seller_human'].includes(item))
-    : []
-  const now = Date.now()
-  return {
-    id,
-    title: String(value.title || 'New chat').trim() || 'New chat',
-    messages,
-    createdAt: finiteTimestamp(value.createdAt, now),
-    updatedAt: finiteTimestamp(value.updatedAt, finiteTimestamp(value.createdAt, now)),
-    projectPath: String(value.projectPath || '').trim() || undefined,
-    origin: value.origin === 'market-card' ? 'market-card' : undefined,
-    side: value.side === 'seller' ? 'seller' : value.side === 'buyer' ? 'buyer' : undefined,
-    orderId: String(value.orderId || '').trim() || undefined,
-    taskIds,
-    status: String(value.status || '').trim() || undefined,
-    participants: participants.length ? participants : undefined,
-    providerPubkey: String(value.providerPubkey || '').trim() || undefined,
-    agentSessionId: String(value.agentSessionId || '').trim() || undefined,
-    agentDriverId: String(value.agentDriverId || '').trim() || undefined,
-    agentEventCursor: Math.max(0, Number(value.agentEventCursor || 0) || 0),
-    pendingBuyerQuestion: value.pendingBuyerQuestion && typeof value.pendingBuyerQuestion === 'object' && !Array.isArray(value.pendingBuyerQuestion)
-      ? value.pendingBuyerQuestion
-      : undefined,
-    buyerPlanReview: value.buyerPlanReview && typeof value.buyerPlanReview === 'object' && !Array.isArray(value.buyerPlanReview)
-      ? value.buyerPlanReview
-      : undefined,
-    buyerPlanReviewStatus: value.buyerPlanReviewStatus === 'confirmed'
-      ? 'confirmed'
-      : value.buyerPlanReview ? 'pending' : undefined,
-  }
-}
-
-function normalizeConversationMessage(message) {
-  const value = objectOr(message)
-  const id = String(value.id || '').trim()
-  const role = ['assistant', 'user', 'system'].includes(value.role) ? value.role : ''
-  if (!id || !role) return undefined
-  const actor = ['buyer_agent', 'seller_agent', 'buyer_human', 'seller_human'].includes(value.actor) ? value.actor : undefined
-  return {
-    id,
-    kind: value.kind === 'order_event' ? 'order_event' : value.kind === 'message' ? 'message' : undefined,
-    role,
-    actor,
-    text: String(value.text || ''),
-    meta: String(value.meta || '').trim() || undefined,
-    providerPubkey: String(value.providerPubkey || '').trim() || undefined,
-    eventRef: value.eventRef && typeof value.eventRef === 'object' && !Array.isArray(value.eventRef) ? objectOr(value.eventRef) : undefined,
-    result: value.result && typeof value.result === 'object' && !Array.isArray(value.result) ? value.result : undefined,
-    pending: value.pending === true,
-  }
-}
-
-function finiteTimestamp(value, fallback) {
-  const numeric = Number(value)
-  return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback
-}
-
-function conversationStorageKey(thread) {
-  const taskId = Array.isArray(thread.taskIds) ? thread.taskIds.map((item) => String(item || '').trim()).find(Boolean) : ''
-  if (taskId) return `task:${taskId}`
-  const orderId = String(thread.orderId || '').trim()
-  if (orderId) return `order:${orderId}`
-  return `chat:${String(thread.id || '').trim()}`
-}
-
-function conversationPathForStorageKey(paths, storageKey) {
-  return path.join(paths.conversationsDir, conversationFileName(storageKey))
-}
-
-function conversationFileName(storageKey) {
-  const hash = crypto.createHash('sha1').update(String(storageKey)).digest('hex').slice(0, 10)
-  const slug = safeFileSlug(storageKey, 72)
-  return `${slug}-${hash}.json`
-}
-
-function safeFileSlug(value, limit = 72) {
-  const slug = String(value || 'conversation')
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, limit)
-  return slug || 'conversation'
-}
-
-async function removePreviousConversationFiles(paths, currentStorageKey, previousStorageKeys) {
-  const previous = new Set(previousStorageKeys.filter((item) => item && item !== currentStorageKey))
-  for (const storageKey of previous) {
-    await fsp.rm(conversationPathForStorageKey(paths, storageKey), { force: true }).catch(() => {})
-  }
-}
-
-async function archiveConversationFiles(paths, threads, archivedAt, extraStorageKeys = []) {
-  const stamp = archiveFileStamp(archivedAt)
-  const archiveDir = path.join(paths.conversationArchivesDir, stamp)
-  await fsp.mkdir(archiveDir, { recursive: true })
-  const storageKeys = new Set(extraStorageKeys)
-  for (const thread of threads) {
-    const normalized = normalizeConversationThread(thread)
-    if (normalized) storageKeys.add(conversationStorageKey(normalized))
-  }
-  for (const storageKey of storageKeys) {
-    const source = conversationPathForStorageKey(paths, storageKey)
-    const target = path.join(archiveDir, conversationFileName(storageKey))
-    await fsp.rm(target, { force: true }).catch(() => {})
-    await fsp.rename(source, target).catch(() => {})
-  }
-  return archiveDir
-}
-
 async function ensureLocalLayout(paths) {
   await fsp.mkdir(paths.dataDir, { recursive: true })
   await fsp.mkdir(paths.logsDir, { recursive: true })
-  await fsp.mkdir(defaultProjectFolder(paths).path, { recursive: true })
   if (!fs.existsSync(paths.configPath)) {
     await fsp.writeFile(paths.configPath, defaultLocalConfig(paths))
   } else {
@@ -2672,11 +796,6 @@ async function migrateLocalConfig(paths) {
   }
   if (!String(value.listen_addr || '').trim() || String(value.listen_addr).trim() === ':8080') {
     value.listen_addr = '127.0.0.1:8080'
-    changed = true
-  }
-  value.provider = objectOr(value.provider)
-  if (!sameResolvedPath(String(value.provider.workspace_dir || '').trim() || defaultJobsRoot(paths), defaultProjectFolder(paths).path)) {
-    value.provider.workspace_dir = defaultProjectFolder(paths).path
     changed = true
   }
   if (changed) await fsp.writeFile(paths.configPath, ensureTrailingNewline(YAML.stringify(value)))
@@ -3488,7 +1607,7 @@ cloud_token_path: ${yamlQuote(path.join(paths.dataDir, 'cloud-token.json'))}
 cloud_poll_interval_sec: 3
 
 provider:
-  workspace_dir: ${yamlQuote(defaultProjectFolder(paths).path)}
+  workspace_dir: ${yamlQuote(path.join(paths.dataDir, 'provider-workspace'))}
   allow_command_executor: false
   allowed_commands: []
   max_job_seconds: 300

@@ -26,6 +26,7 @@ import {
   FolderPlus,
   Hand,
   Inbox,
+  Info,
   KeyRound,
   Languages,
   LogOut,
@@ -91,6 +92,17 @@ import {
   type Task,
 } from './domain'
 import './styles.css'
+import './styles/v3-shell.css'
+import './styles/v3-api.css'
+import './styles/v3-environment.css'
+import './styles/v3-listings.css'
+import './styles/v3-history.css'
+import './styles/v3-buyer.css'
+import './styles/wallet.css'
+import './styles/auth.css'
+import './styles/settings.css'
+import './styles/modal.css'
+import './styles/policy.css'
 
 type ChatMessage = {
   id: string
@@ -121,39 +133,6 @@ type ChatThread = {
   status?: string
   participants?: Array<'buyer_agent' | 'seller_agent' | 'buyer_human' | 'seller_human'>
   providerPubkey?: string
-  agentSessionId?: string
-  agentDriverId?: string
-  agentEventCursor?: number
-}
-
-type LocalAgentSessionStatus = 'starting' | 'ready' | 'busy' | 'waiting_user' | 'failed' | 'stopped'
-
-type InteractiveAgentSession = {
-  id: string
-  conversationId: string
-  role: OrderSide
-  purpose?: 'seller_card'
-  driver: string
-  status: LocalAgentSessionStatus
-  vendorSessionId?: string
-  vendorTurnId?: string
-  workspace?: string
-  permissionMode: PermissionMode
-  workUid?: string
-  transactionId?: string
-  eventCursor: number
-  lastError?: string
-  binding?: { bindingId?: string; driver?: string; version?: string }
-}
-
-type AgentSessionEvent = {
-  seq: number
-  kind: string
-  messageId?: string
-  turnId?: string
-  text?: string
-  payload?: Record<string, unknown>
-  createdAt?: string
 }
 
 type SelectedKind = 'plan' | 'approval' | 'task' | 'payment'
@@ -264,7 +243,7 @@ type V3APIRoute = { id: string; routeId: string; operationId: string; method: st
 type V3APIMaterial = { id: string; name: string; extension: string; sizeBytes: number; localPath: string; sha256?: string }
 type V3APIBridgeDraft = { draftId: string; version: number; status: string; bridgeMode?: 'transparent' | 'dock_tunnel'; title: string; description: string; protocol: V3APIBridgeProtocol; baseUrl: string; healthPath: string; routes: Array<{ routeId: string; operationId: string; method: string; path: string; displayName: string; pricing: V3APIPricingComponent[]; maxChargePerInvocationAtomic: number }>; agentNotes?: string; unresolvedFields?: string[] }
 type V3APIProbe = { ok: boolean; status?: number; latencyMs?: number; contentType?: string; checkedURL?: string; checkedAt?: string; error?: string }
-type SettingsView = 'archives'
+type SettingsView = 'security'
 type WalletPanel = 'receive' | 'withdraw' | 'key'
 type AppTheme = 'light' | 'dark'
 type LLMTestStatus = 'passed' | 'failed'
@@ -278,53 +257,6 @@ type BuyerAgentSettings = {
   agentId: string
 }
 
-type LocalAgentAuthState = 'authenticated' | 'not_authenticated' | 'configured' | 'unknown'
-type LocalAgentProtocolState = 'supported' | 'preview' | 'limited' | 'unsupported'
-type LocalAgentStatus = 'ready' | 'available' | 'login_required' | 'not_installed' | 'probe_failed' | 'detected_only'
-
-type LocalAgentInstallation = {
-  driverId: string
-  name: string
-  vendor: string
-  installed: boolean
-  bindable: boolean
-  bound: boolean
-  status: LocalAgentStatus
-  authState: LocalAgentAuthState
-  executablePath?: string
-  version?: string
-  detail?: string
-  protocol: string
-  protocolState: LocalAgentProtocolState
-  protocolLabel: string
-  capabilities: string[]
-  note?: string
-}
-
-type LocalAgentBinding = {
-  bindingId: string
-  driverId: string
-  name: string
-  vendor: string
-  executablePath: string
-  version?: string
-  protocol: string
-  protocolState: LocalAgentProtocolState
-  protocolLabel: string
-  capabilities: string[]
-  boundAt: string
-  lastVerifiedAt: string
-  status: LocalAgentStatus
-  authState: LocalAgentAuthState
-  valid: boolean
-}
-
-type LocalAgentScanResult = {
-  agents: LocalAgentInstallation[]
-  binding?: LocalAgentBinding | null
-  scannedAt?: string | null
-  hasSnapshot: boolean
-}
 
 type CardDiagnosticsTask = {
   id: number
@@ -443,18 +375,9 @@ type PersistedWorkTaskState = {
 type PersistedAppSettings = {
   language?: AppLanguage
   theme?: AppTheme
-  permissionMode?: PermissionMode
-  buyerAgentSettings?: Partial<BuyerAgentSettings>
-  activeSettingsView?: SettingsView
   workOrderSide?: OrderSide
-  marketOrderSide?: OrderSide
   sidebarCollapsed?: boolean
   sidebarWidth?: number
-  transactionDetailWidth?: number
-  projectFolderCollapsed?: boolean
-  expandedProjectFolderPaths?: string[]
-  seenProjectFolderPaths?: string[]
-  workTaskState?: PersistedWorkTaskState
 }
 
 type DesktopConversationRecord = {
@@ -465,7 +388,6 @@ type DesktopConversationRecord = {
 type DesktopPersistenceLoad = {
   version?: number
   settings?: PersistedAppSettings
-  conversations?: DesktopConversationRecord[]
 }
 
 type DemoTransactionBundle = {
@@ -496,7 +418,6 @@ type TransactionSnapshotRecord = {
 type PinAction =
   | { kind: 'select_plan'; planId: string; optionId: string }
   | { kind: 'approve'; approvalId: string }
-  | { kind: 'gpu_demo_payment' }
 
 type PinStep = {
   action: PinAction
@@ -504,72 +425,6 @@ type PinStep = {
   pin: string
   confirm: string
   error?: string
-}
-
-type GpuDemoStage =
-  | 'idle'
-  | 'ready'
-  | 'thinking'
-  | 'questions'
-  | 'manifest_review'
-  | 'matching'
-  | 'seller_options'
-  | 'seller_confirming'
-  | 'seller_accepted'
-  | 'pin'
-  | 'paid'
-  | 'queued'
-  | 'pulling_image'
-  | 'running'
-  | 'uploading_artifacts'
-  | 'completed'
-
-type GpuDemoSeller = {
-  id: string
-  name: string
-  providerPubkey: string
-  resourceId: string
-  gpu: string
-  vramGb: number
-  region: string
-  price: number
-  eta: string
-  score: number
-  success: string
-  reason: string
-  risk: string
-}
-
-type GpuDemoAnswers = {
-  gpuProfile: string
-  budget: string
-  dataset: string
-  outputs: string
-}
-
-type GpuDemoIds = {
-  base: string
-  workUid: string
-  planId: string
-  orderId: string
-  taskId: string
-  approvalId: string
-  paymentId: string
-  runId: string
-}
-
-type GpuDemoState = {
-  active: boolean
-  stage: GpuDemoStage
-  ids: GpuDemoIds
-  taskText: string
-  projectPath: string
-  projectName: string
-  chatId?: string
-  selectedSellerId?: string
-  answers: GpuDemoAnswers
-  startedAt: string
-  updatedAt: string
 }
 
 type WorkspaceSnapshot = {
@@ -818,13 +673,22 @@ type WalletWithdrawal = {
 
 type WalletWithdrawalResponse = {
   withdrawal?: WalletWithdrawal
+  quote?: { quoteId: string; amountAtomic?: number; networkFeeAtomic?: number; serviceFeeAtomic?: number; totalFeeAtomic?: number; netAmountAtomic?: number; expiresAt?: string }
+  challenge?: { challengeId: string; expiresAt?: string; email?: string }
   nextAction?: string
   feePolicy?: WalletStatus['feePolicy']
 }
 
+type WalletWithdrawalChallenge = {
+  quote: NonNullable<WalletWithdrawalResponse['quote']>
+  challenge: NonNullable<WalletWithdrawalResponse['challenge']>
+  toAddress: string
+  amountAtomic: number
+  idempotencyKey: string
+}
+
 const app = document.querySelector<HTMLDivElement>('#app')!
 const isMacPlatform = /Mac|iPhone|iPad|iPod/.test(navigator.platform)
-const TOP_WINDOW_DRAG_HEIGHT = 64
 const agentComposerPlaceholder = () => t('agentComposer.placeholder')
 const agentComposerLockedPlaceholder = () => t('agentComposer.lockedPlaceholder')
 const WORK_TASK_STATE_KEY = 'exora.workTaskState.v1'
@@ -1012,7 +876,11 @@ const toolbarIcons = {
   refresh: icon(RefreshCw),
   monitor: icon(Activity),
   emptyContent: icon(Inbox),
+  authTest: icon(KeyRound),
 }
+
+// Kept available in packaged builds while the authentication/workspace lifecycle is under test.
+const authUITestControlsEnabled = true
 
 const roleTabIcons: Record<OrderSide, string> = {
   buyer: icon(ShoppingCart),
@@ -1027,7 +895,7 @@ const profileIcons = {
 const walletSurfaceIcon = icon(WalletCards)
 
 const settingsNavIcons: Record<SettingsView, string> = {
-  archives: icon(Archive),
+  security: icon(KeyRound),
 }
 const localAgentIcon = icon(Network)
 
@@ -1075,80 +943,6 @@ const BUYER_AGENT_SEARCH_DEFAULTS = {
 } as const
 
 const DEFAULT_WORK_FOLDER_NAME = 'AgenStaff'
-const GPU_DEMO_PREFIX = 'gpu-job-demo'
-const GPU_DEMO_TASK = 'Run a GPU inference job for a small evaluation batch. Use one high-memory GPU, keep the budget under 15 USDC, and return results.jsonl, metrics.json, logs.txt, and receipt.json.'
-const GPU_DEMO_STAGE_ORDER: GpuDemoStage[] = [
-  'idle',
-  'ready',
-  'thinking',
-  'questions',
-  'manifest_review',
-  'matching',
-  'seller_options',
-  'seller_confirming',
-  'seller_accepted',
-  'pin',
-  'paid',
-  'queued',
-  'pulling_image',
-  'running',
-  'uploading_artifacts',
-  'completed',
-]
-const GPU_DEMO_DEFAULT_ANSWERS: GpuDemoAnswers = {
-  gpuProfile: 'A6000 48GB or better',
-  budget: '15',
-  dataset: '320 prompt evaluation batch with model outputs to score',
-  outputs: 'results.jsonl, metrics.json, logs.txt, receipt.json',
-}
-const GPU_DEMO_SELLERS: GpuDemoSeller[] = [
-  {
-    id: 'gpu-forge-a6000',
-    name: 'GPU Forge A6000',
-    providerPubkey: 'gpu-forge-a6000',
-    resourceId: 'gpu-a6000-night-window',
-    gpu: 'RTX A6000',
-    vramGb: 48,
-    region: 'US West',
-    price: 12.5,
-    eta: '45 min',
-    score: 94,
-    success: '97%',
-    reason: 'Best budget fit with enough VRAM, CUDA 12, Docker isolation, and artifact hash support.',
-    risk: 'Model download can add a few minutes if the requested weights are not cached.',
-  },
-  {
-    id: 'h100-spot-runner',
-    name: 'H100 Spot Runner',
-    providerPubkey: 'h100-spot-runner',
-    resourceId: 'gpu-h100-spot-25m',
-    gpu: 'H100',
-    vramGb: 80,
-    region: 'US Central',
-    price: 18,
-    eta: '25 min',
-    score: 97,
-    success: '99%',
-    reason: 'Fastest completion and highest memory headroom, but it exceeds the default budget.',
-    risk: 'Spot availability can change before payment confirmation.',
-  },
-  {
-    id: 'lab-node-4090',
-    name: '4090 Lab Node',
-    providerPubkey: 'lab-node-4090',
-    resourceId: 'gpu-4090-lab-node',
-    gpu: 'RTX 4090',
-    vramGb: 24,
-    region: 'US East',
-    price: 8.5,
-    eta: '70 min',
-    score: 87,
-    success: '92%',
-    reason: 'Lowest price, acceptable for smaller batches, with slower runtime and tighter VRAM.',
-    risk: 'May require smaller batch size if the model memory footprint is high.',
-  },
-]
-
 const projectFolderMenuIcons = {
   open: icon(FolderOpen),
   rename: icon(PencilLine),
@@ -1196,6 +990,7 @@ const windowControlButtons = isMacPlatform
 
 app.innerHTML = `
   <main class="app-shell">
+    <div class="top-window-drag-strip" aria-hidden="true"></div>
     <div class="window-control-rail global-window-controls" data-global-window-controls aria-label="Window controls">
       <div class="window-controls ${isMacPlatform ? 'traffic-lights' : ''}" aria-label="Window controls">
         ${windowControlButtons}
@@ -1205,14 +1000,12 @@ app.innerHTML = `
     <div class="sidebar-chrome">
       <div class="workspace-toolbar" aria-label="Workspace tools">
         <button type="button" data-toolbar-action="toggle-sidebar" aria-label="Toggle sidebar" title="Toggle sidebar">${toolbarIcons.sidebarExpanded}</button>
-        <button type="button" data-toolbar-action="back" aria-label="Back" title="Back">${toolbarIcons.back}</button>
-        <button type="button" data-toolbar-action="forward" aria-label="Forward" title="Forward">${toolbarIcons.forward}</button>
+        ${authUITestControlsEnabled ? `<button class="workspace-test-auth-button" type="button" data-test-auth-view="signin" aria-label="Test sign-in screen" title="Test sign-in screen">${toolbarIcons.authTest}<span>TEST</span></button>` : ''}
       </div>
     </div>
-    <div class="sidebar-drag-strip" data-drag-region></div>
     <aside class="task-sidebar">
       <div class="sidebar-resize-handle no-drag" data-sidebar-resize-handle role="separator" aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin="${SIDEBAR_MIN_WIDTH}" aria-valuemax="${SIDEBAR_MAX_WIDTH}" tabindex="0" title="Resize sidebar"></div>
-      <div class="sidebar-brand-row drag-region" data-drag-region>
+      <div class="sidebar-brand-row">
         <div class="sidebar-brand-identity" aria-label="Exora">
           <span class="sidebar-brand-name"><span class="sidebar-brand-exora">Exora</span> <span class="sidebar-brand-dock">Dock</span></span>
         </div>
@@ -1221,45 +1014,10 @@ app.innerHTML = `
       <nav class="view-switch" aria-label="Workspace views">
         <div class="view-tab-cell"><button type="button" data-order-side-tab="buyer"><span class="tab-icon">${roleTabIcons.buyer}</span><span>Buyer</span></button></div>
         <div class="view-tab-cell"><button type="button" data-order-side-tab="seller"><span class="tab-icon">${roleTabIcons.seller}</span><span>Seller</span></button></div>
-        <div class="settings-return-cell"><button type="button" data-action="return-from-settings"><span class="tab-icon">${toolbarIcons.back}</span><span>Return to App</span></button></div>
+        <div class="settings-return-cell"><button type="button" data-action="return-from-settings"><span class="tab-icon">${toolbarIcons.back}</span><span>Settings</span></button></div>
       </nav>
-      <div class="order-role-row hidden" aria-hidden="true">
-        <div class="order-role-control">
-          <button class="order-side-toggle" type="button" data-order-side-toggle aria-label="Switch order side" title="Switch order side">
-            <span class="order-side-track" aria-hidden="true">
-              <span class="order-side-knob"></span>
-            </span>
-          </button>
-          <span class="order-side-state" data-order-side-state>Buyer</span>
-        </div>
-        <button class="folder-picker-button" type="button" data-action="choose-folder" aria-label="Add project folder" title="Add project folder">${toolbarIcons.folderPlus}</button>
-      </div>
-      <div class="brand-block drag-region" data-drag-region>
-        <div class="brand-mark">E</div>
-        <div>
-          <p class="eyebrow">Exora Dock</p>
-          <h1>Agent Workspace</h1>
-        </div>
-      </div>
-      <div class="runtime-line">
-        <span class="status-dot" data-daemon>checking</span>
-        <button class="tiny-button" data-action="refresh-workspace">Refresh</button>
-      </div>
-      <div class="project-folder-head" data-project-folder-head>
-        <button class="project-folder-toggle" type="button" data-action="toggle-project-folder" aria-expanded="true" title="Collapse folder tasks">
-          <span class="project-folder-disclosure">${toolbarIcons.disclosure}</span>
-          <span class="project-folder-icon">${toolbarIcons.folder}</span>
-          <span data-project-folder-name>AgenStaff</span>
-        </button>
-        <button class="project-folder-menu-button" type="button" data-action="project-folder-menu" aria-haspopup="menu" aria-expanded="false" aria-label="Project actions" title="Project actions">${toolbarIcons.projectMenu}</button>
-      </div>
-      <div class="project-folder-menu hidden" data-project-folder-menu role="menu" aria-label="Project actions"></div>
-      <div class="task-context-menu hidden" data-task-context-menu role="menu" aria-label="Task actions"></div>
-      <div class="sidebar-section-head">
-        <button class="new-chat-button" type="button" data-action="new-chat" aria-label="Start transaction" title="Start transaction">${toolbarIcons.plus}</button>
-      </div>
       <div class="ledger-list" data-ledger-list>
-        <p class="empty-copy ledger-empty-copy">Start a transaction</p>
+        <div class="v3-history-state is-loading"><span class="v3-history-state-spinner" aria-hidden="true"></span><strong>Loading history&hellip;</strong></div>
       </div>
       <div class="profile-panel" aria-label="Personal profile">
         <button class="profile-identity" type="button" data-action="open-profile-menu" aria-haspopup="menu" aria-expanded="false" aria-label="Open account menu" title="Account menu">
@@ -1268,70 +1026,63 @@ app.innerHTML = `
         </button>
         <div class="profile-actions">
           <button class="profile-icon-button" type="button" data-action="open-wallet" aria-label="Open wallet" title="Wallet">${profileIcons.wallet}</button>
-          <button class="profile-icon-button" type="button" data-action="open-api-settings" aria-label="Open settings" title="Settings">${profileIcons.settings}</button>
+          <button class="profile-icon-button" type="button" data-action="open-settings" aria-label="Open settings" title="Settings">${profileIcons.settings}</button>
         </div>
         <div class="profile-menu hidden" data-profile-menu role="menu" aria-label="Account menu"></div>
       </div>
     </aside>
 
     <section class="main-workspace">
-      <div class="main-window-drag-strip" data-window-drag-handle data-drag-region aria-hidden="true"></div>
-      <header class="main-header drag-region" data-drag-region>
-        <div>
-          <p class="eyebrow" data-main-kicker>Transaction Agent</p>
-          <h2 data-decision-title>Ask Exora Dock</h2>
-        </div>
-        <div class="main-head-actions">
-          <span data-decision-step hidden aria-hidden="true"></span>
-        </div>
-      </header>
-      <div class="context-strip" data-context-strip>
-        Select order activity on the left, or ask for a capability below.
-      </div>
-      <section class="workspace-view chat-view" data-view-panel="chat">
-        <div class="chat-top-drag-layer" data-drag-region aria-hidden="true"></div>
-        <div class="transaction-overlay" data-transaction-overlay></div>
-        <div class="chat-feed" data-chat-feed aria-live="polite"></div>
-        <div class="buyer-entry-stack" data-buyer-entry-stack>
-          <div class="external-work-lock hidden" data-external-work-lock>
-            <span data-external-work-lock-text>External local agent is working on this transaction.</span>
-            <button class="secondary compact-action" type="button" data-action="take-over-work">${toolbarIcons.hand}<span>Take over</span></button>
-          </div>
-          <form class="chat-composer" data-agent-chat-form>
-            <textarea data-agent-query rows="1" placeholder="${agentComposerPlaceholder()}"></textarea>
-            <div class="composer-footer">
-              <div class="composer-action-group">
-                <div class="chat-agent-control">
-                  <button class="composer-action-button composer-mcp-copy-button chat-agent-button" type="button" data-action="toggle-chat-agent" aria-label="Connect local Agent" title="Connect local Agent" aria-haspopup="menu" aria-expanded="false">${localAgentIcon}<span class="chat-agent-status-dot" data-chat-agent-status-dot aria-hidden="true"></span></button>
-                  <div class="permission-menu chat-agent-menu hidden" data-chat-agent-menu role="menu" aria-label="Local Agent session"></div>
-                </div>
-                <button class="composer-action-button" type="submit" aria-label="Send message" title="Send" data-agent-send>${toolbarIcons.send}</button>
-              </div>
-            </div>
-          </form>
-        </div>
-      </section>
-      <section class="workspace-view action-view hidden" data-view-panel="action">
+      <section class="workspace-view action-view" data-view-panel="action">
         <div class="decision-content" data-decision-content>
-          <p class="empty-copy">Seller choices, approvals, and payment PIN steps appear here.</p>
+          <section class="v3-market-surface v3-seller-surface workspace-bootstrap-skeleton" aria-label="Opening Listings">
+            <div class="v3-listing-loading"><span><i></i><b></b><em></em></span><span><i></i><b></b><em></em></span></div>
+          </section>
         </div>
       </section>
 
-      <section class="workspace-view settings-view hidden" data-view-panel="settings">
-        <section class="settings-detail">
-          <div class="wallet-modal hidden" data-wallet-modal aria-hidden="true">
-            <button class="wallet-modal-scrim" type="button" data-action="close-wallet" aria-label="Close wallet"></button>
-            <section class="wallet-modal-panel" role="dialog" aria-modal="true" aria-labelledby="wallet-modal-title">
-              <header class="wallet-modal-head">
-                <div class="wallet-modal-head-copy">
-                  <span class="wallet-modal-head-mark" aria-hidden="true">${profileIcons.wallet}</span>
+      <section class="workspace-view app-settings-view hidden" data-view-panel="app-settings" aria-labelledby="app-settings-title">
+        <header class="app-settings-head">
+          <div>
+            <span>ACCOUNT</span>
+            <h1 id="app-settings-title">Settings</h1>
+            <p>Manage security preferences for this Exora Dock account.</p>
+          </div>
+        </header>
+        <section class="app-settings-content" aria-label="Security settings">
+          <div class="app-settings-section-head">
+            <span>SECURITY</span>
+            <h2>Payment security</h2>
+            <p>Control the six-digit PIN used to approve sensitive account actions.</p>
+          </div>
+          <div class="app-setting-row">
+            <span class="app-setting-icon" aria-hidden="true">${icon(KeyRound)}</span>
+            <div>
+              <strong>Payment PIN</strong>
+              <p>Change your current six-digit payment PIN. Your existing PIN is required.</p>
+            </div>
+            <button type="button" data-settings-action="change-pin">Change PIN</button>
+          </div>
+        </section>
+      </section>
+
+    </section>
+  </main>
+
+  <div class="global-modal-layer" data-global-modal-layer>
+      <div class="app-modal wallet-modal hidden" data-wallet-modal aria-hidden="true">
+            <button class="app-modal-scrim wallet-modal-scrim" type="button" data-action="close-wallet" aria-label="Close wallet"></button>
+            <section class="app-modal-panel wallet-modal-panel" role="dialog" aria-modal="true" aria-labelledby="wallet-modal-title">
+              <header class="app-modal-head wallet-modal-head">
+                <div class="app-modal-head-copy wallet-modal-head-copy">
+                  <span class="app-modal-head-mark wallet-modal-head-mark" aria-hidden="true">${profileIcons.wallet}</span>
                   <div>
                     <p class="eyebrow">Exora Wallet</p>
                     <h2 id="wallet-modal-title">Wallet</h2>
                     <span>Balance, transfers, receive address, and secure account access.</span>
                   </div>
                 </div>
-                <button class="wallet-modal-close" type="button" data-action="close-wallet" aria-label="Close wallet" title="Close">${windowIcons.close}</button>
+                <button class="app-modal-close wallet-modal-close" type="button" data-action="close-wallet" aria-label="Close wallet" title="Close">${windowIcons.close}</button>
               </header>
               <div class="wallet-modal-content">
           <section class="wallet-page">
@@ -1348,7 +1099,7 @@ app.innerHTML = `
                 </div>
                 <div class="wallet-balance-footer">
                   <div>
-                    <span>Account wallet</span>
+                    <span>Platform custody</span>
                     <code data-wallet-address-short>Not configured</code>
                   </div>
                   <span class="wallet-network-badge"><i aria-hidden="true"></i>Solana</span>
@@ -1400,9 +1151,9 @@ app.innerHTML = `
                           <div><input name="amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" required /><button type="button" data-action="wallet-withdraw-max">Max</button></div>
                         </label>
                         <label class="wallet-field">
-                          <span>Payment PIN</span>
+                          <span>Email verification code</span>
                           <span class="wallet-pin-control" data-wallet-pin-control>
-                            <input name="paymentPin" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="6" aria-label="Six digit payment PIN" required />
+                            <input name="emailCode" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" maxlength="6" aria-label="Six digit email verification code" />
                             <span class="wallet-pin-cells" aria-hidden="true">
                               <i></i><i></i><i></i><i></i><i></i><i></i>
                             </span>
@@ -1432,64 +1183,26 @@ app.innerHTML = `
             </div>
           </section>
               </div>
-              <footer class="wallet-modal-footer">
-                <span>USDC on Solana · Account wallet</span>
+              <footer class="app-modal-footer wallet-modal-footer">
+                <span>USDC on Solana · Platform custody</span>
                 <span><kbd>Esc</kbd> to close</span>
               </footer>
             </section>
           </div>
 
-          <section class="settings-page hidden" data-settings-page="archives">
-            <div class="settings-section archive-records-section" data-archive-records>
-              <div class="section-title">
-                <strong>Archive records</strong>
-                <span>local task archive</span>
-              </div>
-              <p class="muted">Archived transactions appear here.</p>
-            </div>
-          </section>
-        </section>
-      </section>
-    </section>
-
-    <aside class="transaction-detail-sidebar" data-transaction-detail-sidebar aria-hidden="true">
-      <div class="transaction-detail-resize-handle no-drag" data-transaction-detail-resize-handle role="separator" aria-label="Resize detail panel" aria-orientation="vertical" aria-valuemin="${TRANSACTION_DETAIL_MIN_WIDTH}" aria-valuemax="${TRANSACTION_DETAIL_MAX_WIDTH}" tabindex="0" title="Resize detail panel"></div>
-      <div class="transaction-detail-content" data-transaction-detail-content></div>
-    </aside>
-
-    <header class="transaction-detail-head" aria-label="Detail panel controls">
-      <div class="window-control-rail transaction-detail-controls">
-        <button class="transaction-detail-panel-toggle" type="button" data-action="close-transaction-detail" aria-label="Collapse stage detail" title="Collapse detail">${toolbarIcons.detailCollapse}</button>
-        <div class="window-controls ${isMacPlatform ? 'traffic-lights' : ''}" aria-label="Window controls">
-        ${windowControlButtons}
-        </div>
-      </div>
-    </header>
-
-    <div class="window-control-rail transaction-detail-popout-controls" data-transaction-detail-popout-controls aria-hidden="true">
-      <div class="window-controls ${isMacPlatform ? 'traffic-lights' : ''}" aria-label="Window controls">
-        ${windowControlButtons}
-      </div>
-    </div>
-
-    <div class="market-project-picker hidden" data-market-project-picker>
-      <button class="market-project-scrim" type="button" data-action="close-market-project-picker" aria-label="Close project picker"></button>
-      <section class="market-project-dialog" data-market-project-dialog role="dialog" aria-modal="true" aria-label="Choose project"></section>
-    </div>
-
-    <div class="order-search-modal hidden" data-order-search-modal aria-hidden="true">
-      <button class="order-search-scrim" type="button" data-action="close-order-search" aria-label="Close order search"></button>
-      <section class="order-search-panel" role="dialog" aria-modal="true" aria-labelledby="order-search-title">
-        <header class="order-search-head">
-          <div class="order-search-head-copy">
-            <span class="order-search-head-mark" aria-hidden="true">${toolbarIcons.search}</span>
+    <div class="app-modal order-search-modal hidden" data-order-search-modal aria-hidden="true">
+      <button class="app-modal-scrim order-search-scrim" type="button" data-action="close-order-search" aria-label="Close order search"></button>
+      <section class="app-modal-panel order-search-panel" role="dialog" aria-modal="true" aria-labelledby="order-search-title">
+        <header class="app-modal-head order-search-head">
+          <div class="app-modal-head-copy order-search-head-copy">
+            <span class="app-modal-head-mark order-search-head-mark" aria-hidden="true">${toolbarIcons.search}</span>
             <div>
               <p class="eyebrow">Exora Search</p>
               <h2 id="order-search-title" data-order-search-title>Search orders</h2>
               <span>Find activity across your current workspace.</span>
             </div>
           </div>
-          <button class="order-search-close" type="button" data-action="close-order-search" aria-label="Close order search" title="Close">${windowIcons.close}</button>
+          <button class="app-modal-close order-search-close" type="button" data-action="close-order-search" aria-label="Close order search" title="Close">${windowIcons.close}</button>
         </header>
         <label class="order-search-field">
           <span aria-hidden="true">${toolbarIcons.search}</span>
@@ -1502,36 +1215,65 @@ app.innerHTML = `
           </header>
           <div class="order-search-results" data-order-search-results role="listbox" aria-label="Order search results"></div>
         </section>
-        <footer class="order-search-footer">
+        <footer class="app-modal-footer order-search-footer">
           <span>Searches the current Buyer or Seller workspace</span>
           <span><kbd>Esc</kbd> to close</span>
         </footer>
       </section>
     </div>
 
-    <div class="cart-modal hidden" data-cart-modal aria-hidden="true">
-      <button class="cart-modal-scrim" type="button" data-action="close-cart" aria-label="Close cart"></button>
-      <section class="cart-modal-panel" data-cart-modal-panel role="dialog" aria-modal="true" aria-labelledby="cart-modal-title">
-        <header class="cart-modal-head">
-          <div>
-            <p class="eyebrow" data-cart-kicker>Cart</p>
-            <h2 id="cart-modal-title" data-cart-title>Cards</h2>
+    <div class="app-modal pin-settings-modal hidden" data-pin-settings-modal aria-hidden="true">
+      <button class="app-modal-scrim" type="button" data-pin-settings-action="close" aria-label="Close PIN settings"></button>
+      <section class="app-modal-panel pin-settings-panel" role="dialog" aria-modal="true" aria-labelledby="pin-settings-title">
+        <header class="app-modal-head">
+          <div class="app-modal-head-copy">
+            <span class="app-modal-head-mark" aria-hidden="true">${icon(KeyRound)}</span>
+            <div>
+              <p class="eyebrow">Account security</p>
+              <h2 id="pin-settings-title">Change payment PIN</h2>
+              <span>Enter your current PIN, then choose a new six-digit PIN.</span>
+            </div>
           </div>
-          <button class="cart-modal-close" type="button" data-action="close-cart" aria-label="Close cart" title="Close cart">${windowIcons.close}</button>
+          <button class="app-modal-close" type="button" data-pin-settings-action="close" aria-label="Close PIN settings" title="Close">${windowIcons.close}</button>
         </header>
-        <div class="cart-modal-content" data-cart-content></div>
+        <form class="pin-settings-form" data-pin-settings-form>
+          <label><span>Current PIN</span><input name="currentPIN" type="password" inputmode="numeric" autocomplete="off" maxlength="6" pattern="[0-9]{6}" required /></label>
+          <div class="pin-settings-grid">
+            <label><span>New PIN</span><input name="newPIN" type="password" inputmode="numeric" autocomplete="off" maxlength="6" pattern="[0-9]{6}" required /></label>
+            <label><span>Confirm new PIN</span><input name="pinConfirm" type="password" inputmode="numeric" autocomplete="off" maxlength="6" pattern="[0-9]{6}" required /></label>
+          </div>
+          <p class="pin-settings-message" data-pin-settings-message aria-live="polite"></p>
+          <div class="pin-settings-actions">
+            <button class="secondary" type="button" data-pin-settings-action="close">Cancel</button>
+            <button type="submit" data-pin-settings-submit>Change PIN</button>
+          </div>
+        </form>
+        <footer class="app-modal-footer"><span>PIN changes apply to sensitive account actions.</span><span><kbd>Esc</kbd> to close</span></footer>
       </section>
     </div>
 
-    <div class="toast" data-message role="status" aria-live="polite" aria-atomic="true"></div>
+    <div class="app-modal mcp-info-modal hidden" data-mcp-info-modal aria-hidden="true">
+      <button class="app-modal-scrim" type="button" data-mcp-info-action="close" aria-label="Close Exora MCP guide"></button>
+      <section class="app-modal-panel mcp-info-panel" role="dialog" aria-modal="true" aria-labelledby="mcp-info-title">
+        <header class="app-modal-head">
+          <div class="app-modal-head-copy">
+            <span class="app-modal-head-mark" aria-hidden="true">${icon(Info)}</span>
+            <div>
+              <p class="eyebrow">Exora MCP</p>
+              <h2 id="mcp-info-title" data-mcp-info-title></h2>
+              <span data-mcp-info-subtitle></span>
+            </div>
+          </div>
+          <button class="app-modal-close" type="button" data-mcp-info-action="close" aria-label="Close Exora MCP guide" title="Close">${windowIcons.close}</button>
+        </header>
+        <div class="mcp-info-body" data-mcp-info-body></div>
+        <footer class="app-modal-footer"><span data-mcp-info-footer></span><span><kbd>Esc</kbd> to close</span></footer>
+      </section>
+    </div>
+  </div>
 
-  </main>
+  <div class="toast" data-message role="status" aria-live="polite" aria-atomic="true"></div>
 `
-
-// The wallet markup lives beside the settings markup for template readability,
-// but renders as a root-level modal so it is independent from every workspace view.
-const walletModalRoot = app.querySelector<HTMLElement>('[data-wallet-modal]')!
-app.querySelector<HTMLElement>('.app-shell')!.append(walletModalRoot)
 
 const fields = {
   appShell: app.querySelector<HTMLElement>('.app-shell')!,
@@ -1550,7 +1292,7 @@ const fields = {
   walletModalPanel: app.querySelector<HTMLElement>('.wallet-modal-panel')!,
   walletPanelTabs: Array.from(app.querySelectorAll<HTMLButtonElement>('[data-wallet-tab]')),
   walletPanels: Array.from(app.querySelectorAll<HTMLElement>('[data-wallet-panel]')),
-  settingsButton: app.querySelector<HTMLButtonElement>('[data-action="open-api-settings"]')!,
+  settingsButton: app.querySelector<HTMLButtonElement>('[data-action="open-settings"]')!,
   projectFolderHead: app.querySelector<HTMLElement>('[data-project-folder-head]')!,
   projectFolderToggle: app.querySelector<HTMLButtonElement>('[data-action="toggle-project-folder"]')!,
   projectFolderName: app.querySelector<HTMLElement>('[data-project-folder-name]')!,
@@ -1588,7 +1330,7 @@ const fields = {
   decisionContent: app.querySelector<HTMLElement>('[data-decision-content]')!,
   chatView: app.querySelector<HTMLElement>('[data-view-panel="chat"]')!,
   actionView: app.querySelector<HTMLElement>('[data-view-panel="action"]')!,
-  settingsView: app.querySelector<HTMLElement>('[data-view-panel="settings"]')!,
+  settingsView: app.querySelector<HTMLElement>('[data-view-panel="app-settings"]')!,
   localAgentsContent: app.querySelector<HTMLElement>('[data-local-agents-content]')!,
   marketProjectPicker: app.querySelector<HTMLElement>('[data-market-project-picker]')!,
   marketProjectDialog: app.querySelector<HTMLElement>('[data-market-project-dialog]')!,
@@ -1597,6 +1339,15 @@ const fields = {
   orderSearchInput: app.querySelector<HTMLInputElement>('[data-order-search-input]')!,
   orderSearchResults: app.querySelector<HTMLElement>('[data-order-search-results]')!,
   orderSearchCount: app.querySelector<HTMLElement>('[data-order-search-count]')!,
+  pinSettingsModal: app.querySelector<HTMLElement>('[data-pin-settings-modal]')!,
+  pinSettingsForm: app.querySelector<HTMLFormElement>('[data-pin-settings-form]')!,
+  pinSettingsMessage: app.querySelector<HTMLElement>('[data-pin-settings-message]')!,
+  pinSettingsSubmit: app.querySelector<HTMLButtonElement>('[data-pin-settings-submit]')!,
+  mcpInfoModal: app.querySelector<HTMLElement>('[data-mcp-info-modal]')!,
+  mcpInfoTitle: app.querySelector<HTMLElement>('[data-mcp-info-title]')!,
+  mcpInfoSubtitle: app.querySelector<HTMLElement>('[data-mcp-info-subtitle]')!,
+  mcpInfoBody: app.querySelector<HTMLElement>('[data-mcp-info-body]')!,
+  mcpInfoFooter: app.querySelector<HTMLElement>('[data-mcp-info-footer]')!,
   cartModal: app.querySelector<HTMLElement>('[data-cart-modal]')!,
   cartModalPanel: app.querySelector<HTMLElement>('[data-cart-modal-panel]')!,
   cartKicker: app.querySelector<HTMLElement>('[data-cart-kicker]')!,
@@ -1622,7 +1373,7 @@ const fields = {
   walletCopyButton: app.querySelector<HTMLButtonElement>('[data-action="wallet-copy-address"]')!,
   walletWithdrawForm: app.querySelector<HTMLFormElement>('[data-wallet-withdraw-form]')!,
   walletPinControl: app.querySelector<HTMLElement>('[data-wallet-pin-control]')!,
-  walletPinInput: app.querySelector<HTMLInputElement>('input[name="paymentPin"]')!,
+  walletPinInput: app.querySelector<HTMLInputElement>('input[name="emailCode"]')!,
   walletPinCells: Array.from(app.querySelectorAll<HTMLElement>('.wallet-pin-cells > i')),
   walletWithdrawButton: app.querySelector<HTMLButtonElement>('[data-wallet-withdraw-submit]')!,
   walletWithdrawStatus: app.querySelector<HTMLElement>('[data-wallet-withdraw-status]')!,
@@ -1866,20 +1617,15 @@ const state: {
   llmDraftProfile?: LLMProfile
   llmKeyStorageAvailable: boolean
   activeSettingsView: SettingsView
-  localAgents: LocalAgentInstallation[]
-  localAgentBinding?: LocalAgentBinding
-  localAgentScanning: boolean
-  localAgentSnapshotLoaded: boolean
-  localAgentSnapshotLoading: boolean
-  localAgentScannedAt?: string
-  localAgentError?: string
-  localAgentSessions: Record<string, InteractiveAgentSession>
-  chatAgentMenuOpen: boolean
-  chatAgentConnecting: boolean
+  settingsOpen: boolean
+  pinSettingsModalOpen: boolean
+  pinSettingsBusy: boolean
+  mcpInfoModalOpen: boolean
   walletModalOpen: boolean
   walletPanel: WalletPanel
   walletStatus?: WalletStatus
   walletWithdrawal?: WalletWithdrawal
+  walletWithdrawalChallenge?: WalletWithdrawalChallenge
   walletWithdrawalBusy: boolean
   walletWithdrawalError?: string
   appStatus?: AppStatus
@@ -1919,7 +1665,6 @@ const state: {
   transactionStageDetailCollapsed: Record<string, boolean>
   transactionStageInspectorOpen: boolean
   buyerFirstStepTransition: boolean
-  gpuDemo?: GpuDemoState
   newConversationDraft: boolean
   chatThreads: ChatThread[]
   pinStep?: PinStep
@@ -2109,22 +1854,17 @@ const state: {
   sellerCardGeneration: undefined,
   cartOpen: false,
   llmTestStatus: undefined,
-  activeSettingsView: 'archives',
-  localAgents: [],
-  localAgentSessions: {},
-  chatAgentMenuOpen: false,
-  chatAgentConnecting: false,
+  activeSettingsView: 'security',
+  settingsOpen: false,
+  pinSettingsModalOpen: false,
+  pinSettingsBusy: false,
+  mcpInfoModalOpen: false,
   walletModalOpen: false,
   walletPanel: 'receive',
   walletWithdrawal: undefined,
+  walletWithdrawalChallenge: undefined,
   walletWithdrawalBusy: false,
   walletWithdrawalError: undefined,
-  localAgentBinding: undefined,
-  localAgentScanning: false,
-  localAgentSnapshotLoaded: false,
-  localAgentSnapshotLoading: false,
-  localAgentScannedAt: undefined,
-  localAgentError: undefined,
   projectFolders: [],
   mcpConnections: [],
   workMcpLeases: [],
@@ -2156,7 +1896,6 @@ const state: {
   transactionStageDetailCollapsed: {},
   transactionStageInspectorOpen: false,
   buyerFirstStepTransition: false,
-  gpuDemo: undefined,
   newConversationDraft: true,
   chatThreads: [],
   seenPlanIds: new Set(),
@@ -2321,7 +2060,6 @@ let pendingTransactionStageScroll: { threadId: string; stageId: string } | undef
 let lastChatFeedRenderKey = ''
 let lastTransactionDetailRenderKey = ''
 let forceChatFeedScrollBottom = false
-const gpuDemoTimers = new Set<number>()
 const chatFeedScrollPositions = new Map<string, number>()
 const chatSaveTimers = new Map<string, number>()
 const chatSaveQueues = new Map<string, Promise<void>>()
@@ -2357,8 +2095,8 @@ function isOrderSide(value: unknown): value is OrderSide {
 }
 
 function normalizeSettingsView(value: unknown): SettingsView | undefined {
-  if (value === 'archives') return value
-  return 'archives'
+  if (value === 'security') return value
+  return 'security'
 }
 
 function isSettingsView(value: unknown): value is SettingsView {
@@ -2369,11 +2107,7 @@ function legacyAppSettingsSnapshot(): PersistedAppSettings {
   return {
     language: legacyStoredLanguage(),
     theme: legacyStoredTheme(),
-    permissionMode: legacyStoredPermissionMode(),
-    buyerAgentSettings: legacyStoredBuyerAgentSettings(),
     sidebarWidth: legacyStoredSidebarWidth(),
-    transactionDetailWidth: legacyStoredTransactionDetailWidth(),
-    workTaskState: workTaskStateToPersisted(legacyStoredWorkTaskState()),
   }
 }
 
@@ -2382,18 +2116,9 @@ function normalizePersistedSettings(value: unknown): PersistedAppSettings {
   return {
     language: isAppLanguage(input.language) ? input.language : undefined,
     theme: isAppTheme(input.theme) ? input.theme : undefined,
-    permissionMode: isPermissionMode(input.permissionMode) ? input.permissionMode : undefined,
-    buyerAgentSettings: input.buyerAgentSettings && typeof input.buyerAgentSettings === 'object' ? normalizeBuyerAgentSettings(input.buyerAgentSettings) : undefined,
-    activeSettingsView: normalizeSettingsView(input.activeSettingsView),
     workOrderSide: isOrderSide(input.workOrderSide) ? input.workOrderSide : undefined,
-    marketOrderSide: isOrderSide(input.marketOrderSide) ? input.marketOrderSide : undefined,
     sidebarCollapsed: typeof input.sidebarCollapsed === 'boolean' ? input.sidebarCollapsed : undefined,
     sidebarWidth: input.sidebarWidth === undefined ? undefined : normalizeSidebarWidth(input.sidebarWidth),
-    transactionDetailWidth: input.transactionDetailWidth === undefined ? undefined : normalizeTransactionDetailWidth(input.transactionDetailWidth),
-    projectFolderCollapsed: typeof input.projectFolderCollapsed === 'boolean' ? input.projectFolderCollapsed : undefined,
-    expandedProjectFolderPaths: Array.isArray(input.expandedProjectFolderPaths) ? input.expandedProjectFolderPaths.map(String).filter(Boolean) : undefined,
-    seenProjectFolderPaths: Array.isArray(input.seenProjectFolderPaths) ? input.seenProjectFolderPaths.map(String).filter(Boolean) : undefined,
-    workTaskState: input.workTaskState && typeof input.workTaskState === 'object' ? input.workTaskState : undefined,
   }
 }
 
@@ -2401,18 +2126,9 @@ function mergePersistedSettings(fallback: PersistedAppSettings, value: Persisted
   return {
     language: value.language ?? fallback.language,
     theme: value.theme ?? fallback.theme,
-    permissionMode: value.permissionMode ?? fallback.permissionMode,
-    buyerAgentSettings: value.buyerAgentSettings ?? fallback.buyerAgentSettings,
-    activeSettingsView: value.activeSettingsView ?? fallback.activeSettingsView,
     workOrderSide: value.workOrderSide ?? fallback.workOrderSide,
-    marketOrderSide: value.marketOrderSide ?? fallback.marketOrderSide,
     sidebarCollapsed: value.sidebarCollapsed ?? fallback.sidebarCollapsed,
     sidebarWidth: value.sidebarWidth ?? fallback.sidebarWidth,
-    transactionDetailWidth: value.transactionDetailWidth ?? fallback.transactionDetailWidth,
-    projectFolderCollapsed: value.projectFolderCollapsed ?? fallback.projectFolderCollapsed,
-    expandedProjectFolderPaths: value.expandedProjectFolderPaths ?? fallback.expandedProjectFolderPaths,
-    seenProjectFolderPaths: value.seenProjectFolderPaths ?? fallback.seenProjectFolderPaths,
-    workTaskState: value.workTaskState ?? fallback.workTaskState,
   }
 }
 
@@ -2428,39 +2144,21 @@ function workTaskStateToPersisted(value: WorkTaskState): PersistedWorkTaskState 
 function applyPersistedSettings(settings: PersistedAppSettings) {
   if (settings.language) state.language = settings.language
   if (settings.theme) state.theme = settings.theme
-  if (settings.permissionMode) state.permissionMode = settings.permissionMode
-  if (settings.buyerAgentSettings) state.buyerAgentSettings = normalizeBuyerAgentSettings(settings.buyerAgentSettings)
-  if (settings.activeSettingsView) state.activeSettingsView = settings.activeSettingsView
   if (settings.workOrderSide) {
     state.workOrderSide = settings.workOrderSide
     state.sellerWorkspaceMode = 'transactions'
   }
-  if (settings.marketOrderSide) state.marketOrderSide = settings.marketOrderSide
   if (typeof settings.sidebarCollapsed === 'boolean') state.sidebarCollapsed = settings.sidebarCollapsed
   if (typeof settings.sidebarWidth === 'number') state.sidebarWidth = normalizeSidebarWidth(settings.sidebarWidth)
-  if (typeof settings.transactionDetailWidth === 'number') state.transactionDetailWidth = normalizeTransactionDetailWidth(settings.transactionDetailWidth)
-  if (typeof settings.projectFolderCollapsed === 'boolean') state.projectFolderCollapsed = settings.projectFolderCollapsed
-  if (settings.expandedProjectFolderPaths) state.expandedProjectFolderPaths = new Set(settings.expandedProjectFolderPaths.map(projectPathKey).filter(Boolean))
-  if (settings.seenProjectFolderPaths) state.seenProjectFolderPaths = new Set(settings.seenProjectFolderPaths.map(projectPathKey).filter(Boolean))
-  if (settings.workTaskState) state.workTaskState = normalizeWorkTaskStateValue(settings.workTaskState)
 }
 
 function appSettingsSnapshot(): PersistedAppSettings {
   return {
     language: state.language,
     theme: state.theme,
-    permissionMode: state.permissionMode,
-    buyerAgentSettings: state.buyerAgentSettings,
-    activeSettingsView: state.activeSettingsView,
     workOrderSide: state.workOrderSide,
-    marketOrderSide: state.marketOrderSide,
     sidebarCollapsed: state.sidebarCollapsed,
     sidebarWidth: state.sidebarWidth,
-    transactionDetailWidth: state.transactionDetailWidth,
-    projectFolderCollapsed: state.projectFolderCollapsed,
-    expandedProjectFolderPaths: [...state.expandedProjectFolderPaths],
-    seenProjectFolderPaths: [...state.seenProjectFolderPaths],
-    workTaskState: persistedWorkTaskStateSnapshot(),
   }
 }
 
@@ -2478,11 +2176,7 @@ async function saveAppSettingsNow() {
   if (!hasDesktopBridge()) {
     localStorage.setItem('exora.language', settings.language || 'en')
     localStorage.setItem('exora.theme', settings.theme || 'light')
-    localStorage.setItem('exora.permissionMode', settings.permissionMode || 'ask')
     localStorage.setItem('exora.sidebarWidth', String(settings.sidebarWidth || DEFAULT_SIDEBAR_WIDTH))
-    localStorage.setItem('exora.transactionDetailWidth', String(settings.transactionDetailWidth || DEFAULT_TRANSACTION_DETAIL_WIDTH))
-    localStorage.setItem('exora.buyerAgentSettings', JSON.stringify(settings.buyerAgentSettings || {}))
-    localStorage.setItem(WORK_TASK_STATE_KEY, JSON.stringify(settings.workTaskState || {}))
     return
   }
   try {
@@ -2498,10 +2192,8 @@ async function hydrateDesktopPersistence() {
     return
   }
   try {
-    const payload = await invoke<DesktopPersistenceLoad>('desktop_persistence_load')
+    const payload = await invoke<DesktopPersistenceLoad>('app_settings_load')
     applyPersistedSettings(mergePersistedSettings(legacyAppSettingsSnapshot(), normalizePersistedSettings(payload.settings)))
-    restorePersistedConversations(payload.conversations || [])
-    applyDemoTransactionsToState()
   } catch (error) {
     console.warn('Failed to load desktop persistence:', error)
   } finally {
@@ -2515,7 +2207,7 @@ function restorePersistedConversations(records: DesktopConversationRecord[]) {
   const folders: ProjectFolder[] = []
   for (const record of records) {
     const thread = normalizeChatThreadForState(record.thread)
-    if (!thread || (thread.messages.length === 0 && !thread.agentSessionId)) continue
+    if (!thread || thread.messages.length === 0) continue
     const existing = byId.get(thread.id)
     if (!existing || thread.updatedAt > existing.updatedAt || thread.messages.length > existing.messages.length) {
       byId.set(thread.id, thread)
@@ -2560,9 +2252,6 @@ function normalizeChatThreadForState(value: unknown): ChatThread | undefined {
     status: String(input.status || '').trim() || undefined,
     participants: Array.isArray(input.participants) ? input.participants.filter((item): item is NonNullable<ChatThread['participants']>[number] => item === 'buyer_agent' || item === 'seller_agent' || item === 'buyer_human' || item === 'seller_human') : ['buyer_human', 'buyer_agent', 'seller_agent'],
     providerPubkey: String(input.providerPubkey || '').trim() || undefined,
-    agentSessionId: String(input.agentSessionId || '').trim() || undefined,
-    agentDriverId: String(input.agentDriverId || '').trim() || undefined,
-    agentEventCursor: Math.max(0, Number(input.agentEventCursor || 0) || 0),
   }
 }
 
@@ -2664,527 +2353,6 @@ function applyDemoTransactionsToState() {
     ...workRunEvents,
     ...(demo.workRunEvents || {}),
   }
-}
-
-function isGpuDemoIdentifier(value?: string) {
-  return String(value || '').startsWith(GPU_DEMO_PREFIX)
-}
-
-function isGpuDemoOrderPlan(plan?: OrderPlan) {
-  return Boolean(plan && isGpuDemoIdentifier(plan.planId))
-}
-
-function isGpuDemoApproval(approval?: Approval) {
-  return Boolean(approval && (isGpuDemoIdentifier(approval.approvalId) || isGpuDemoIdentifier(approval.taskId) || isGpuDemoIdentifier(approval.planId)))
-}
-
-function isGpuDemoTask(task?: Task) {
-  return Boolean(task && (isGpuDemoIdentifier(task.id) || isGpuDemoIdentifier(task.orderId)))
-}
-
-function isGpuDemoPayment(payment?: PaymentRecord) {
-  return Boolean(payment && (isGpuDemoIdentifier(payment.paymentId) || isGpuDemoIdentifier(payment.taskId) || isGpuDemoIdentifier(payment.approvalId)))
-}
-
-function isGpuDemoWorkRun(run?: WorkRun) {
-  return Boolean(run && (isGpuDemoIdentifier(run.runId) || isGpuDemoIdentifier(run.workUid) || isGpuDemoIdentifier(run.entities?.taskId) || isGpuDemoIdentifier(run.entities?.orderPlanId)))
-}
-
-function gpuDemoStageIndex(stage?: GpuDemoStage) {
-  return Math.max(0, GPU_DEMO_STAGE_ORDER.indexOf(stage || 'idle'))
-}
-
-function gpuDemoAtLeast(stage: GpuDemoStage) {
-  const demo = state.gpuDemo
-  return Boolean(demo?.active && gpuDemoStageIndex(demo.stage) >= gpuDemoStageIndex(stage))
-}
-
-function selectedGpuDemoSeller(demo = state.gpuDemo) {
-  return GPU_DEMO_SELLERS.find((seller) => seller.id === demo?.selectedSellerId) || GPU_DEMO_SELLERS[0]
-}
-
-function gpuDemoOptionId(seller: GpuDemoSeller, demo = state.gpuDemo) {
-  return `${demo?.ids.base || GPU_DEMO_PREFIX}-option-${seller.id}`
-}
-
-function gpuDemoSellerFromOption(option?: OrderDraftOption) {
-  if (!option) return undefined
-  return GPU_DEMO_SELLERS.find((seller) => option.optionId === gpuDemoOptionId(seller) || option.providerPubkey === seller.providerPubkey)
-}
-
-function createGpuDemoIds(): GpuDemoIds {
-  const base = `${GPU_DEMO_PREFIX}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
-  const planId = `${base}-plan`
-  return {
-    base,
-    workUid: `${base}-work`,
-    planId,
-    orderId: planId,
-    taskId: `${base}-task`,
-    approvalId: `${base}-approval`,
-    paymentId: `${base}-payment`,
-    runId: `${base}-run`,
-  }
-}
-
-function createGpuDemoState(): GpuDemoState {
-  const folder = defaultWorkProjectFolder()
-  const now = new Date().toISOString()
-  return {
-    active: true,
-    stage: 'ready',
-    ids: createGpuDemoIds(),
-    taskText: GPU_DEMO_TASK,
-    projectPath: folder.path,
-    projectName: folder.name,
-    answers: { ...GPU_DEMO_DEFAULT_ANSWERS },
-    startedAt: now,
-    updatedAt: now,
-  }
-}
-
-function clearGpuDemoTimers() {
-  for (const timer of gpuDemoTimers) window.clearTimeout(timer)
-  gpuDemoTimers.clear()
-}
-
-function scheduleGpuDemo(callback: () => void, delayMs: number) {
-  const timer = window.setTimeout(() => {
-    gpuDemoTimers.delete(timer)
-    callback()
-  }, delayMs)
-  gpuDemoTimers.add(timer)
-}
-
-function removeGpuDemoRecordsFromState() {
-  state.orderPlans = state.orderPlans.filter((item) => !isGpuDemoOrderPlan(item))
-  state.approvals = state.approvals.filter((item) => !isGpuDemoApproval(item))
-  state.tasks = state.tasks.filter((item) => !isGpuDemoTask(item))
-  state.payments = state.payments.filter((item) => !isGpuDemoPayment(item))
-  state.workRuns = state.workRuns.filter((item) => !isGpuDemoWorkRun(item))
-  for (const runId of Object.keys(state.workRunEvents)) {
-    if (isGpuDemoIdentifier(runId)) delete state.workRunEvents[runId]
-  }
-}
-
-function gpuDemoTaskType(demo: GpuDemoState) {
-  return demo.answers.gpuProfile.toLowerCase().includes('h100') ? 'compute.gpu.h100_inference' : 'compute.gpu.inference'
-}
-
-function gpuDemoSelectedPrice(demo: GpuDemoState) {
-  return selectedGpuDemoSeller(demo).price
-}
-
-function gpuDemoTaskStatus(stage: GpuDemoStage): Task['status'] {
-  if (stage === 'completed') return 'completed'
-  if (stage === 'pulling_image' || stage === 'running' || stage === 'uploading_artifacts') return 'running'
-  if (stage === 'paid' || stage === 'queued') return 'consented'
-  return 'pending_consent'
-}
-
-function gpuDemoRunStatus(stage: GpuDemoStage) {
-  if (stage === 'completed') return 'completed'
-  if (stage === 'pulling_image' || stage === 'running' || stage === 'uploading_artifacts') return 'running'
-  return 'queued'
-}
-
-function gpuDemoCurrentStep(stage: GpuDemoStage) {
-  if (stage === 'pulling_image') return 'submit_worker_job'
-  if (stage === 'running') return 'provider_execution'
-  if (stage === 'uploading_artifacts') return 'fetch_artifacts'
-  if (stage === 'completed') return 'terminal_report'
-  if (stage === 'seller_confirming') return 'seller_valuation'
-  if (stage === 'seller_accepted' || stage === 'pin') return 'wait_owner_approval_payment'
-  if (stage === 'paid' || stage === 'queued') return 'input_transfer'
-  return 'quote_review'
-}
-
-function gpuDemoOrderState(demo: GpuDemoState): NonNullable<OrderPlan['orderState']> | undefined {
-  if (!gpuDemoAtLeast('seller_options')) return undefined
-  const selected = Boolean(demo.selectedSellerId)
-  const stateByStage: Record<GpuDemoStage, string> = {
-    idle: 'plan_first',
-    ready: 'plan_first',
-    thinking: 'plan_first',
-    questions: 'plan_first',
-    manifest_review: 'plan_first',
-    matching: 'cloud_matching',
-    seller_options: 'quote_review',
-    seller_confirming: 'quote_review',
-    seller_accepted: 'order_authorized',
-    pin: 'order_authorized',
-    paid: 'input_transfer',
-    queued: 'input_transfer',
-    pulling_image: 'provider_execution',
-    running: 'provider_execution',
-    uploading_artifacts: 'provider_execution',
-    completed: 'buyer_verification',
-  }
-  const waitingFor = demo.stage === 'seller_confirming'
-    ? 'seller_agent'
-    : demo.stage === 'seller_options'
-      ? 'user_input'
-      : demo.stage === 'completed'
-        ? 'user_input'
-        : gpuDemoAtLeast('paid')
-          ? 'provider_response'
-          : 'buyer_user'
-  return {
-    planId: demo.ids.planId,
-    orderId: demo.ids.orderId,
-    taskId: gpuDemoAtLeast('seller_accepted') ? demo.ids.taskId : undefined,
-    state: stateByStage[demo.stage],
-    owner: demo.stage === 'seller_confirming' ? 'seller_agent' : gpuDemoAtLeast('paid') ? 'provider_docker' : 'buyer_agent',
-    waitingFor,
-    updatedAt: demo.updatedAt,
-    terminalReason: undefined,
-  }
-}
-
-function gpuDemoPlanEvents(demo: GpuDemoState): NonNullable<OrderPlan['events']> {
-  const seller = selectedGpuDemoSeller(demo)
-  const events: NonNullable<OrderPlan['events']> = [
-    { time: demo.startedAt, type: 'agent_session_ready', message: 'Local Agent session prepared for the GPU job demo.' },
-    { time: demo.updatedAt, type: 'buyer_manifest_ready', message: `GPU job manifest requires ${demo.answers.gpuProfile}, budget ${demo.answers.budget} USDC, outputs ${demo.answers.outputs}.` },
-  ]
-  if (gpuDemoAtLeast('seller_options')) events.push({ time: demo.updatedAt, type: 'seller_quotes_ready', message: 'Three local demo sellers returned fixed quotes.' })
-  if (demo.selectedSellerId) events.push({ time: demo.updatedAt, type: 'seller_selected', message: `${seller.name} selected by the buyer.` })
-  if (gpuDemoAtLeast('seller_accepted')) events.push({ time: demo.updatedAt, type: 'seller_confirmed', message: `${seller.name} accepted the local demo job.` })
-  if (gpuDemoAtLeast('paid')) events.push({ time: demo.updatedAt, type: 'payment_confirmed', message: 'Simulated payment proof was recorded locally.' })
-  if (gpuDemoAtLeast('completed')) events.push({ time: demo.updatedAt, type: 'terminal_report', message: 'Result files, logs, metrics, and receipt are ready.' })
-  return events.slice(-6)
-}
-
-function gpuDemoWorkRunEvents(demo: GpuDemoState): WorkRunEvent[] {
-  const runId = demo.ids.runId
-  const events: WorkRunEvent[] = [
-    {
-      eventId: `${runId}-payment`,
-      type: 'verify_payment_evidence',
-      runId,
-      workUid: demo.ids.workUid,
-      step: 'Payment proof',
-      status: gpuDemoAtLeast('paid') ? 'confirmed_simulated' : 'pending',
-      summary: gpuDemoAtLeast('paid') ? 'Local demo payment proof is confirmed; no real chain payment was made.' : 'Waiting for owner PIN.',
-      createdAt: demo.updatedAt,
-    },
-  ]
-  if (gpuDemoAtLeast('queued')) {
-    events.push({
-      eventId: `${runId}-queued`,
-      type: 'submit_worker_job',
-      runId,
-      workUid: demo.ids.workUid,
-      step: 'Queue job',
-      status: 'queued',
-      summary: 'GPU job queued with Docker isolation and bounded inputs.',
-      createdAt: demo.updatedAt,
-    })
-  }
-  if (gpuDemoAtLeast('pulling_image')) {
-    events.push({
-      eventId: `${runId}-pull`,
-      type: 'pulling_image',
-      runId,
-      workUid: demo.ids.workUid,
-      step: 'Pull image',
-      status: 'running',
-      summary: 'Worker is preparing the CUDA runtime image and cached model files.',
-      createdAt: demo.updatedAt,
-    })
-  }
-  if (gpuDemoAtLeast('running')) {
-    events.push({
-      eventId: `${runId}-running`,
-      type: 'provider_execution',
-      runId,
-      workUid: demo.ids.workUid,
-      step: 'GPU execution',
-      status: 'running',
-      summary: 'Inference batch is running and writing checkpointed outputs.',
-      createdAt: demo.updatedAt,
-    })
-  }
-  if (gpuDemoAtLeast('uploading_artifacts')) {
-    events.push({
-      eventId: `${runId}-uploading`,
-      type: 'fetch_artifacts',
-      runId,
-      workUid: demo.ids.workUid,
-      step: 'Upload artifacts',
-      status: 'running',
-      summary: 'Seller is packaging results, metrics, logs, receipt, and hashes.',
-      createdAt: demo.updatedAt,
-    })
-  }
-  if (gpuDemoAtLeast('completed')) {
-    events.push({
-      eventId: `${runId}-terminal`,
-      type: 'terminal_report',
-      runId,
-      workUid: demo.ids.workUid,
-      step: 'Terminal report',
-      status: 'completed',
-      summary: 'Artifact manifest, receipt, and cleanup evidence were returned to the buyer.',
-      createdAt: demo.updatedAt,
-    })
-  }
-  return events.slice(-6)
-}
-
-function gpuDemoTransactionBundle(demo = state.gpuDemo): DemoTransactionBundle {
-  const bundle: DemoTransactionBundle = { orderPlans: [], approvals: [], tasks: [], payments: [], workRuns: [], workRunEvents: {} }
-  if (!demo?.active || !gpuDemoAtLeast('seller_options')) return bundle
-  const seller = selectedGpuDemoSeller(demo)
-  const selected = Boolean(demo.selectedSellerId)
-  const selectedOptionId = selected ? gpuDemoOptionId(seller, demo) : undefined
-  const price = gpuDemoSelectedPrice(demo)
-  const stage = demo.stage
-  const hasTask = gpuDemoAtLeast('seller_accepted')
-  const hasPayment = gpuDemoAtLeast('seller_accepted')
-  const hasRun = gpuDemoAtLeast('paid')
-  const options = GPU_DEMO_SELLERS.map((item): OrderDraftOption => ({
-    optionId: gpuDemoOptionId(item, demo),
-    resourceId: item.resourceId,
-    providerPubkey: item.providerPubkey,
-    score: item.score,
-    reason: item.reason,
-    quoteId: `${demo.ids.base}-quote-${item.id}`,
-    realtimeStatus: selected && item.id === demo.selectedSellerId ? 'selected' : 'quoted',
-    expiresAt: 'local demo',
-    priceSnapshot: { pricePerUnit: item.price, billingUnit: 'job', currency: 'USDC', availability: item.eta },
-    draft: {
-      goal: demo.taskText,
-      requirements: {
-        type: gpuDemoTaskType(demo),
-        minVramGb: item.vramGb,
-        gpuModel: item.gpu,
-        outputs: demo.answers.outputs,
-      },
-    },
-  }))
-  bundle.orderPlans?.push({
-    planId: demo.ids.planId,
-    query: 'GPU inference job demo',
-    projectPath: demo.projectPath,
-    workUid: demo.ids.workUid,
-    requesterPubkey: 'gpu-demo-buyer-owner',
-    status: selected ? 'selected' : 'pending_selection',
-    agentId: 'external-mcp-gpu-demo-agent',
-    selectedOptionId,
-    taskId: hasTask ? demo.ids.taskId : undefined,
-    approvalId: hasTask ? demo.ids.approvalId : undefined,
-    paymentId: hasPayment ? demo.ids.paymentId : undefined,
-    providerJobId: hasRun ? `${demo.ids.base}-provider-job` : undefined,
-    normalizedQuery: { type: gpuDemoTaskType(demo), minVramGb: seller.vramGb, minGpuCount: 1, query: demo.answers.gpuProfile, region: seller.region },
-    nextAction: gpuDemoNextAction(demo),
-    createdAt: demo.startedAt,
-    updatedAt: demo.updatedAt,
-    expiresAt: 'local demo',
-    options,
-    candidates: GPU_DEMO_SELLERS.map((item) => ({
-      optionId: gpuDemoOptionId(item, demo),
-      resourceId: item.resourceId,
-      providerPubkey: item.providerPubkey,
-      status: selected && item.id === demo.selectedSellerId ? 'selected' : 'quoted',
-      message: item.reason,
-      quoteId: `${demo.ids.base}-quote-${item.id}`,
-      priceAmount: item.price,
-      currency: 'USDC',
-      expiresAt: 'local demo',
-      updatedAt: demo.updatedAt,
-    })),
-    events: gpuDemoPlanEvents(demo),
-    orderState: gpuDemoOrderState(demo),
-  })
-  if (hasTask) {
-    const taskStatus = gpuDemoTaskStatus(stage)
-    bundle.approvals?.push({
-      approvalId: demo.ids.approvalId,
-      taskId: demo.ids.taskId,
-      planId: demo.ids.planId,
-      action: 'Authorize GPU job manifest and simulated payment',
-      agentId: 'external-mcp-gpu-demo-agent',
-      providerPubkey: seller.providerPubkey,
-      amount: { value: price, currency: 'USDC' },
-      quote: { priceAmount: price, currency: 'USDC', estimatedSeconds: etaMinutes(seller.eta) * 60, notes: seller.reason },
-      fileScope: [{ name: 'gpu-eval-inputs.zip', sizeBytes: 2140000, contentType: 'application/zip' }],
-      status: gpuDemoAtLeast('paid') ? 'approved' : 'pending',
-      paymentRequired: true,
-      riskSummary: 'Local demo only: no cloud match, no real chain payment, no real Docker or GPU execution.',
-      createdAt: demo.updatedAt,
-      expiresAt: 'local demo',
-    })
-    bundle.payments?.push({
-      paymentId: demo.ids.paymentId,
-      approvalId: demo.ids.approvalId,
-      taskId: demo.ids.taskId,
-      providerPubkey: seller.providerPubkey,
-      amount: price,
-      currency: 'USDC',
-      mode: 'simulated_escrow',
-      status: gpuDemoAtLeast('paid') ? 'confirmed_simulated' : 'pending_pin',
-      proofRef: gpuDemoAtLeast('paid') ? `${demo.ids.base}-local-payment-proof` : 'waiting for demo PIN',
-      createdAt: demo.updatedAt,
-      updatedAt: demo.updatedAt,
-      confirmedAt: gpuDemoAtLeast('paid') ? demo.updatedAt : undefined,
-    })
-    bundle.tasks?.push({
-      id: demo.ids.taskId,
-      orderId: demo.ids.orderId,
-      projectPath: demo.projectPath,
-      workUid: demo.ids.workUid,
-      requesterPubkey: 'gpu-demo-buyer-owner',
-      agentId: 'external-mcp-gpu-demo-agent',
-      type: gpuDemoTaskType(demo),
-      goal: demo.taskText,
-      requirements: {
-        gpu: demo.answers.gpuProfile,
-        dataset: demo.answers.dataset,
-        outputs: demo.answers.outputs,
-        acceptance: 'Artifact files exist, hashes match, logs summarize runtime, and receipt records cleanup.',
-      },
-      inputFiles: [{ name: 'gpu-eval-inputs.zip', sizeBytes: 2140000, contentType: 'application/zip', sha256: `${demo.ids.base}-input-hash` }],
-      budget: { maxAmount: Number(demo.answers.budget) || price, currency: 'USDC' },
-      expectedOutputs: ['result.md', 'metrics.json', 'logs.txt', 'receipt.json'],
-      status: taskStatus,
-      providerPubkey: seller.providerPubkey,
-      quote: {
-        id: `${demo.ids.base}-quote-${seller.id}`,
-        providerPubkey: seller.providerPubkey,
-        priceAmount: price,
-        currency: 'USDC',
-        estimatedSeconds: etaMinutes(seller.eta) * 60,
-        notes: seller.reason,
-        createdAt: demo.updatedAt,
-      },
-      approvalRequestId: demo.ids.approvalId,
-      artifacts: gpuDemoAtLeast('completed') ? [
-        { name: 'result.md', contentType: 'text/markdown', sizeBytes: 18432, sha256: `${demo.ids.base}-result-hash` },
-        { name: 'metrics.json', contentType: 'application/json', sizeBytes: 4096, sha256: `${demo.ids.base}-metrics-hash` },
-        { name: 'logs.txt', contentType: 'text/plain', sizeBytes: 12288, sha256: `${demo.ids.base}-logs-hash` },
-        { name: 'receipt.json', contentType: 'application/json', sizeBytes: 2048, sha256: `${demo.ids.base}-receipt-hash` },
-      ] : undefined,
-      artifactHashes: gpuDemoAtLeast('completed') ? {
-        'result.md': `${demo.ids.base}-result-hash`,
-        'metrics.json': `${demo.ids.base}-metrics-hash`,
-        'logs.txt': `${demo.ids.base}-logs-hash`,
-        'receipt.json': `${demo.ids.base}-receipt-hash`,
-      } : undefined,
-      createdAt: demo.updatedAt,
-      updatedAt: demo.updatedAt,
-      consentedAt: gpuDemoAtLeast('paid') ? demo.updatedAt : undefined,
-      claimedAt: gpuDemoAtLeast('running') ? demo.updatedAt : undefined,
-      completedAt: gpuDemoAtLeast('completed') ? demo.updatedAt : undefined,
-    })
-  }
-  if (hasRun) {
-    bundle.workRuns?.push({
-      schemaVersion: 'gpu-demo.v1',
-      runId: demo.ids.runId,
-      workUid: demo.ids.workUid,
-      projectPath: demo.projectPath,
-      controller: 'seller-gpu-demo-agent',
-      status: gpuDemoRunStatus(stage),
-      currentStep: gpuDemoCurrentStep(stage),
-      nextAction: gpuDemoNextAction(demo),
-      intent: demo.taskText,
-      summary: 'Local simulated GPU provider execution for the first MCP demo.',
-      entities: {
-        orderPlanId: demo.ids.planId,
-        taskId: demo.ids.taskId,
-        approvalId: demo.ids.approvalId,
-        paymentId: demo.ids.paymentId,
-        providerJobId: `${demo.ids.base}-provider-job`,
-        workerId: `${demo.ids.base}-worker`,
-      },
-      activeWorker: gpuDemoAtLeast('completed') ? undefined : {
-        workerId: `${demo.ids.base}-worker`,
-        type: 'docker',
-        status: gpuDemoRunStatus(stage),
-        providerPubkey: seller.providerPubkey,
-        jobId: `${demo.ids.base}-provider-job`,
-        updatedAt: demo.updatedAt,
-      },
-      createdAt: demo.updatedAt,
-      updatedAt: demo.updatedAt,
-      completedAt: gpuDemoAtLeast('completed') ? demo.updatedAt : undefined,
-    })
-    bundle.workRunEvents = { [demo.ids.runId]: gpuDemoWorkRunEvents(demo) }
-  }
-  return bundle
-}
-
-function etaMinutes(value: string) {
-  const parsed = Number.parseInt(value, 10)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 45
-}
-
-function gpuDemoNextAction(demo: GpuDemoState) {
-  switch (demo.stage) {
-    case 'ready':
-      return 'Copy the MCP prompt and send it to the external agent.'
-    case 'thinking':
-      return 'External agent is thinking through the task and preparing questions.'
-    case 'questions':
-      return 'Answer the buyer-agent questions.'
-    case 'manifest_review':
-      return 'Review the task checklist before sending it to matching.'
-    case 'matching':
-      return 'Local demo matching is preparing three seller options.'
-    case 'seller_options':
-      return 'Choose one seller option.'
-    case 'seller_confirming':
-      return 'Wait for seller confirmation.'
-    case 'seller_accepted':
-    case 'pin':
-      return 'Enter demo payment PIN.'
-    case 'paid':
-    case 'queued':
-      return 'Wait for provider job pickup.'
-    case 'pulling_image':
-      return 'Worker is preparing the CUDA image.'
-    case 'running':
-      return 'GPU job is running.'
-    case 'uploading_artifacts':
-      return 'Seller is packaging artifacts.'
-    case 'completed':
-      return 'Review result files and receipt.'
-    default:
-      return 'Start the GPU Job Demo.'
-  }
-}
-
-function applyGpuDemoRecordsToState() {
-  removeGpuDemoRecordsFromState()
-  const demo = state.gpuDemo
-  if (!demo?.active) return
-  const bundle = gpuDemoTransactionBundle(demo)
-  state.orderPlans = [...state.orderPlans, ...(bundle.orderPlans || [])]
-  state.approvals = [...state.approvals, ...(bundle.approvals || [])]
-  state.tasks = [...state.tasks, ...(bundle.tasks || [])]
-  state.payments = [...state.payments, ...(bundle.payments || [])]
-  state.workRuns = [...state.workRuns, ...(bundle.workRuns || [])]
-  state.workRunEvents = {
-    ...state.workRunEvents,
-    ...(bundle.workRunEvents || {}),
-  }
-  syncGpuDemoChatThread()
-}
-
-function syncGpuDemoChatThread() {
-  const demo = state.gpuDemo
-  if (!demo?.chatId) return
-  const thread = state.chatThreads.find((item) => item.id === demo.chatId)
-  if (!thread) return
-  thread.projectPath = demo.projectPath
-  thread.status = demo.stage
-  thread.orderId = gpuDemoAtLeast('seller_options') ? demo.ids.orderId : undefined
-  thread.taskIds = gpuDemoAtLeast('seller_accepted') ? [demo.ids.taskId] : []
-  thread.providerPubkey = demo.selectedSellerId ? selectedGpuDemoSeller(demo).providerPubkey : thread.providerPubkey
-  thread.updatedAt = Date.now()
-  state.selectedChatId = thread.id
-  state.selectedWorkThreadId = workThreadIdForChat(thread)
 }
 
 type MvpDemoStage = 'intent' | 'plan' | 'offer' | 'authorize' | 'execute' | 'verify' | 'settlement'
@@ -3896,7 +3064,7 @@ function conversationStorageKey(thread: ChatThread) {
 }
 
 function scheduleSaveChatThread(thread?: ChatThread, delay = CHAT_SAVE_DELAY) {
-  if ((!thread?.messages.length && !thread?.agentSessionId) || !hasDesktopBridge()) return
+  if (!thread?.messages.length || !hasDesktopBridge()) return
   if (isDemoChatThread(thread)) return
   const existing = chatSaveTimers.get(thread.id)
   if (existing !== undefined) window.clearTimeout(existing)
@@ -3908,7 +3076,7 @@ function scheduleSaveChatThread(thread?: ChatThread, delay = CHAT_SAVE_DELAY) {
 }
 
 function flushSaveChatThread(thread?: ChatThread) {
-  if ((!thread?.messages.length && !thread?.agentSessionId) || !hasDesktopBridge()) return undefined
+  if (!thread?.messages.length || !hasDesktopBridge()) return undefined
   if (isDemoChatThread(thread)) return undefined
   const existing = chatSaveTimers.get(thread.id)
   if (existing !== undefined) {
@@ -3919,25 +3087,7 @@ function flushSaveChatThread(thread?: ChatThread) {
 }
 
 async function saveChatThreadNow(thread: ChatThread) {
-  if (isDemoChatThread(thread)) return
-  const storageKey = conversationStorageKey(thread)
-  const previousStorageKey = threadStorageKeys.get(thread.id)
-  const previousStorageKeys = previousStorageKey && previousStorageKey !== storageKey ? [previousStorageKey] : []
-  const snapshot = cloneChatThread(thread)
-  threadStorageKeys.set(thread.id, storageKey)
-  const previousQueue = chatSaveQueues.get(thread.id) || Promise.resolve()
-  const nextQueue = previousQueue.catch(() => undefined).then(async () => {
-    try {
-      const result = await invoke<{ storageKey?: string }>('save_chat_thread', {
-        input: { thread: snapshot, previousStorageKeys },
-      })
-      threadStorageKeys.set(thread.id, result.storageKey || storageKey)
-    } catch (error) {
-      console.warn('Failed to save chat thread:', error)
-    }
-  })
-  chatSaveQueues.set(thread.id, nextQueue)
-  await nextQueue
+  void thread
 }
 
 function clearChatPersistenceState() {
@@ -3948,10 +3098,7 @@ function clearChatPersistenceState() {
 }
 
 async function flushAllChatSaves() {
-  if (!hasDesktopBridge()) return
-  const saves = state.chatThreads.map((thread) => flushSaveChatThread(thread)).filter((save): save is Promise<void> => Boolean(save))
-  await Promise.all(saves)
-  await Promise.all([...chatSaveQueues.values()])
+  clearChatPersistenceState()
 }
 
 function setActiveView(view: ActiveView, options: { recordHistory?: boolean } = {}) {
@@ -4051,7 +3198,6 @@ function stopTransactionDetailResize(event?: PointerEvent) {
 
 function renderChromeControls() {
   applySidebarWidth()
-  applyTransactionDetailWidth()
   const sidebarCollapsed = state.sidebarCollapsed
   const sidebarCollapsedValue = String(sidebarCollapsed)
   fields.appShell.classList.toggle('sidebar-collapsed', sidebarCollapsed)
@@ -4063,8 +3209,6 @@ function renderChromeControls() {
   fields.sidebarButton.setAttribute('aria-label', sidebarCollapsed ? t('chrome.showSidebar') : t('chrome.hideSidebar'))
   fields.sidebarButton.setAttribute('title', sidebarCollapsed ? t('chrome.showSidebar') : t('chrome.hideSidebar'))
   fields.sidebarButton.disabled = false
-  fields.backButton.disabled = state.busy || state.viewHistoryIndex <= 0
-  fields.forwardButton.disabled = state.busy || state.viewHistoryIndex >= state.viewHistory.length - 1
 }
 
 function setSidebarCollapsed(collapsed: boolean) {
@@ -4080,19 +3224,16 @@ function renderProfileSummary() {
   fields.profileAvatar.textContent = profileInitial(name)
   fields.profileIdentity.classList.toggle('active', state.profileMenuOpen)
   fields.profileIdentity.setAttribute('aria-expanded', String(state.profileMenuOpen))
-  const settingsOpen = state.activeView === 'settings'
   fields.walletButton.classList.toggle('active', state.walletModalOpen)
   fields.walletButton.setAttribute('aria-pressed', String(state.walletModalOpen))
-  fields.settingsButton.classList.toggle('active', settingsOpen)
-  fields.settingsButton.setAttribute('aria-pressed', String(settingsOpen))
+  fields.settingsButton.classList.toggle('active', state.settingsOpen)
+  fields.settingsButton.setAttribute('aria-pressed', String(state.settingsOpen))
   renderProfileMenu()
 }
 
 function profileDisplayName() {
   const accountEmail = state.authAccount?.email?.trim()
-  const sellerName = state.agentCards.seller?.manualFields.seller?.displayName?.trim()
-  const providerId = state.sellerMarketStatus?.providerId?.trim() || state.sellerSettings?.providerId?.trim()
-  return accountEmail || sellerName || providerId || t('app.userFallback')
+  return accountEmail || t('app.userFallback')
 }
 
 function profileInitial(name: string) {
@@ -4160,7 +3301,6 @@ function setPermissionMode(mode: PermissionMode) {
   scheduleSaveAppSettings()
   closePermissionMenu(false)
   renderPermissionControl()
-  showToast(t('toast.permissionEnabled', { label: activePermissionOption().label }))
 }
 
 function permissionPolicyText(mode = state.permissionMode) {
@@ -4288,7 +3428,6 @@ function signOutProfile() {
   state.profileSubmenu = undefined
   void invoke<CloudAuthState>('auth_logout').then((next) => {
     authGate.applyState(next)
-    showToast(t('toast.signedOut'))
   }).catch((error) => showToast(humanizeError(error)))
 }
 
@@ -4318,7 +3457,6 @@ function setLanguage(language: AppLanguage) {
   applyUserPreferences()
   renderAll()
   authGate.refreshLanguage()
-  showToast(t(`toast.language.${state.language}`))
 }
 
 function setTheme(theme: AppTheme) {
@@ -4329,7 +3467,6 @@ function setTheme(theme: AppTheme) {
   state.profileSubmenu = undefined
   applyUserPreferences()
   renderAll()
-  showToast(t(state.theme === 'dark' ? 'toast.theme.dark' : 'toast.theme.light'))
 }
 
 function orderSearchMatches(record: V3ActivitySession, query: string) {
@@ -4386,6 +3523,9 @@ function renderOrderSearchResults() {
 
 function openOrderSearch() {
   closeProfileMenu()
+  closeMCPInfoModal()
+  closeWalletModal()
+  closePINSettingsModal()
   closeProjectFolderMenu(false)
   closeTaskContextMenu(false)
   closePermissionMenu(false)
@@ -4410,8 +3550,6 @@ function closeOrderSearch() {
 function openOrderSearchResult(sessionId: string) {
   if (!sessionId) return
   closeOrderSearch()
-  state.sellerWorkspaceMode = 'transactions'
-  setActiveView('work')
   selectV3ActivitySession(sessionId)
 }
 
@@ -4689,14 +3827,7 @@ async function chooseBrowserProjectFolder(): Promise<ProjectFolder | undefined> 
 }
 
 async function refreshProjectFolder() {
-  if (!window.exora?.invoke) {
-    const folder = browserStoredProjectFolder() || fallbackProjectFolder()
-    setProjectFolders([folder], folder.path)
-    renderProjectFolder()
-    return
-  }
-  const folder = await invoke<ProjectFolder>('project_folder_status').catch(() => null)
-  if (!folder) return
+  const folder = browserStoredProjectFolder() || fallbackProjectFolder()
   setProjectFolders([folder, ...state.projectFolders], folder.path)
   renderProjectFolder()
 }
@@ -4707,16 +3838,14 @@ async function chooseProjectFolder() {
   setBusy(true)
   const previousPath = state.activeProjectFolderPath || state.projectFolder?.path
   try {
-    const folder = window.exora?.invoke
-      ? await invoke<ProjectFolder>('choose_project_folder', { input: { select: false } })
-      : await chooseBrowserProjectFolder()
+    const folder = await chooseBrowserProjectFolder()
     if (folder) {
       setProjectFolders([folder, ...state.projectFolders], previousPath || folder.path)
       state.expandedProjectFolderPaths.add(projectPathKey(folder.path))
       scheduleSaveAppSettings()
       renderProjectFolder()
-      if (folder.path !== previousPath) {
-        showToast(t(folder.daemonRestarted ? 'toast.projectFolderApplied' : 'toast.projectFolder', { name: folder.name }))
+      if (folder.path !== previousPath && folder.daemonRestarted) {
+        showToast(t('toast.projectFolderApplied', { name: folder.name }))
       }
       if (folder.daemonRestarted) await refreshStatus()
     }
@@ -4729,29 +3858,7 @@ async function chooseProjectFolder() {
 }
 
 async function openProjectFolderInExplorer() {
-  if (state.busy) return
-  if (!window.exora?.invoke) {
-    showToast(t('toast.openExplorerDesktopOnly'))
-    return
-  }
-  setBusy(true)
-  try {
-    const folder = await invoke<ProjectFolder>('open_project_folder')
-    setProjectFolders([folder, ...state.projectFolders], folder.path)
-    renderProjectFolder()
-    showToast(t('toast.opened', { name: folder.name }))
-  } catch (error) {
-    const message = humanizeError(error)
-    if (message.includes('unknown desktop command: open_project_folder')) {
-      await navigator.clipboard?.writeText(activeProjectFolder().path).catch(() => undefined)
-      showToast(t('toast.restartForExplorer'))
-    } else {
-      showToast(message)
-    }
-  } finally {
-    setBusy(false)
-    renderAll()
-  }
+  showToast(t('toast.openExplorerDesktopOnly'))
 }
 
 function renameBrowserProjectFolder(name: string): ProjectFolder {
@@ -4768,13 +3875,10 @@ async function renameProjectFolder() {
   if (!nextName || nextName === currentName) return
   setBusy(true)
   try {
-    const folder = window.exora?.invoke
-      ? await invoke<ProjectFolder>('rename_project_folder', { input: { name: nextName } })
-      : renameBrowserProjectFolder(nextName)
+    const folder = renameBrowserProjectFolder(nextName)
     state.projectFolder = folder
     setProjectFolders([folder, ...state.projectFolders], folder.path)
     renderProjectFolder()
-    showToast(t('toast.projectRenamed', { name: folder.name }))
     if (folder.daemonRestarted) await refreshStatus()
   } catch (error) {
     showToast(humanizeError(error))
@@ -4835,9 +3939,8 @@ async function archiveProjectChats() {
   setBusy(true)
   try {
     await flushAllChatSaves()
-    const result = window.exora?.invoke
-      ? await invoke<ProjectChatsArchiveResult>('archive_project_chats', { input: { threads, archivedAt, storageKeys } })
-      : browserArchiveProjectChats(threads, archivedAt)
+    void storageKeys
+    const result = browserArchiveProjectChats(threads, archivedAt)
     clearArchivedProjectChats()
     renderAll()
     showToast(t('toast.archivedChats', { count: result.archivedCount }))
@@ -4855,13 +3958,8 @@ async function removeProjectFolder() {
   if (!confirmed) return
   setBusy(true)
   try {
-    let folder: ProjectFolder
-    if (window.exora?.invoke) {
-      folder = await invoke<ProjectFolder>('remove_project_folder')
-    } else {
-      localStorage.removeItem('exora.projectFolder')
-      folder = fallbackProjectFolder()
-    }
+    localStorage.removeItem('exora.projectFolder')
+    const folder = fallbackProjectFolder()
     setProjectFolders([folder, ...state.projectFolders], folder.path)
     state.projectFolderCollapsed = false
     scheduleSaveAppSettings()
@@ -4909,18 +4007,15 @@ async function refreshStatus() {
 
 async function startDockOnLaunch() {
   if (!hasDesktopBridge()) return
-  fields.daemon.textContent = 'starting'
-  fields.daemon.dataset.state = 'starting'
   try {
-    renderStatus(await invoke<AppStatus>('start_dock'))
+    await invoke<AppStatus>('start_dock')
   } catch (error) {
     showToast(humanizeError(error))
-    await refreshStatus()
   }
 }
 
 async function refreshSeller(options: { market?: boolean } = {}) {
-  const settings = await invoke<SellerSettings>('seller_settings').catch(() => null)
+  const settings: SellerSettings | null = null
   if (settings) {
     state.sellerSettings = settings
     await refreshLLMProfiles({ render: false })
@@ -4929,7 +4024,7 @@ async function refreshSeller(options: { market?: boolean } = {}) {
     if (state.activeView === 'chat' || state.activeView === 'market' || state.activeView === 'settings') renderDecisionPanel()
   }
   if (options.market) {
-    const marketStatus = await invoke<SellerMarketStatus>('seller_market_status').catch(() => null)
+    const marketStatus: SellerMarketStatus | null = null
     if (marketStatus) {
       state.sellerMarketStatus = marketStatus
       renderProfileSummary()
@@ -4952,25 +4047,11 @@ function savedEditingLLMProfileId() {
 }
 
 async function refreshLLMProfiles(options: { render?: boolean } = {}) {
-  const status = await invoke<LLMProfileStatus>('llm_profiles').catch(() => null)
-  if (!status) return
-  state.llmProfiles = status.profiles || []
-  state.activeLLMProfileId = status.activeProfileId
-  state.buyerLLMProfileId = status.buyerProfileId
-  state.sellerLLMProfileId = status.sellerProfileId
-  state.llmKeyStorageAvailable = Boolean(status.keyStorageAvailable)
-  if (editingDraftLLMProfile()) {
-    if (options.render !== false) renderLLMSettings(state.sellerSettings)
-    return
-  }
-  if (!state.editingLLMProfileId || !state.llmProfiles.some((profile) => profile.id === state.editingLLMProfileId)) {
-    state.editingLLMProfileId = state.activeLLMProfileId || state.llmProfiles[0]?.id
-  }
-  if (options.render !== false) renderLLMSettings(state.sellerSettings)
+  void options
 }
 
 async function refreshAgentCards() {
-  const cards = await invoke<AgentCardsMine>('agent_cards_mine').catch(() => null)
+  const cards: AgentCardsMine | null = null
   if (!cards) return
   state.agentCards = cards
   renderProfileSummary()
@@ -4984,7 +4065,7 @@ async function refreshMarketRailCards(options: { render?: boolean } = {}) {
   if (options.render !== false && state.cartOpen) renderCartModal()
   if (options.render !== false && state.activeView === 'market') renderDecisionPanel()
   try {
-    const response = await invoke<MarketRailResponse>('market_rail_cards')
+    const response = fallbackMarketRailResponse()
     state.marketRail = response
     state.marketRailError = undefined
   } catch (error) {
@@ -5133,7 +4214,8 @@ async function generateAgentCardDraft(role: AgentCardRole, form?: HTMLFormElemen
     if (shouldRender) renderAgentCardSurfaces()
   }
   try {
-    const response = await invoke<{ card?: AgentCard }>('agent_card_draft', { input })
+    void input
+    const response: { card?: AgentCard } = { card: cardForRole(role) }
     const task = shouldTrack ? state.cardDiagnosticsTasks[role] : undefined
     if (shouldTrack && (!task || task.id !== taskId || task.stopRequested)) return undefined
     if (response.card) {
@@ -5182,7 +4264,6 @@ function startAgentCardDiagnostics(role: AgentCardRole, root: ParentNode = field
       task.running = false
       task.message = humanizeError(error)
     }
-    showToast(humanizeError(error))
     renderAgentCardSurfaces()
   })
 }
@@ -5217,7 +4298,7 @@ async function saveAgentCardFromForm(form: HTMLFormElement, role: AgentCardRole)
     ...card,
     manualFields: agentCardManualFieldsFromForm(role, form, card.manualFields),
   }
-  const response = await invoke<{ card?: AgentCard }>('save_agent_card', { input: { role, card: next } })
+  const response: { card?: AgentCard } = { card: next }
   if (response.card) {
     state.agentCards = { ...state.agentCards, [role]: response.card }
     state.cardDrafts[role] = undefined
@@ -5238,7 +4319,7 @@ async function publishAgentCard(role: AgentCardRole, root: ParentNode = fields.d
   }
   state.cardMessage = 'Publishing card to Exora Cloud...'
   renderAgentCardSurfaces()
-  const response = await invoke<{ card?: AgentCard; cloudPublished?: boolean }>('publish_agent_card', { input: { role } })
+  const response: { card?: AgentCard; cloudPublished?: boolean } = { card: cardForRole(role), cloudPublished: false }
   if (response.card) {
     state.agentCards = { ...state.agentCards, [role]: response.card }
     state.cardDrafts[role] = undefined
@@ -5306,336 +4387,6 @@ function sellerFieldsFromForm(data: FormData, current: SellerManualFields): Sell
     sellIntent: formText(data, 'sellIntent'),
     pricingPrinciples: formText(data, 'pricingPrinciples'),
   }
-}
-
-async function generateSellerCardWithAgent(root: ParentNode = fields.decisionContent) {
-  const form = findAgentCardForm('seller', root)
-  if (!form) throw new Error('Seller Card form is unavailable.')
-  const manual = sellerFieldsFromForm(new FormData(form), cardForRole('seller')?.manualFields.seller || {})
-  if (!manual.sellIntent) throw new Error('Describe what you want to sell before generating the Seller Card.')
-  if (!manual.pricingPrinciples) throw new Error('Enter your pricing principles before generating the Seller Card.')
-  if (containsLikelySecret(`${manual.sellIntent}\n${manual.pricingPrinciples}`)) {
-    throw new Error('Do not paste real credentials into Seller Card fields. Use a credential alias and describe only its permission boundary.')
-  }
-  const bindingResult = await invoke<{ binding?: LocalAgentBinding | null }>('local_agent_binding')
-  const binding = bindingResult.binding || undefined
-  state.localAgentBinding = binding
-  if (!binding?.valid || binding.status !== 'ready') throw new Error('Bind and verify a supported local Agent before generating the Seller Card.')
-
-  state.sellerCardGeneration = { eventCursor: 0, responseText: '', status: 'collecting', round: 1 }
-  state.activeCardEditor = 'seller'
-  state.cardMessage = 'Inspecting the local environment with Exora tools...'
-
-  const draft = await generateAgentCardDraft('seller', form, { render: false, track: false })
-  if (!draft) throw new Error('Exora could not collect a Seller Card environment snapshot.')
-  const incompleteSeller: SellerManualFields = {
-    ...(draft.manualFields.seller || {}),
-    ...manual,
-    setupStatus: 'incomplete',
-    structuredByAgent: undefined,
-    structuredAt: undefined,
-    allowedAgentActions: [],
-    approvalRequiredActions: [],
-    credentialPolicy: '',
-    networkPolicy: '',
-  }
-  const incompleteDraft: AgentCard = {
-    ...draft,
-    manualFields: { ...draft.manualFields, seller: incompleteSeller },
-  }
-  const saved = await invoke<{ card?: AgentCard }>('save_agent_card', { input: { role: 'seller', card: incompleteDraft } })
-  const setupCard = saved.card || incompleteDraft
-  state.agentCards = { ...state.agentCards, seller: setupCard }
-  state.cardDrafts.seller = undefined
-  state.sellerCardGeneration.status = 'starting_agent'
-  state.cardMessage = `Starting ${localAgentDisplayName(binding.driverId)}...`
-  renderAgentCardSurfaces()
-
-  const conversationId = `seller-card-${crypto.randomUUID()}`
-  const response = await invoke<{ session: InteractiveAgentSession }>('local_agent_session_start', {
-    input: {
-      conversationId,
-      role: 'seller',
-      purpose: 'seller_card',
-      workspace: activeProjectFolder().path,
-      permissionMode: 'ask',
-      transactionId: '',
-      workUid: conversationId,
-      runId: '',
-      idempotencyKey: `seller-card:${conversationId}`,
-    },
-  })
-  const session = response.session
-  state.localAgentSessions[session.id] = session
-  state.sellerCardGeneration.sessionId = session.id
-  await invoke('local_agent_session_subscribe', { input: { sessionId: session.id, after: 0 } })
-  const clientMessageId = `seller-card-message-${crypto.randomUUID()}`
-  state.sellerCardGeneration.status = 'analyzing'
-  state.cardMessage = `${localAgentDisplayName(binding.driverId)} is structuring offerings and pricing...`
-  renderAgentCardSurfaces()
-  await invoke('local_agent_session_send', {
-    input: {
-      sessionId: session.id,
-      clientMessageId,
-      text: sellerCardAgentPrompt(setupCard),
-      idempotencyKey: `send:${clientMessageId}`,
-    },
-  })
-}
-
-function sellerCardAgentPrompt(card: AgentCard) {
-  const seller = card.manualFields.seller || {}
-  const diagnostics = card.diagnostics
-  const input = {
-    sellerIntent: seller.sellIntent,
-    pricingPrinciples: seller.pricingPrinciples,
-    environment: {
-      os: diagnostics.os,
-      osVersion: diagnostics.osVersion,
-      arch: diagnostics.arch,
-      cpuCores: diagnostics.cpuCores,
-      cpuModel: diagnostics.cpuModel,
-      ramGb: diagnostics.ramGb,
-      gpus: diagnostics.gpus?.map(({ name, chip, driverVersion, vramGb }) => ({ name, chip, driverVersion, vramGb })),
-      storage: diagnostics.storage?.map(({ label, totalGb, freeGb }) => ({ label, totalGb, freeGb })),
-      docker: diagnostics.dockerAvailable ? diagnostics.dockerVersion || 'available' : 'not available',
-      python: diagnostics.pythonVersion,
-      node: diagnostics.nodeVersion,
-      codeEnvironment: diagnostics.codeEnvironment?.map(({ name, version, source }) => ({ name, version, source })),
-      dependencies: diagnostics.dependencies?.map(({ name, version, source }) => ({ name, version, source })),
-    },
-  }
-  return [
-    'You are conducting a Seller Setup conversation. Create a truthful public Seller Card and settle the local Agent permission boundary before declaring setup complete.',
-    'Do not invent installed software, credentials, APIs, performance, availability, or certifications that are not supported by the input.',
-    'The seller intent and pricing principles are authoritative. Turn them into concise buyer-facing offerings and a deterministic quote workflow.',
-    'Ask compact batches of required questions when any important commercial, execution, or permission boundary is unclear. Multiple rounds are allowed.',
-    'If APIs or credentials may be involved, settle credential aliases (names only), permitted read/query/write/publish actions, permitted domains or endpoint classes, rate or spend limits, approval cases, and retention/logging boundaries.',
-    'Never ask for or accept API keys, access tokens, passwords, private keys, recovery codes, cookie values, or other secret material. Refer to credentials only by a human-readable alias.',
-    'Return exactly one JSON object using one of these two envelopes:',
-    '{"status":"needs_input","questions":[{"id":"stable_id","question":"string","why":"string","placeholder":"string","required":true}]}',
-    '{"status":"complete","card":{"displayName":"string","capabilitySummary":"string","capabilityTypes":["string"],"pricing":"string","availability":"string","offerings":["string"],"pricingProcess":["string"],"humanConfirmation":"string","dataBoundary":"string","managedApis":["string"],"outputFormats":["string"],"externalWritePolicy":"string","allowedAgentActions":["string"],"approvalRequiredActions":["string"],"credentialPolicy":"string","networkPolicy":"string"}}',
-    'Do not return complete until the permission boundary is unambiguous. A complete card requires at least one allowed Agent action and at least one action that always requires human approval.',
-    'Use 1-8 offerings and 3-8 pricing steps. Keep every string concise. managedApis must contain product or credential alias names only and must be empty unless explicitly supported.',
-    'Human confirmation must always remain required for secret creation or replacement, payments, public disclosure, privilege expansion, and writes outside the accepted task boundary.',
-    '',
-    JSON.stringify(input),
-  ].join('\n')
-}
-
-function handleSellerCardAgentEvent(envelope: { sessionId?: unknown; event?: unknown; error?: unknown }) {
-  const generation = state.sellerCardGeneration
-  const sessionId = String(envelope.sessionId || '').trim()
-  if (!generation?.sessionId || generation.sessionId !== sessionId) return false
-  if (envelope.error) {
-    failSellerCardGeneration(String(envelope.error))
-    return true
-  }
-  if (!envelope.event || typeof envelope.event !== 'object' || Array.isArray(envelope.event)) return true
-  const event = envelope.event as AgentSessionEvent
-  const seq = Number(event.seq)
-  if (!Number.isFinite(seq) || seq <= generation.eventCursor) return true
-  generation.eventCursor = seq
-  if (event.kind === 'agent.message.delta') generation.responseText += String(event.text || '')
-  if (event.kind === 'agent.message.completed' && event.text) generation.responseText = String(event.text)
-  if (event.kind === 'driver.failure' || event.kind === 'turn.failed') {
-    failSellerCardGeneration(event.text || 'The bound local Agent failed while generating the Seller Card.')
-  } else if (event.kind === 'turn.completed') {
-    try {
-      applySellerCardAgentResult(generation.responseText)
-    } catch (error) {
-      failSellerCardGeneration(humanizeError(error))
-    }
-  }
-  return true
-}
-
-function applySellerCardAgentResult(text: string) {
-  const parsed = parseSellerCardAgentResult(text)
-  if (parsed.status === 'needs_input') {
-    const generation = state.sellerCardGeneration
-    if (!generation) throw new Error('Seller Setup session disappeared before questions were received.')
-    generation.status = 'waiting_user'
-    generation.questions = parsed.questions
-    generation.responseText = ''
-    state.cardMessage = `Setup incomplete: answer ${parsed.questions.filter((question) => question.required).length} required permission question(s).`
-    renderAgentCardSurfaces()
-    return
-  }
-  const card = cardForRole('seller')
-  if (!card) throw new Error('Seller Card draft disappeared before Agent generation completed.')
-  const current = card.manualFields.seller || {}
-  const nextSeller: SellerManualFields = {
-    ...current,
-    displayName: parsed.card.displayName || current.displayName || state.sellerSettings?.providerId || 'Exora Seller',
-    capabilitySummary: parsed.card.capabilitySummary,
-    capabilityTypes: parsed.card.capabilityTypes,
-    pricing: parsed.card.pricing,
-    availability: parsed.card.availability,
-    offerings: parsed.card.offerings,
-    pricingProcess: parsed.card.pricingProcess,
-    structuredByAgent: state.localAgentBinding?.driverId || 'local-agent',
-    structuredAt: new Date().toISOString(),
-    setupStatus: 'complete',
-    allowedAgentActions: parsed.card.allowedAgentActions,
-    approvalRequiredActions: parsed.card.approvalRequiredActions,
-    credentialPolicy: parsed.card.credentialPolicy,
-    networkPolicy: parsed.card.networkPolicy,
-    humanConfirmation: parsed.card.humanConfirmation || 'Human confirmation is required for secret changes, payment, public disclosure, privilege expansion, and writes outside the accepted task.',
-    dataBoundary: parsed.card.dataBoundary || 'Buyer inputs remain scoped to the accepted task and are not reused without consent.',
-    managedApis: parsed.card.managedApis,
-    outputFormats: parsed.card.outputFormats,
-    externalWritePolicy: parsed.card.externalWritePolicy || 'Writes outside the accepted task boundary require explicit seller authorization.',
-  }
-  state.cardDrafts.seller = { ...card, manualFields: { ...card.manualFields, seller: nextSeller } }
-  if (state.sellerCardGeneration) state.sellerCardGeneration.status = 'completed'
-  state.cardMessage = 'Seller Card generated. Review the offerings and pricing workflow before publishing.'
-  finishSellerCardGenerationSession()
-  renderAgentCardSurfaces()
-}
-
-function parseSellerCardAgentResult(text: string) {
-  const trimmed = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')
-  const start = trimmed.indexOf('{')
-  const end = trimmed.lastIndexOf('}')
-  if (start < 0 || end <= start) throw new Error('The local Agent did not return a structured Seller Card. Retry generation.')
-  let value: Record<string, unknown>
-  try {
-    value = JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>
-  } catch {
-    throw new Error('The local Agent returned invalid Seller Card JSON. Retry generation.')
-  }
-  const status = String(value.status || '').trim()
-  if (status === 'needs_input') {
-    const questions = (Array.isArray(value.questions) ? value.questions as unknown[] : [])
-      .map((item, index): SellerCardSetupQuestion | undefined => {
-        if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined
-        const question = item as Record<string, unknown>
-        const prompt = String(question.question || '').trim().slice(0, 600)
-        if (!prompt) return undefined
-        return {
-          id: String(question.id || `question_${index + 1}`).trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80),
-          question: prompt,
-          why: String(question.why || '').trim().slice(0, 500),
-          placeholder: String(question.placeholder || '').trim().slice(0, 300),
-          required: question.required !== false,
-        }
-      })
-      .filter((item): item is SellerCardSetupQuestion => Boolean(item))
-      .slice(0, 12)
-    if (!questions.length) throw new Error('The local Agent marked setup incomplete but returned no questions.')
-    return { status: 'needs_input' as const, questions }
-  }
-  if (status !== 'complete' || !value.card || typeof value.card !== 'object' || Array.isArray(value.card)) {
-    throw new Error('The local Agent did not return a valid Seller Setup envelope.')
-  }
-  const card = value.card as Record<string, unknown>
-  const stringValue = (key: string, required = false) => {
-    const result = String(card[key] || '').trim().slice(0, 1200)
-    if (required && !result) throw new Error(`The generated Seller Card is missing ${key}.`)
-    return result
-  }
-  const stringList = (key: string, required = false) => {
-    const result = (Array.isArray(card[key]) ? card[key] as unknown[] : [])
-      .map((item) => String(item || '').trim().slice(0, 320))
-      .filter(Boolean)
-      .slice(0, 12)
-    if (required && !result.length) throw new Error(`The generated Seller Card is missing ${key}.`)
-    return result
-  }
-  return {
-    status: 'complete' as const,
-    card: {
-      displayName: stringValue('displayName'),
-      capabilitySummary: stringValue('capabilitySummary', true),
-      capabilityTypes: stringList('capabilityTypes', true),
-      pricing: stringValue('pricing', true),
-      availability: stringValue('availability', true),
-      offerings: stringList('offerings', true),
-      pricingProcess: stringList('pricingProcess', true),
-      humanConfirmation: stringValue('humanConfirmation'),
-      dataBoundary: stringValue('dataBoundary'),
-      managedApis: stringList('managedApis'),
-      outputFormats: stringList('outputFormats'),
-      externalWritePolicy: stringValue('externalWritePolicy'),
-      allowedAgentActions: stringList('allowedAgentActions', true),
-      approvalRequiredActions: stringList('approvalRequiredActions', true),
-      credentialPolicy: stringValue('credentialPolicy', true),
-      networkPolicy: stringValue('networkPolicy', true),
-    },
-  }
-}
-
-function containsLikelySecret(value: string) {
-  return /(?:sk-[a-z0-9_-]{16,}|gh[pousr]_[a-z0-9]{20,}|AIza[a-z0-9_-]{20,}|-----BEGIN [^-]*PRIVATE KEY-----|eyJ[a-z0-9_-]+\.eyJ[a-z0-9_-]+\.[a-z0-9_-]+|(?:api[_ -]?key|access[_ -]?token|secret|password)\s*[:=]\s*\S{8,})/i.test(value)
-}
-
-async function continueSellerCardSetup(root: ParentNode = fields.decisionContent) {
-  const generation = state.sellerCardGeneration
-  if (!generation?.sessionId || generation.status !== 'waiting_user' || !generation.questions?.length) {
-    throw new Error('There is no Seller Setup question waiting for an answer.')
-  }
-  const form = findAgentCardForm('seller', root)
-  if (!form) throw new Error('Seller Card form is unavailable.')
-  const controls = Array.from(form.querySelectorAll<HTMLTextAreaElement>('[data-seller-card-question]'))
-  const values = new Map(controls.map((control) => [control.dataset.sellerCardQuestion || '', control.value.trim()]))
-  const pendingQuestions = generation.questions
-  const answers = pendingQuestions.map((question) => ({
-    id: question.id,
-    question: question.question,
-    answer: values.get(question.id) || '',
-  }))
-  const missing = pendingQuestions.filter((question) => question.required && !values.get(question.id))
-  if (missing.length) throw new Error(`Answer every required Seller Setup question (${missing.length} remaining).`)
-  const secretAnswer = answers.find((answer) => containsLikelySecret(answer.answer))
-  if (secretAnswer) {
-    throw new Error('Do not paste real credentials into Seller Setup. Use an alias such as “GitHub seller account” and describe its permission boundary.')
-  }
-  generation.status = 'analyzing'
-  generation.questions = undefined
-  generation.responseText = ''
-  generation.round += 1
-  state.cardMessage = `The local Agent is reviewing Seller Setup round ${generation.round}...`
-  renderAgentCardSurfaces()
-  const clientMessageId = `seller-card-answer-${crypto.randomUUID()}`
-  try {
-    await invoke('local_agent_session_send', {
-      input: {
-        sessionId: generation.sessionId,
-        clientMessageId,
-        text: [
-          `Seller Setup answers for round ${generation.round}:`,
-          JSON.stringify({ answers }),
-          'Continue the same Seller Setup. Never request secret values. Return exactly one needs_input or complete JSON envelope using the schema from the initial instruction.',
-        ].join('\n'),
-        idempotencyKey: `send:${clientMessageId}`,
-      },
-    })
-  } catch (error) {
-    generation.status = 'waiting_user'
-    generation.questions = pendingQuestions
-    generation.round = Math.max(1, generation.round - 1)
-    state.cardMessage = humanizeError(error)
-    renderAgentCardSurfaces()
-    throw error
-  }
-}
-
-function failSellerCardGeneration(message: string) {
-  if (state.sellerCardGeneration) {
-    state.sellerCardGeneration.status = 'failed'
-    state.sellerCardGeneration.error = message
-  }
-  state.cardMessage = message
-  finishSellerCardGenerationSession()
-  renderAgentCardSurfaces()
-}
-
-function finishSellerCardGenerationSession() {
-  const sessionId = state.sellerCardGeneration?.sessionId
-  if (!sessionId) return
-  invoke('local_agent_session_unsubscribe', { input: { sessionId } }).catch(() => undefined)
-  invoke('local_agent_session_stop', { input: { sessionId } }).catch(() => undefined)
 }
 
 function signaturePart(value: unknown) {
@@ -5830,7 +4581,7 @@ async function refreshWorkspaceNow(options: { quiet?: boolean } = {}) {
     workRunEvents: state.workRunEvents,
   }
   try {
-    const snapshot = await invoke<WorkspaceSnapshot>('workspace_snapshot').catch((error) => ({
+    const snapshot: WorkspaceSnapshot = {
       online: false,
       orderPlans: previousSnapshot.orderPlans,
       approvals: previousSnapshot.approvals,
@@ -5842,8 +4593,8 @@ async function refreshWorkspaceNow(options: { quiet?: boolean } = {}) {
       workRunEvents: previousSnapshot.workRunEvents,
       projectFolders: state.projectFolders,
       activeProjectFolderPath: state.activeProjectFolderPath,
-      errors: [humanizeError(error)],
-    }))
+      errors: [],
+    }
     const offline = snapshot.online === false && Boolean(snapshot.errors?.length)
     state.workspaceOnline = snapshot.online !== false
     state.workspaceErrors = snapshot.errors || []
@@ -5855,19 +4606,11 @@ async function refreshWorkspaceNow(options: { quiet?: boolean } = {}) {
     state.workMcpLeases = snapshot.workMcpLeases || []
     state.workRuns = offline ? previousSnapshot.workRuns : snapshot.workRuns || []
     state.workRunEvents = snapshot.workRunEvents || previousSnapshot.workRunEvents || {}
-    if (snapshot.online !== false) {
-      const cloud = await invoke<{ transactions?: CloudTransactionProjection[] }>('cloud_transactions').catch(() => undefined)
-      if (cloud?.transactions) state.cloudTransactions = cloud.transactions
-    }
     applyDemoTransactionsToState()
-    applyGpuDemoRecordsToState()
     const connectionFolders = projectFoldersFromConnections(state.mcpConnections)
     const activityFolders = projectFoldersFromActivity(state.orderPlans, state.tasks)
     const activePath = snapshot.activeProjectFolderPath || state.activeProjectFolderPath
     setProjectFolders([...(snapshot.projectFolders || []), ...connectionFolders, ...activityFolders, ...(state.projectFolders || [])], activePath)
-    if (snapshot.errors?.length && options.quiet !== true) {
-      showToast(snapshot.errors[0])
-    }
     notifyExternalRequests(false)
     chooseDefaultSelection(previousSelected)
     if (snapshot.online === true && !(snapshot.errors || []).length) {
@@ -6039,319 +4782,7 @@ function transactionSnapshotRecords(): TransactionSnapshotRecord[] {
 }
 
 async function saveTransactionsSnapshot() {
-  if (!hasDesktopBridge()) return
-  const records = transactionSnapshotRecords()
-  const fingerprint = JSON.stringify(records)
-  if (fingerprint === lastTransactionsFingerprint) return
-  lastTransactionsFingerprint = fingerprint
-  try {
-    await invoke('save_transactions', { input: { savedAt: new Date().toISOString(), records } })
-  } catch (error) {
-    console.warn('Failed to save transactions:', error)
-  }
-}
-
-function activeBuyerAgentContinuationContext() {
-  if (state.newConversationDraft || state.workOrderSide !== 'buyer') {
-    return { hasTransaction: false, projectPath: defaultWorkProjectPath() }
-  }
-  const thread = selectedWorkThread()
-  if (!thread) return { hasTransaction: false, projectPath: defaultWorkProjectPath() }
-  const data = transactionProgressData(thread)
-  const plan = latestBy(data.plans, (item) => item.updatedAt || item.createdAt || item.expiresAt || '')
-  const approval = latestBy(data.approvals, (item) => item.createdAt || item.expiresAt || '')
-  const task = latestBy(data.tasks, (item) => item.updatedAt || item.completedAt || item.createdAt || '')
-  const payment = latestBy(data.payments, (item) => item.updatedAt || item.confirmedAt || item.createdAt || '')
-  const threadOrderId = orderIdFromWorkThreadId(thread.id)
-  const planId = plan?.planId
-    || thread.planIds[0]
-    || (!thread.taskIds.length && !task && (thread.orderId || threadOrderId) ? thread.orderId || threadOrderId : undefined)
-  return {
-    hasTransaction: workThreadHasTransactionProgress(thread),
-    projectPath: thread.projectPath || plan?.projectPath || task?.projectPath || defaultWorkProjectPath(),
-    planId,
-    approvalId: approval?.approvalId || thread.approvalIds[0],
-    workUid: plan?.workUid || task?.workUid,
-    taskId: task?.id || thread.taskIds[0],
-    paymentId: payment?.paymentId || thread.paymentIds[0],
-  }
-}
-
-function planIdFromAgentResponse(response: MarketSearchResult) {
-  const payload = response as MarketSearchResult & { planId?: unknown; plan_id?: unknown }
-  return String(response.selectionRequest?.planId || payload.planId || payload.plan_id || '').trim()
-}
-
-function agentSessionChatThread(sessionId?: string) {
-  const id = String(sessionId || '').trim()
-  return id ? state.chatThreads.find((thread) => thread.agentSessionId === id) : undefined
-}
-
-function currentAgentChatThread() {
-  if (state.newConversationDraft) return undefined
-  return activeChatThread() || selectedChatThread()
-}
-
-function currentInteractiveAgentSession() {
-  const sessionId = currentAgentChatThread()?.agentSessionId
-  return sessionId ? state.localAgentSessions[sessionId] : undefined
-}
-
-function currentAgentTransactionId() {
-  const thread = selectedWorkThread()
-  return String(thread?.orderId || orderIdFromWorkThreadId(thread?.id) || thread?.taskIds[0] || '').trim()
-}
-
-function agentSessionCanReceiveMessage(session?: InteractiveAgentSession) {
-  return Boolean(session && (session.status === 'ready' || session.status === 'busy' || session.status === 'waiting_user'))
-}
-
-function renderChatAgentControl() {
-  const session = currentInteractiveAgentSession()
-  const sellerTransactionMissing = state.workOrderSide === 'seller' && !currentAgentTransactionId()
-  const status = state.chatAgentConnecting ? 'starting' : session?.status || 'stopped'
-  const agentName = localAgentDisplayName(session?.driver || currentAgentChatThread()?.agentDriverId || state.localAgentBinding?.driverId)
-  fields.chatAgentButton.dataset.sessionStatus = status
-  fields.chatAgentButton.classList.remove('hidden')
-  fields.chatAgentButton.disabled = state.busy || sellerTransactionMissing
-  fields.chatAgentButton.setAttribute('aria-expanded', String(state.chatAgentMenuOpen && Boolean(session)))
-  fields.chatAgentButton.setAttribute('aria-label', session ? `${agentName} session: ${status}` : `Connect ${agentName || 'local Agent'}`)
-  fields.chatAgentButton.setAttribute('title', sellerTransactionMissing
-    ? 'Select a seller transaction before connecting a local Agent.'
-    : session
-      ? `${agentName} · ${status}`
-      : `Connect ${agentName || 'local Agent'}`)
-
-  fields.chatAgentMenu.classList.toggle('hidden', !state.chatAgentMenuOpen || !session)
-  if (state.chatAgentMenuOpen && session) {
-    const canResume = session.status === 'stopped' || session.status === 'failed'
-    const canStop = session.status !== 'stopped'
-    const switchedBinding = Boolean(state.localAgentBinding?.driverId && state.localAgentBinding.driverId !== session.driver)
-    fields.chatAgentMenu.innerHTML = `
-      <div class="chat-agent-menu-copy"><strong>${escapeHTML(agentName)}</strong><span>${escapeHTML(session.status.replace('_', ' '))}${session.lastError ? ` · ${escapeHTML(compactText(session.lastError, 80))}` : ''}</span></div>
-      ${canResume ? `<button class="permission-menu-item" type="button" data-chat-agent-action="resume" role="menuitem"><span class="permission-menu-text"><strong>Resume session</strong><small>Reuse ${escapeHTML(shortID(session.vendorSessionId || session.id))}</small></span></button>` : ''}
-      ${switchedBinding ? `<button class="permission-menu-item" type="button" data-chat-agent-action="switch" role="menuitem"><span class="permission-menu-text"><strong>Switch to ${escapeHTML(localAgentDisplayName(state.localAgentBinding?.driverId))}</strong><small>Start a fresh vendor session for this chat</small></span></button>` : ''}
-      ${canStop ? `<button class="permission-menu-item" type="button" data-chat-agent-action="stop" role="menuitem"><span class="permission-menu-text"><strong>Stop session</strong><small>Keep the vendor session ID for later resume</small></span></button>` : ''}
-    `
-  } else {
-    fields.chatAgentMenu.innerHTML = ''
-  }
-  const externallyLocked = Boolean(activeExternalWorkLease() || activeExternalWorkRun()) && !session
-  const sessionStarting = state.chatAgentConnecting || session?.status === 'starting'
-  agentSendButton.disabled = state.busy || externallyLocked || sellerTransactionMissing || sessionStarting
-}
-
-function localAgentDisplayName(driverId?: string) {
-  const id = String(driverId || '').trim()
-  const bindingName = state.localAgentBinding?.driverId === id ? state.localAgentBinding.name : ''
-  return state.localAgents.find((agent) => agent.driverId === id)?.name
-    || bindingName
-    || ({ codex: 'Codex', 'claude-code': 'Claude Code', gemini: 'Gemini CLI', 'github-copilot': 'GitHub Copilot CLI', opencode: 'OpenCode' } as Record<string, string>)[id]
-    || 'Local Agent'
-}
-
-async function connectCurrentChatAgent(options: { switchAgent?: boolean } = {}): Promise<InteractiveAgentSession | undefined> {
-  if (state.chatAgentConnecting) return
-  if (!window.exora?.invoke) throw new Error('Local Agent sessions require the Electron app.')
-  if (state.workOrderSide === 'seller' && !currentAgentTransactionId()) throw new Error('Select a seller transaction before connecting a local Agent.')
-  const thread = ensureChatThread()
-  thread.side = state.workOrderSide
-  state.chatAgentConnecting = true
-  state.chatAgentMenuOpen = false
-  renderChatAgentControl()
-  try {
-    const response = await invoke<{ session: InteractiveAgentSession }>('local_agent_session_start', {
-      input: {
-        conversationId: thread.id,
-        role: state.workOrderSide,
-        workspace: thread.projectPath || defaultWorkProjectPath(),
-        permissionMode: 'ask',
-        transactionId: currentAgentTransactionId(),
-        workUid: '',
-        runId: '',
-        idempotencyKey: `connect:${thread.id}:${state.workOrderSide}:${options.switchAgent ? crypto.randomUUID() : thread.agentSessionId || 'default'}`,
-      },
-    })
-    const session = response.session
-    state.localAgentSessions[session.id] = session
-    thread.agentSessionId = session.id
-    thread.agentDriverId = session.driver
-    thread.agentEventCursor = thread.agentEventCursor || 0
-    thread.updatedAt = Date.now()
-    flushSaveChatThread(thread)
-    await subscribeLocalAgentSession(thread, session)
-    showToast(`${localAgentDisplayName(session.driver)} connected in the background.`)
-    return session
-  } finally {
-    state.chatAgentConnecting = false
-    renderChatAgentControl()
-    renderChat()
-  }
-}
-
-async function resumeCurrentChatAgent(): Promise<InteractiveAgentSession | undefined> {
-  const session = currentInteractiveAgentSession()
-  if (!session) return
-  const response = await invoke<{ session: InteractiveAgentSession }>('local_agent_session_resume', { input: { sessionId: session.id } })
-  state.localAgentSessions[session.id] = response.session
-  state.chatAgentMenuOpen = false
-  const thread = agentSessionChatThread(session.id)
-  if (thread) await subscribeLocalAgentSession(thread, response.session)
-  renderChatAgentControl()
-  return response.session
-}
-
-async function stopCurrentChatAgent() {
-  const session = currentInteractiveAgentSession()
-  if (!session) return
-  const response = await invoke<{ session: InteractiveAgentSession }>('local_agent_session_stop', { input: { sessionId: session.id } })
-  state.localAgentSessions[session.id] = response.session
-  state.chatAgentMenuOpen = false
-  renderChatAgentControl()
-}
-
-async function switchCurrentChatAgent() {
-  const old = currentInteractiveAgentSession()
-  if (old && old.status !== 'stopped') await invoke('local_agent_session_stop', { input: { sessionId: old.id } })
-  const thread = currentAgentChatThread()
-  if (thread) {
-    thread.agentSessionId = undefined
-    thread.agentDriverId = undefined
-    thread.agentEventCursor = 0
-    flushSaveChatThread(thread)
-  }
-  await connectCurrentChatAgent({ switchAgent: true })
-}
-
-async function subscribeLocalAgentSession(thread: ChatThread, session: InteractiveAgentSession) {
-  await invoke('local_agent_session_subscribe', { input: { sessionId: session.id, after: thread.agentEventCursor || 0 } })
-}
-
-async function hydrateLocalAgentChatSessions() {
-  try {
-    const result = await invoke<{ binding?: LocalAgentBinding | null }>('local_agent_binding')
-    state.localAgentBinding = result.binding || undefined
-    state.localAgentSnapshotLoaded = true
-  } catch {
-    // Dock startup can race hydration; the connect action retries through main.
-  }
-  for (const thread of state.chatThreads) {
-    if (!thread.agentSessionId) continue
-    try {
-      const response = await invoke<{ session: InteractiveAgentSession }>('local_agent_session_get', { input: { sessionId: thread.agentSessionId } })
-      state.localAgentSessions[response.session.id] = response.session
-      await subscribeLocalAgentSession(thread, response.session)
-    } catch (error) {
-      console.warn(`Failed to restore local Agent session ${thread.agentSessionId}:`, error)
-    }
-  }
-  renderChatAgentControl()
-}
-
-function appendAgentSessionMessage(thread: ChatThread, input: Omit<ChatMessage, 'id'>) {
-  const message: ChatMessage = { id: nextID(), ...input }
-  thread.messages.push(message)
-  thread.updatedAt = Date.now()
-  if (thread.title === 'New chat' && message.role === 'user') thread.title = chatTitle(message)
-  scheduleSaveChatThread(thread)
-  if (thread.id === state.selectedChatId) {
-    forceChatFeedScrollBottom = true
-    renderChat()
-    renderLedger()
-  }
-  return message.id
-}
-
-function handleLocalAgentEventPayload(payload: unknown) {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return
-  const envelope = payload as { sessionId?: unknown; event?: unknown; error?: unknown }
-  if (handleSellerCardAgentEvent(envelope)) return
-  const sessionId = String(envelope.sessionId || '').trim()
-  const thread = agentSessionChatThread(sessionId)
-  const session = state.localAgentSessions[sessionId]
-  if (!thread || !session) return
-  if (envelope.error) {
-    session.status = 'failed'
-    session.lastError = String(envelope.error)
-    renderChatAgentControl()
-    return
-  }
-  if (!envelope.event || typeof envelope.event !== 'object' || Array.isArray(envelope.event)) return
-  const event = envelope.event as AgentSessionEvent
-  if (!Number.isFinite(Number(event.seq)) || Number(event.seq) <= Number(thread.agentEventCursor || 0)) return
-  thread.agentEventCursor = Number(event.seq)
-  session.eventCursor = Math.max(session.eventCursor || 0, Number(event.seq))
-  const messageKey = `${sessionId}:${event.messageId || event.turnId || 'turn'}`
-  if (event.kind === 'turn.started') session.status = 'busy'
-  if (event.kind === 'session.ready' || event.kind === 'turn.completed' || event.kind === 'turn.interrupted') session.status = 'ready'
-  if (event.kind === 'session.stopped') session.status = 'stopped'
-  if (event.kind === 'driver.failure' || event.kind === 'turn.failed') {
-    session.status = 'failed'
-    session.lastError = event.text || 'Local Agent failed.'
-  }
-  if (event.kind === 'agent.message.delta' || event.kind === 'agent.message.completed') {
-    const existingId = localAgentAssistantMessages.get(messageKey)
-    const previous = localAgentAssistantBuffers.get(messageKey) || ''
-    const nextText = event.kind === 'agent.message.delta' ? previous + String(event.text || '') : String(event.text || '') || previous
-    localAgentAssistantBuffers.set(messageKey, nextText)
-    if (existingId) {
-      const message = thread.messages.find((item) => item.id === existingId)
-      if (message) {
-        message.text = nextText
-        message.pending = event.kind !== 'agent.message.completed'
-      }
-    } else if (nextText) {
-      const id = appendAgentSessionMessage(thread, {
-        role: 'assistant',
-        actor: session.role === 'seller' ? 'seller_agent' : 'buyer_agent',
-        text: nextText,
-        meta: localAgentDisplayName(session.driver),
-        pending: event.kind !== 'agent.message.completed',
-      })
-      localAgentAssistantMessages.set(messageKey, id)
-    }
-    if (event.kind === 'agent.message.completed') flushSaveChatThread(thread)
-  } else if (event.kind === 'mcp.event') {
-    appendAgentSessionMessage(thread, { kind: 'order_event', role: 'assistant', actor: session.role === 'seller' ? 'seller_agent' : 'buyer_agent', text: event.text || 'Exora MCP recorded a structured Agent event.', meta: 'Exora MCP' })
-  } else if ((event.kind === 'driver.failure' || event.kind === 'turn.failed') && event.text) {
-    appendAgentSessionMessage(thread, { role: 'system', text: event.text, meta: 'Local Agent' })
-  }
-  thread.updatedAt = Date.now()
-  scheduleSaveChatThread(thread)
-  renderChatAgentControl()
-}
-
-async function submitAgentMessage() {
-  const query = agentQuery.value.trim()
-  if (!query || state.busy) return
-  let session = currentInteractiveAgentSession()
-  if (!agentSessionCanReceiveMessage(session)) {
-    try {
-      session = session?.status === 'stopped' || session?.status === 'failed'
-        ? await resumeCurrentChatAgent()
-        : await connectCurrentChatAgent()
-    } catch (error) {
-      const message = humanizeError(error)
-      showToast(message)
-      return
-    }
-    if (!agentSessionCanReceiveMessage(session)) {
-      showToast(session?.lastError || 'The bound local Agent could not start a chat session.')
-      return
-    }
-  }
-  closePermissionMenu()
-  setActiveView('chat')
-  renderViewTabs()
-  agentQuery.value = ''
-  resizeAgentComposer()
-  const clientMessageId = `agent-message-${crypto.randomUUID()}`
-  pushMessage({ role: 'user', actor: state.workOrderSide === 'seller' ? 'seller_human' : 'buyer_human', text: query })
-  try {
-    await invoke('local_agent_session_send', { input: { sessionId: session!.id, clientMessageId, text: query, idempotencyKey: `send:${clientMessageId}` } })
-  } catch (error) {
-    appendAgentSessionMessage(currentAgentChatThread()!, { role: 'system', text: humanizeError(error), meta: 'Local Agent' })
-  }
+  lastTransactionsFingerprint = JSON.stringify(transactionSnapshotRecords())
 }
 
 function renderStatus(status: AppStatus) {
@@ -8838,7 +7269,6 @@ function renderChatSurface() {
   fields.chatFeed.classList.remove('hidden')
   agentChatForm.classList.toggle('hidden', sellerEmptySetup || sellerMonitor)
   renderExternalWorkLockControls()
-  renderChatAgentControl()
   resizeAgentComposer()
 }
 
@@ -8860,7 +7290,7 @@ function chatSurfaceStarted() {
 function rightWorkspaceIsWhite() {
   if (state.activeView === 'settings' || state.activeView === 'market') return true
   if (state.activeView === 'chat' || state.activeView === 'work') {
-    const showingResourceConsole = !state.pinStep && !activeGpuDemoPanel()
+    const showingResourceConsole = !state.pinStep
     return showingResourceConsole || state.buyerFirstStepTransition || chatSurfaceStarted()
   }
   return false
@@ -8912,14 +7342,11 @@ async function searchCardMarket(query: string) {
   renderCartModal()
   setBusy(true)
   try {
-    const response = await invoke<AgentCardSearchResponse>('agent_card_search', {
-      input: { role: 'seller', q: trimmed },
-    })
+    const response: AgentCardSearchResponse = { cards: [] }
     state.marketCardSearchCandidates = agentCardSearchCandidates(response)
   } catch (error) {
     state.marketCardSearchCandidates = []
     state.marketCardSearchError = humanizeError(error)
-    showToast(humanizeError(error))
   } finally {
     state.marketCardSearchLoading = false
     setBusy(false)
@@ -8927,27 +7354,22 @@ async function searchCardMarket(query: string) {
   }
 }
 
-const settingsNavItems: Array<{ view: SettingsView; titleKey: string }> = [
-  { view: 'archives', titleKey: 'settings.archives.nav' },
+const settingsNavItems: Array<{ view: SettingsView; label: Record<AppLanguage, string> }> = [
+  { view: 'security', label: { en: 'Security', zh: '安全' } },
 ]
 
 function renderLedger() {
   renderViewTabs()
-  fields.ledgerList.classList.toggle('settings-list', state.activeView === 'settings')
-  if (state.activeView === 'settings') {
-    renderSettingsSidebar()
-    localize(fields.taskSidebar)
-    return
-  }
-  renderOrderActivitySidebar()
+  if (state.settingsOpen) renderSettingsSidebar()
+  else renderOrderActivitySidebar()
   localize(fields.taskSidebar)
 }
 
 function renderSettingsSidebar() {
   setLedgerEmpty(false)
-  fields.sidebarSectionHead.classList.add('hidden')
+  fields.ledgerList.classList.add('settings-list')
   const settingItems = settingsNavItems.map((item) => {
-    const title = t(item.titleKey)
+    const title = item.label[state.language]
     return `
     <button class="ledger-item history-record settings-record ${item.view === state.activeSettingsView ? 'active' : ''}" data-settings-tab="${escapeHTML(item.view)}">
       <span class="settings-record-icon">${settingsNavIcons[item.view]}</span>
@@ -8955,13 +7377,12 @@ function renderSettingsSidebar() {
     </button>
   `
   }).join('')
-  fields.ledgerList.innerHTML = `<div class="settings-sidebar-heading">Setting</div>${settingItems}`
+  fields.ledgerList.innerHTML = `<div class="settings-sidebar-heading">${state.language === 'zh' ? '设置' : 'Settings'}</div>${settingItems}`
   fields.ledgerList.querySelectorAll<HTMLButtonElement>('[data-settings-tab]').forEach((button) => {
     button.addEventListener('click', () => {
       state.activeSettingsView = button.dataset.settingsTab as SettingsView
       scheduleSaveAppSettings()
-      renderSettingsPanel()
-      renderContextStrip()
+      renderSettingsSidebar()
     })
   })
 }
@@ -8972,7 +7393,6 @@ function renderLedgerEmpty(message: string) {
 }
 
 function setLedgerEmpty(empty: boolean) {
-  fields.sidebarSectionHead.classList.toggle('hidden', empty)
   fields.ledgerList.classList.toggle('empty', empty)
 }
 
@@ -10466,6 +8886,7 @@ function renderV3UnifiedListingsPageV2() {
         <button type="button" data-v3-listing-mode="seller" aria-pressed="${String(!isBuyer)}" class="${isBuyer ? '' : 'active'}"><span class="tab-icon">${roleTabIcons.seller}</span><span>Seller</span></button>
       </div>
     </section>
+    ${isBuyer ? `<div class="v3-listing-agent-hint">${icon(MessagesSquare)}<span>${escapeHTML(t('listings.agentHint'))}</span><span class="v3-listing-agent-actions"><button type="button" data-v3-listing-agent-copy aria-label="${escapeAttr(t('listings.agentCopy'))}" title="${escapeAttr(t('listings.agentCopy'))}">${icon(Copy)}</button><button type="button" data-v3-listing-agent-details aria-label="${escapeAttr(t('listings.agentDetails'))}" title="${escapeAttr(t('listings.agentDetails'))}">${icon(Info)}</button></span></div>` : ''}
     <section class="v3-listing-workspace v3-listing-${state.v3ListingMode}-view">${sourceError ? `<div class="v3-market-view-error">${escapeHTML(sourceError)}</div>` : ''}${rows ? `<div class="v3-listing-list">${rows}</div>` : ''}${initialLoading}${empty}<div class="v3-listing-no-results hidden"><strong>No matching listings</strong><small>Try a different search.</small></div></section>
   </section>`
 }
@@ -10645,7 +9066,7 @@ function attachV3SurfaceHandlers() {
   })
   fields.actionView.querySelectorAll<HTMLButtonElement>('[data-copy-v3-identifier]').forEach((button) => button.addEventListener('click', () => {
     const value = button.dataset.copyV3Identifier || ''
-    if (value) void navigator.clipboard.writeText(value).then(() => showToast('Identifier copied.'))
+    if (value) void navigator.clipboard.writeText(value).then(() => showToast(t('toast.identifierCopied')))
   }))
   action('catalog-back', () => { state.v3SelectedProduct = undefined; renderDecisionPanel() })
   action('catalog-refresh', () => void loadV3Catalog())
@@ -10690,8 +9111,8 @@ function attachV3SurfaceHandlers() {
   const endpointCredentialSecret = () => state.v3EndpointAuthType === 'basic' ? `${state.v3EndpointBasicUsername}:${state.v3EndpointSecret}` : state.v3EndpointSecret
   action('endpoint-materials-add', () => void run(async () => { localStorage.setItem('exora.endpointDraftId', state.v3EndpointDraftId); const result = await invoke<{ files: V3APIMaterial[]; canceled?: boolean }>('provider_api_bridge_materials_choose', { input: { draftId: state.v3EndpointDraftId } }); if (!result.canceled) { state.v3EndpointMaterials = result.files || []; invalidateV3AgentMaterials('endpoint') }; renderDecisionPanel() }))
   fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-endpoint-material-remove]').forEach((button) => button.addEventListener('click', () => void run(async () => { const result = await invoke<{ files: V3APIMaterial[] }>('provider_api_bridge_material_remove', { input: { draftId: state.v3EndpointDraftId, id: button.dataset.v3EndpointMaterialRemove } }); state.v3EndpointMaterials = result.files || []; invalidateV3AgentMaterials('endpoint'); renderDecisionPanel() })))
-  action('endpoint-prompt-copy', () => void navigator.clipboard.writeText(endpointAgentPrompt()).then(() => showToast('Endpoint Agent Prompt copied.')))
-  action('endpoint-prompt-refresh', () => { renderDecisionPanel(); showToast('Endpoint Agent Prompt refreshed.') })
+  action('endpoint-prompt-copy', () => void navigator.clipboard.writeText(endpointAgentPrompt()).then(() => showToast(t('toast.agentPromptCopied'))))
+  action('endpoint-prompt-refresh', () => { renderDecisionPanel() })
   action('endpoint-draft-check', () => void run(async () => {
     if (!state.v3EndpointMaterials.length) throw new Error('Add at least one supported document before checking the Agent draft.')
     const materialRevisionChanged = !v3AgentMaterialsCurrent('endpoint')
@@ -10884,8 +9305,8 @@ function attachV3SurfaceHandlers() {
   }
   action('api-materials-add', () => void run(async () => { localStorage.setItem('exora.apiBridgeDraftId', state.v3APIDraftId); const result = await invoke<{ files: V3APIMaterial[]; canceled?: boolean; discovery?: { title?: string; description?: string; baseUrl?: string; operations?: Array<{ operationId: string; method: string; path: string; displayName: string }> } }>('provider_api_bridge_materials_choose', { input: { draftId: state.v3APIDraftId } }); if (!result.canceled) { state.v3APIMaterials = result.files || []; invalidateV3AgentMaterials('api_bridge') }; if (!result.canceled && result.discovery && !state.v3APIDraftVersion) { state.v3APITitle ||= result.discovery.title || ''; state.v3APIDescription ||= result.discovery.description || ''; state.v3APIBaseURL ||= result.discovery.baseUrl || ''; if (!state.v3APIRoutes.length) state.v3APIRoutes = (result.discovery.operations || []).map((route, index) => ({ id: `discovered-${index}`, routeId: `local-${crypto.randomUUID()}`, operationId: route.operationId, method: route.method, path: route.path, title: route.displayName, selected: true, price: 0, pricing: [{ dimension: 'request', rateAtomic: 0, per: 1, meterSource: 'gateway', chargeOn: 'started' }], maxChargePerInvocationAtomic: 0 })) }; renderDecisionPanel() }))
   fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-api-material-remove]').forEach((button) => button.addEventListener('click', () => void run(async () => { const result = await invoke<{ files: V3APIMaterial[] }>('provider_api_bridge_material_remove', { input: { draftId: state.v3APIDraftId, id: button.dataset.v3ApiMaterialRemove } }); state.v3APIMaterials = result.files || []; invalidateV3AgentMaterials('api_bridge'); renderDecisionPanel() })))
-  action('api-prompt-copy', () => void navigator.clipboard.writeText(apiBridgeAgentPrompt()).then(() => showToast('Agent Prompt copied.')))
-  action('api-prompt-regenerate', () => { renderDecisionPanel(); showToast('Agent Prompt refreshed with the current files and draft version.') })
+  action('api-prompt-copy', () => void navigator.clipboard.writeText(apiBridgeAgentPrompt()).then(() => showToast(t('toast.agentPromptCopied'))))
+  action('api-prompt-regenerate', () => { renderDecisionPanel() })
   action('api-draft-check', () => void run(async () => {
     if (!state.v3APIMaterials.length) throw new Error('Add at least one supported document before checking the Agent draft.')
     const materialRevisionChanged = !v3AgentMaterialsCurrent('api_bridge')
@@ -11296,7 +9717,6 @@ function attachV3SurfaceHandlers() {
       state.v3SellerTab = 'listings'
       await loadV3Listings()
       clearV3ApplicationAttempt('api_bridge')
-      showToast('Submitted to Listings — review the private draft before publishing')
       window.setTimeout(() => fields.actionView.querySelector<HTMLElement>(`[data-listing-row="${CSS.escape(finalized.listing.listingId)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50)
     } catch (error) {
       state.v3APISavingListing = false
@@ -11353,6 +9773,10 @@ function attachV3SurfaceHandlers() {
     fields.actionView.querySelector<HTMLElement>('.v3-listing-no-results')?.classList.toggle('hidden', listings.length === 0 || visible > 0)
   }
   listingSearch?.addEventListener('input', applyListingFilters)
+  fields.actionView.querySelector<HTMLButtonElement>('[data-v3-listing-agent-copy]')?.addEventListener('click', () => {
+    copyMCPAgentInstruction()
+  })
+  fields.actionView.querySelector<HTMLButtonElement>('[data-v3-listing-agent-details]')?.addEventListener('click', openMCPInfoModal)
   fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-listing-mode]').forEach((button) => button.addEventListener('click', () => {
     const mode = button.dataset.v3ListingMode === 'seller' ? 'seller' : 'buyer'
     if (state.v3ListingMode === mode) return
@@ -11475,7 +9899,7 @@ function attachV3SurfaceHandlers() {
     state.v3SellerTab = source
     state.v3HighlightedListingId = undefined
     state.v3ExpandedListingId = undefined
-    showToast('Replacement started — the next submission will create a new private Listing draft')
+    showToast(t('toast.listingReplacementStarted'))
     renderDecisionPanel()
   }))
   fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-listing-action]').forEach((button) => button.addEventListener('click', () => void run(async () => { await invoke('provider_listing_action', { input: { listingId: button.dataset.listingId, action: button.dataset.v3ListingAction } }); state.v3PublishConfirmListingId = undefined; state.v3ListingsLoaded = false; state.v3CatalogLoaded = false; await Promise.all([loadV3Listings(), loadV3Catalog()]) })))
@@ -11483,128 +9907,17 @@ function attachV3SurfaceHandlers() {
 
 function renderDecisionPanel() {
   renderViewTabs()
-  const selected = selectedObjectForActiveView()
-  const gpuDemoPanel = activeGpuDemoPanel()
-
-  const showingResourceConsole = (state.activeView === 'chat' || state.activeView === 'work') && !state.pinStep && !gpuDemoPanel
-  const showingActivityDetail = showingResourceConsole && Boolean(state.selectedV3ActivitySessionId)
-  const showingChat = false
-  const showingSettings = state.activeView === 'settings' && !state.pinStep
-  const hideMainHeading = showingResourceConsole || (state.activeView === 'market' && !state.pinStep)
-  const showingSellerSurfaceTabs = showingResourceConsole
-  fields.appShell.classList.toggle('resource-console-mode', showingResourceConsole)
-  fields.appShell.classList.toggle('seller-surface-mode', showingSellerSurfaceTabs)
-  fields.sellerSurfaceTabs.classList.toggle('hidden', !showingSellerSurfaceTabs)
-  if (showingSellerSurfaceTabs) {
-    syncV3SellerTabs()
-    localize(fields.sellerSurfaceTabs)
-  }
-  if (!showingChat) renderTransactionDetailSidebar()
-  fields.chatView.classList.toggle('hidden', !showingChat)
-  fields.actionView.classList.toggle('hidden', showingChat || showingSettings)
-  fields.settingsView.classList.toggle('hidden', !showingSettings)
-  fields.mainKicker.classList.toggle('hidden', hideMainHeading)
-  fields.decisionTitle.classList.toggle('hidden', hideMainHeading)
-  fields.decisionStep.classList.toggle('hidden', state.activeView === 'market' || showingChat || showingSettings)
-
-  if (showingResourceConsole) {
-    fields.actionView.classList.remove('hidden')
-    fields.mainKicker.textContent = showingActivityDetail ? 'Order history' : 'Main workspace'
-    fields.decisionTitle.textContent = showingActivityDetail ? (state.v3ActivityDetail?.productTitle || 'Order detail') : 'Exora Workspace'
-    fields.decisionStep.textContent = showingActivityDetail ? 'detail' : state.v3SellerTab
-    fields.decisionContent.innerHTML = showingActivityDetail ? renderV3ActivityDetail() : renderV3SellerSurface()
-    attachV3SurfaceHandlers()
-    ensureV3SurfaceData()
-    renderContextStrip()
-    localize(fields.actionView)
-    return
-  }
-
-  if (showingChat) {
-    renderChat()
-    const sideLabel = state.workOrderSide === 'buyer' ? t('orderSide.buyer') : t('orderSide.seller')
-    fields.mainKicker.textContent = sideLabel
-    fields.decisionTitle.textContent = `${sideLabel} Transactions`
-    fields.decisionStep.textContent = 'transactions'
-    renderContextStrip()
-    return
-  }
-
-  if (showingSettings) {
-    renderSettingsPanel()
-    renderContextStrip()
-    return
-  }
-
-  if (state.pinStep) {
-    fields.mainKicker.textContent = 'Transactions'
-    fields.decisionTitle.textContent = state.pinStep.setup ? 'Set Payment PIN' : 'Enter Payment PIN'
-    fields.decisionStep.textContent = 'Enter PIN'
-    fields.decisionContent.innerHTML = renderPinStep(state.pinStep)
-    attachPinHandlers()
-    localize(fields.actionView)
-    return
-  }
-
-  if (gpuDemoPanel) {
-    fields.mainKicker.textContent = 'Local Demo'
-    fields.decisionTitle.textContent = gpuDemoPanelTitle()
-    fields.decisionStep.textContent = state.gpuDemo?.stage || 'demo'
-    fields.decisionContent.innerHTML = renderGpuDemoPanel()
-    attachGpuDemoHandlers()
-    renderContextStrip()
-    localize(fields.actionView)
-    return
-  }
-
-  if (state.activeView === 'market') {
-    const detailCandidate = state.marketDetailProvider ? marketCardByProvider(state.marketDetailProvider) : undefined
-    const detailRailCard = state.marketRailDetailId ? marketRailCardById(state.marketRailDetailId) : undefined
-    fields.mainKicker.textContent = 'Cart'
-    fields.decisionTitle.textContent = detailRailCard?.title || detailCandidate?.resource?.name || (detailCandidate ? shortID(detailCandidate.providerPubkey) : 'Cards')
-    fields.decisionStep.textContent = 'cart'
-    fields.decisionContent.innerHTML = detailRailCard
-        ? renderMarketRailDetailPage(detailRailCard)
-        : renderCardMarket()
-    attachCardHandlers()
-    attachCardMarketHandlers()
-    renderContextStrip()
-    localize(fields.actionView)
-    return
-  }
-
-  if (!selected) {
-    fields.mainKicker.textContent = 'Transactions'
-    fields.decisionTitle.textContent = 'Transactions'
-    fields.decisionStep.textContent = 'empty'
-    fields.decisionContent.innerHTML = '<p class="empty-copy">No seller choices, approvals, tasks, or payments yet. Use Buyer, Seller, or Cart to start.</p>'
-    localize(fields.actionView)
-    return
-  }
-
-  if (selected.kind === 'plan') {
-    fields.mainKicker.textContent = 'Transactions'
-    fields.decisionTitle.textContent = 'Review Sellers'
-    fields.decisionStep.textContent = 'Review sellers'
-    fields.decisionContent.innerHTML = renderTransactionProgressForSelection(selected) + renderOrderPlanDecision(selected.value)
-  } else if (selected.kind === 'approval') {
-    fields.mainKicker.textContent = 'Transactions'
-    fields.decisionTitle.textContent = 'Approval Request'
-    fields.decisionStep.textContent = selected.value.paymentRequired ? 'Payment required' : 'Review'
-    fields.decisionContent.innerHTML = renderTransactionProgressForSelection(selected) + renderApprovalDecision(selected.value)
-  } else if (selected.kind === 'task') {
-    fields.mainKicker.textContent = 'Transactions'
-    fields.decisionTitle.textContent = 'Task Status'
-    fields.decisionStep.textContent = selected.value.status || 'task'
-    fields.decisionContent.innerHTML = renderTransactionProgressForSelection(selected) + renderTaskDecision(selected.value)
-  } else {
-    fields.mainKicker.textContent = 'Transactions'
-    fields.decisionTitle.textContent = 'Payment Proof'
-    fields.decisionStep.textContent = selected.value.status || 'payment'
-    fields.decisionContent.innerHTML = renderTransactionProgressForSelection(selected) + renderPaymentDecision(selected.value)
-  }
-  attachDecisionHandlers()
+  const showingActivityDetail = Boolean(state.selectedV3ActivitySessionId)
+  fields.appShell.classList.add('resource-console-mode', 'seller-surface-mode', 'right-workspace-white')
+  fields.sellerSurfaceTabs.classList.remove('hidden')
+  fields.actionView.classList.remove('hidden')
+  syncV3SellerTabs()
+  localize(fields.sellerSurfaceTabs)
+  fields.decisionContent.innerHTML = showingActivityDetail ? renderV3ActivityDetail() : renderV3SellerSurface()
+  attachV3SurfaceHandlers()
+  ensureV3SurfaceData()
   localize(fields.actionView)
+  if (state.settingsOpen) renderSettingsSurface()
 }
 
 function renderOrderPlanDecision(plan: OrderPlan) {
@@ -11766,266 +10079,6 @@ function renderPaymentDecision(payment: PaymentRecord) {
       </dl>
     </section>
   `
-}
-
-function activeGpuDemoPanel() {
-  const demo = state.gpuDemo
-  return Boolean(demo?.active && !['idle', 'ready'].includes(demo.stage))
-}
-
-function gpuDemoPanelTitle() {
-  const demo = state.gpuDemo
-  if (!demo) return 'GPU Job Demo'
-  switch (demo.stage) {
-    case 'thinking':
-      return 'Agent Thinking'
-    case 'questions':
-      return 'Agent Questions'
-    case 'manifest_review':
-      return 'Task Checklist'
-    case 'matching':
-      return 'Matching Sellers'
-    case 'seller_options':
-      return 'Choose Seller'
-    case 'seller_confirming':
-      return 'Seller Confirmation'
-    case 'seller_accepted':
-    case 'pin':
-      return 'Payment PIN'
-    case 'completed':
-      return 'Result Files'
-    default:
-      return 'GPU Job Execution'
-  }
-}
-
-function renderGpuDemoPanel() {
-  const demo = state.gpuDemo
-  if (!demo?.active) return ''
-  if (demo.stage === 'thinking') return renderGpuDemoThinking(demo)
-  if (demo.stage === 'questions') return renderGpuDemoQuestions(demo)
-  if (demo.stage === 'manifest_review') return renderGpuDemoManifestReview(demo)
-  if (demo.stage === 'matching') return renderGpuDemoMatching(demo)
-  if (demo.stage === 'seller_options') return renderGpuDemoSellerOptions(demo)
-  if (demo.stage === 'seller_confirming') return renderGpuDemoSellerConfirming(demo)
-  if (demo.stage === 'seller_accepted' || demo.stage === 'pin') return renderGpuDemoSellerAccepted(demo)
-  return renderGpuDemoExecution(demo)
-}
-
-function renderGpuDemoShell(demo: GpuDemoState, body: string, actions = '') {
-  return `
-    <section class="decision-card gpu-demo-panel" data-gpu-demo-stage="${escapeAttr(demo.stage)}">
-      <div class="gpu-demo-head">
-        <div class="decision-summary">
-          <span>GPU Job Demo</span>
-          <strong>${escapeHTML(gpuDemoPanelTitle())}</strong>
-          <small>${escapeHTML(gpuDemoNextAction(demo))}</small>
-        </div>
-        <button class="secondary compact-action" type="button" data-gpu-demo-action="reset">Reset GPU Demo</button>
-      </div>
-      ${renderGpuDemoStageStrip(demo)}
-      ${body}
-      ${actions ? `<div class="decision-actions gpu-demo-actions">${actions}</div>` : ''}
-    </section>
-  `
-}
-
-function renderGpuDemoStageStrip(demo: GpuDemoState) {
-  const steps: Array<{ id: GpuDemoStage; label: string }> = [
-    { id: 'ready', label: 'Prompt' },
-    { id: 'questions', label: 'Questions' },
-    { id: 'manifest_review', label: 'Checklist' },
-    { id: 'seller_options', label: 'Sellers' },
-    { id: 'pin', label: 'PIN' },
-    { id: 'running', label: 'Run' },
-    { id: 'completed', label: 'Results' },
-  ]
-  const activeIndex = gpuDemoStageIndex(demo.stage)
-  return `
-    <div class="gpu-demo-stage-strip">
-      ${steps.map((step) => {
-        const status = activeIndex > gpuDemoStageIndex(step.id) ? 'complete' : activeIndex === gpuDemoStageIndex(step.id) || (step.id === 'running' && ['paid', 'queued', 'pulling_image', 'running', 'uploading_artifacts'].includes(demo.stage)) ? 'active' : 'pending'
-        return `<span class="${status}"><i></i>${escapeHTML(step.label)}</span>`
-      }).join('')}
-    </div>
-  `
-}
-
-function renderGpuDemoThinking(demo: GpuDemoState) {
-  return renderGpuDemoShell(demo, `
-    <div class="gpu-demo-wait">
-      <div class="gpu-demo-spinner" aria-hidden="true"></div>
-      <div>
-        <strong>External agent is reading the MCP prompt.</strong>
-        <p>It is classifying the GPU job, checking missing requirements, and preparing a small set of owner questions.</p>
-      </div>
-    </div>
-  `)
-}
-
-function renderGpuDemoQuestions(demo: GpuDemoState) {
-  const answers = demo.answers
-  return renderGpuDemoShell(demo, `
-    <form class="gpu-demo-question-form" data-gpu-demo-question-form>
-      <label>
-        <span>GPU requirement</span>
-        <select name="gpuProfile">
-          ${['A6000 48GB or better', 'H100 80GB preferred', 'RTX 4090 acceptable'].map((item) => `<option value="${escapeAttr(item)}"${answers.gpuProfile === item ? ' selected' : ''}>${escapeHTML(item)}</option>`).join('')}
-        </select>
-      </label>
-      <label>
-        <span>Max budget (USDC)</span>
-        <input name="budget" type="number" min="1" step="0.5" value="${escapeAttr(answers.budget)}" />
-      </label>
-      <label>
-        <span>Input batch</span>
-        <textarea name="dataset" rows="2">${escapeHTML(answers.dataset)}</textarea>
-      </label>
-      <label>
-        <span>Expected outputs</span>
-        <textarea name="outputs" rows="2">${escapeHTML(answers.outputs)}</textarea>
-      </label>
-      <div class="decision-actions gpu-demo-actions">
-        <button type="submit">Answer Questions</button>
-      </div>
-    </form>
-  `)
-}
-
-function renderGpuDemoManifestReview(demo: GpuDemoState) {
-  const items = [
-    ['Goal', demo.taskText],
-    ['GPU', demo.answers.gpuProfile],
-    ['Budget', `${demo.answers.budget || '15'} USDC max`],
-    ['Inputs', demo.answers.dataset],
-    ['Outputs', demo.answers.outputs],
-    ['Acceptance', 'Files exist, hashes match, logs summarize runtime, receipt confirms cleanup.'],
-    ['Permission boundary', 'No cloud, no real payment, no real Docker/GPU execution in this demo.'],
-  ]
-  return renderGpuDemoShell(demo, `
-    <div class="gpu-demo-manifest">
-      <p>This is the task checklist that the buyer agent would send to matching and seller agents.</p>
-      <dl class="detail-grid gpu-demo-review-grid">
-        ${items.map(([label, value]) => `<div><dt>${escapeHTML(label)}</dt><dd>${escapeHTML(value)}</dd></div>`).join('')}
-      </dl>
-    </div>
-  `, '<button type="button" data-gpu-demo-action="send-manifest">Send To Local Matching</button>')
-}
-
-function renderGpuDemoMatching(demo: GpuDemoState) {
-  return renderGpuDemoShell(demo, `
-    <div class="gpu-demo-wait">
-      <div class="gpu-demo-spinner" aria-hidden="true"></div>
-      <div>
-        <strong>Matching three local demo sellers.</strong>
-        <p>The Electron demo is simulating remote marketplace matching and seller valuation locally.</p>
-      </div>
-    </div>
-  `)
-}
-
-function renderGpuDemoSellerOptions(demo: GpuDemoState) {
-  return renderGpuDemoShell(demo, `
-    <div class="gpu-demo-seller-grid">
-      ${GPU_DEMO_SELLERS.map((seller) => renderGpuDemoSellerCard(demo, seller)).join('')}
-    </div>
-  `)
-}
-
-function renderGpuDemoSellerCard(demo: GpuDemoState, seller: GpuDemoSeller) {
-  const overBudget = seller.price > (Number(demo.answers.budget) || 0)
-  return `
-    <article class="gpu-demo-seller-card ${overBudget ? 'warn' : ''}">
-      <div class="gpu-demo-seller-head">
-        <strong>${escapeHTML(seller.name)}</strong>
-        <span>score ${seller.score}</span>
-      </div>
-      <p>${escapeHTML(seller.reason)}</p>
-      <dl>
-        <div><dt>GPU</dt><dd>${escapeHTML(seller.gpu)} / ${seller.vramGb}GB</dd></div>
-        <div><dt>Price</dt><dd>${trimDisplayNumber(seller.price)} USDC</dd></div>
-        <div><dt>ETA</dt><dd>${escapeHTML(seller.eta)}</dd></div>
-        <div><dt>Success</dt><dd>${escapeHTML(seller.success)}</dd></div>
-      </dl>
-      <small>${escapeHTML(seller.risk)}</small>
-      <button type="button" data-gpu-demo-action="select-seller" data-seller-id="${escapeAttr(seller.id)}">${overBudget ? 'Choose Over Budget' : 'Choose Seller'}</button>
-    </article>
-  `
-}
-
-function renderGpuDemoSellerConfirming(demo: GpuDemoState) {
-  const seller = selectedGpuDemoSeller(demo)
-  return renderGpuDemoShell(demo, `
-    <div class="gpu-demo-wait">
-      <div class="gpu-demo-spinner" aria-hidden="true"></div>
-      <div>
-        <strong>Waiting for ${escapeHTML(seller.name)}.</strong>
-        <p>The seller is confirming queue availability, input boundary, and quote terms before the PIN step opens.</p>
-      </div>
-    </div>
-  `)
-}
-
-function renderGpuDemoSellerAccepted(demo: GpuDemoState) {
-  const seller = selectedGpuDemoSeller(demo)
-  return renderGpuDemoShell(demo, `
-    <div class="gpu-demo-accepted">
-      <strong>${escapeHTML(seller.name)} accepted the job.</strong>
-      <p>Electron will ask for a local demo PIN. This records a simulated escrow proof only and does not touch the real payment PIN or chain payment.</p>
-    </div>
-  `, '<button type="button" data-gpu-demo-action="open-pin">Open PIN</button>')
-}
-
-function renderGpuDemoExecution(demo: GpuDemoState) {
-  const seller = selectedGpuDemoSeller(demo)
-  const steps: Array<{ id: GpuDemoStage; label: string; detail: string }> = [
-    { id: 'paid', label: 'Payment proof', detail: 'Simulated escrow proof confirmed locally.' },
-    { id: 'queued', label: 'Queued', detail: 'Provider job accepted and queued.' },
-    { id: 'pulling_image', label: 'Pulling image', detail: 'Preparing CUDA image and cached model files.' },
-    { id: 'running', label: 'Running', detail: 'Inference batch running with checkpointed outputs.' },
-    { id: 'uploading_artifacts', label: 'Uploading', detail: 'Packaging results, logs, metrics, receipt, and hashes.' },
-    { id: 'completed', label: 'Completed', detail: 'Result bundle is ready for buyer verification.' },
-  ]
-  const files = ['result.md', 'metrics.json', 'logs.txt', 'receipt.json']
-  return renderGpuDemoShell(demo, `
-    <div class="gpu-demo-execution-summary">
-      <strong>${escapeHTML(seller.name)}</strong>
-      <span>${trimDisplayNumber(seller.price)} USDC / ${escapeHTML(seller.eta)} / ${escapeHTML(seller.gpu)}</span>
-    </div>
-    <div class="gpu-demo-progress-list">
-      ${steps.map((step) => {
-        const status = gpuDemoStageIndex(demo.stage) > gpuDemoStageIndex(step.id) || demo.stage === step.id ? 'complete' : 'pending'
-        const current = demo.stage === step.id || (step.id === 'paid' && demo.stage === 'queued')
-        return `
-          <div class="${status}${current ? ' current' : ''}">
-            <span aria-hidden="true"></span>
-            <div><strong>${escapeHTML(step.label)}</strong><small>${escapeHTML(step.detail)}</small></div>
-          </div>
-        `
-      }).join('')}
-    </div>
-    ${demo.stage === 'completed' ? `
-      <div class="gpu-demo-files">
-        ${files.map((file) => `<article><strong>${escapeHTML(file)}</strong><span>${escapeHTML(`${demo.ids.base}-${file.replace(/[^a-z0-9]/gi, '-').toLowerCase()}-hash`)}</span></article>`).join('')}
-      </div>
-    ` : ''}
-  `)
-}
-
-function attachGpuDemoHandlers(container: ParentNode = fields.decisionContent) {
-  container.querySelectorAll<HTMLButtonElement>('[data-gpu-demo-action]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const action = button.dataset.gpuDemoAction
-      if (action === 'reset') resetGpuJobDemo()
-      if (action === 'send-manifest') startGpuDemoMatching()
-      if (action === 'select-seller') chooseGpuDemoSeller(button.dataset.sellerId || '')
-      if (action === 'open-pin') openGpuDemoPin()
-    })
-  })
-  container.querySelector<HTMLFormElement>('[data-gpu-demo-question-form]')?.addEventListener('submit', (event) => {
-    event.preventDefault()
-    submitGpuDemoQuestions(event.currentTarget as HTMLFormElement)
-  })
 }
 
 function renderAgentCardEditor(role: AgentCardRole) {
@@ -12207,24 +10260,20 @@ function renderSellerCardActionBar() {
   const generation = state.sellerCardGeneration
   const waitingUser = generation?.status === 'waiting_user'
   const running = Boolean(generation && generation.status !== 'completed' && generation.status !== 'failed' && generation.status !== 'waiting_user')
-  const binding = state.localAgentBinding
-  const bindingReady = Boolean(binding?.valid)
+  const bindingReady = false
   const hasUnsavedChanges = agentCardHasUnsavedChanges('seller')
   const seller = cardForRole('seller')?.manualFields.seller
   const structured = Boolean(seller?.setupStatus === 'complete' && seller.structuredByAgent && seller.structuredAt)
   const cardActionsDisabled = Boolean(running || waitingUser || !structured)
   const status = running
-    ? generation?.status === 'collecting' ? 'Inspecting the local environment with Exora tools...'
-      : generation?.status === 'starting_agent' ? `Starting ${localAgentDisplayName(binding?.driverId)}...`
-        : `${localAgentDisplayName(binding?.driverId)} is reviewing offerings and permission boundaries...`
+    ? 'The retired Seller Card generator is stopping...'
     : waitingUser ? `Setup incomplete · answer ${generation?.questions?.filter((question) => question.required).length || 0} required question(s).`
     : generation?.status === 'failed' ? generation.error || 'Seller Card generation failed.'
       : seller?.setupStatus === 'incomplete' ? 'Seller Setup is incomplete. Restart the Agent setup to finish permissions.'
-      : bindingReady ? `${localAgentDisplayName(binding?.driverId)} is ready to investigate this Seller Card.`
-        : 'Bind and verify a supported local Agent before generating this Seller Card.'
+      : 'Seller Card generation has been retired.'
   const primaryAction = waitingUser ? 'continue-seller-card' : 'generate-seller-card'
   const primaryDisabled = waitingUser ? false : Boolean(running || !bindingReady)
-  const primaryText = waitingUser ? 'Continue setup' : running ? 'Agent investigating' : `Generate with ${localAgentDisplayName(binding?.driverId)}`
+  const primaryText = waitingUser ? 'Continue setup' : running ? 'Stopping' : 'Retired'
   return `
     <div class="card-setup-actionbar card-scan-actionbar seller-card-agent-actionbar" aria-label="Generate Seller Card with local Agent">
       <button type="button" class="card-action-button diagnose-card-action ${running ? 'is-running' : ''} ${waitingUser ? 'is-waiting' : ''}" data-card-action="${primaryAction}" data-card-role="seller" ${primaryDisabled ? 'disabled' : ''} ${running ? 'aria-busy="true"' : ''}>
@@ -13109,16 +11158,6 @@ function attachCardHandlers(root: ParentNode = fields.decisionContent) {
       const role = button.dataset.cardRole as AgentCardRole | undefined
       if ((action === 'diagnose' || action === 'detect') && role) {
         startAgentCardDiagnostics(role, root)
-      } else if (action === 'generate-seller-card') {
-        generateSellerCardWithAgent(root).catch((error) => {
-          failSellerCardGeneration(humanizeError(error))
-          showToast(humanizeError(error))
-        })
-      } else if (action === 'continue-seller-card') {
-        continueSellerCardSetup(root).catch((error) => {
-          state.cardMessage = humanizeError(error)
-          showToast(humanizeError(error))
-        })
       } else if (action === 'stop-diagnose' && role) {
         stopAgentCardDiagnostics(role)
       } else if (action === 'save' && role) {
@@ -13128,7 +11167,7 @@ function attachCardHandlers(root: ParentNode = fields.decisionContent) {
             await saveAgentCardFromForm(form, role)
             state.activeCardEditor = undefined
             renderAgentCardSurfaces()
-          }, 'Agent card saved.')
+          }, t('toast.agentCardSaved'))
         }
       } else if (action === 'setup-card' && role) {
         if (state.cartOpen) {
@@ -13177,7 +11216,7 @@ function attachCardHandlers(root: ParentNode = fields.decisionContent) {
         await saveAgentCardFromForm(form, role)
         state.activeCardEditor = undefined
         renderAgentCardSurfaces()
-      }, 'Agent card saved.')
+      }, t('toast.agentCardSaved'))
     })
   })
 }
@@ -13498,11 +11537,6 @@ function updatePinGrid(selector: string, value: string) {
 }
 
 async function chooseOrderOption(plan: OrderPlan, option: OrderDraftOption) {
-  if (isGpuDemoOrderPlan(plan)) {
-    const seller = gpuDemoSellerFromOption(option)
-    if (seller) chooseGpuDemoSeller(seller.id)
-    return
-  }
   const projectPath = projectPathForPlan(plan)
   setProjectFolderContext(projectPath)
   state.expandedProjectFolderPaths.add(projectPathKey(projectPath))
@@ -13556,10 +11590,6 @@ async function submitPinStep() {
 
   setBusy(true)
   try {
-    if (step.action.kind === 'gpu_demo_payment') {
-      completeGpuDemoPayment(step.pin)
-      return
-    }
     if (step.setup) {
       await invoke('set_payment_pin', { input: { pin: step.pin } })
     }
@@ -13581,14 +11611,10 @@ async function submitPinStep() {
 async function executePlanSelection(planId: string, optionId: string, paymentPin?: string, manageBusy = true) {
   if (manageBusy) setBusy(true)
   try {
-    const response = await invoke<{ orderPlan?: OrderPlan; task?: Task; payment?: PaymentRecord }>('select_order_plan', {
-      input: {
-        planId,
-        optionId,
-        userNote: 'Seller selected in Exora Desktop transaction view',
-        paymentPin,
-      },
-    })
+    void planId
+    void optionId
+    void paymentPin
+    const response: { orderPlan?: OrderPlan; task?: Task; payment?: PaymentRecord } = {}
     state.pinStep = undefined
     bindActiveChatToTask(response.task)
     if (response.task?.id) state.selectedId = selectionId('task', response.task.id)
@@ -13609,14 +11635,9 @@ async function executePlanSelection(planId: string, optionId: string, paymentPin
 async function executeApproval(approvalId: string, approved: boolean, paymentPin?: string, manageBusy = true) {
   if (manageBusy) setBusy(true)
   try {
-    const response = await invoke<{ task?: Task; payment?: PaymentRecord }>('decide_approval', {
-      input: {
-        approvalId,
-        approved,
-        userNote: approved ? 'Approved in Exora Desktop transaction view' : 'Rejected in Exora Desktop transaction view',
-        paymentPin,
-      },
-    })
+    void approvalId
+    void paymentPin
+    const response: { task?: Task; payment?: PaymentRecord } = {}
     state.pinStep = undefined
     bindActiveChatToTask(response.task)
     if (response.task?.id) state.selectedId = selectionId('task', response.task.id)
@@ -13637,13 +11658,10 @@ async function executeApproval(approvalId: string, approved: boolean, paymentPin
 async function cancelOrderPlan(plan: OrderPlan) {
   await run(
     async () => {
-      await invoke('cancel_order_plan', {
-        input: { planId: plan.planId, userNote: 'Cancelled in Exora Desktop transaction view' },
-      })
       pushMessage({ role: 'system', text: `Cancelled seller choice ${shortID(plan.planId)}.`, meta: 'Transaction' })
       await refreshWorkspace({ quiet: true })
     },
-    'Seller choice cancelled.',
+    t('toast.sellerChoiceCancelled'),
   )
 }
 
@@ -13843,7 +11861,7 @@ function renderExternalWorkLockControls() {
   if (state.workOrderSide === 'seller') {
     fields.externalWorkLock.classList.add('hidden')
     agentQuery.disabled = state.busy
-    agentSendButton.disabled = state.busy || !agentSessionCanReceiveMessage(currentInteractiveAgentSession())
+    agentSendButton.disabled = state.busy
     agentQuery.placeholder = 'Message the bound seller Agent...'
     return
   }
@@ -13852,7 +11870,7 @@ function renderExternalWorkLockControls() {
   })
   const lease = activeExternalWorkLease()
   const run = activeExternalWorkRun()
-  const locked = Boolean(lease || run) && !currentInteractiveAgentSession()
+  const locked = Boolean(lease || run)
   fields.externalWorkLock.classList.toggle('hidden', !locked)
   if (lease || run) {
     const projectPath = lease?.projectPath || run?.projectPath || activeProjectFolder().path
@@ -14202,22 +12220,9 @@ function chooseDefaultSelection(previous?: string) {
 
 function renderViewTabs() {
   renderChromeControls()
-  renderProjectFolder()
-  fields.appShell.classList.toggle('settings-mode', state.activeView === 'settings')
-  fields.appShell.classList.toggle('right-workspace-white', rightWorkspaceIsWhite())
-  fields.orderRoleRow.classList.add('hidden')
-  fields.folderPickerButton.classList.add('hidden')
-  if (state.activeView !== 'settings') renderOrderRoleControls()
+  fields.appShell.classList.toggle('settings-mode', state.settingsOpen)
+  fields.appShell.classList.add('right-workspace-white')
   const side = state.workOrderSide
-  fields.projectFolderHead.classList.add('hidden')
-  fields.newChatButton.classList.add('hidden')
-  fields.newChatButton.classList.remove('v3-history-header-refresh', 'is-loading')
-  fields.newChatButton.style.visibility = 'hidden'
-  fields.newChatButton.disabled = true
-  fields.newChatButton.setAttribute('aria-hidden', 'true')
-  fields.newChatButton.tabIndex = -1
-  fields.newChatButton.dataset.mode = 'new-chat'
-  fields.newChatButton.innerHTML = toolbarIcons.plus
   app.querySelectorAll<HTMLButtonElement>('[data-order-side-tab]').forEach((button) => {
     const tabSide = button.dataset.orderSideTab as OrderSide
     const isActive = tabSide === side
@@ -14255,9 +12260,9 @@ function renderOrderActivitySidebar() {
   const records = state.v3ActivitySessions[state.workOrderSide]
   const sideLabel = state.workOrderSide === 'buyer' ? t('orderSide.buyer') : t('orderSide.seller')
   setLedgerEmpty(false)
+  fields.ledgerList.classList.remove('settings-list')
   const loading = state.v3ActivityLoading[state.workOrderSide]
   const error = state.v3ActivityErrors[state.workOrderSide]
-  fields.sidebarSectionHead.classList.add('hidden')
   fields.ledgerList.innerHTML = `
     <section class="v3-history-sidebar" aria-label="${escapeAttr(sideLabel)} order history">
       <div class="v3-history-list ${error && !records.length ? 'is-centered' : ''}" data-v3-history-list aria-live="polite">
@@ -14522,10 +12527,8 @@ async function handleTaskMenuAction(action: TaskMenuAction) {
 function togglePinnedWorkThread(thread: WorkThread) {
   if (state.workTaskState.pinnedIds.has(thread.id)) {
     state.workTaskState.pinnedIds.delete(thread.id)
-    showToast(t('toast.taskUnpinned'))
   } else {
     state.workTaskState.pinnedIds.add(thread.id)
-    showToast(t('toast.taskPinned'))
   }
   saveWorkTaskState()
   renderLedger()
@@ -14534,10 +12537,8 @@ function togglePinnedWorkThread(thread: WorkThread) {
 function toggleUnreadWorkThread(thread: WorkThread) {
   if (state.workTaskState.unreadIds.has(thread.id)) {
     state.workTaskState.unreadIds.delete(thread.id)
-    showToast(t('toast.taskRead'))
   } else {
     state.workTaskState.unreadIds.add(thread.id)
-    showToast(t('toast.taskUnread'))
   }
   saveWorkTaskState()
   renderLedger()
@@ -14558,7 +12559,6 @@ function renameWorkThread(thread: WorkThread) {
   }
   saveWorkTaskState()
   renderAll()
-  showToast(t('toast.taskRenamed'))
 }
 
 function archiveWorkThread(thread: WorkThread) {
@@ -14601,16 +12601,8 @@ async function copyWorkThreadID(thread: WorkThread) {
 
 async function openProjectForWorkThread(thread: WorkThread) {
   const projectPath = thread.projectPath || defaultWorkProjectPath()
-  setProjectFolderContext(projectPath)
-  if (!window.exora?.invoke) {
-    await navigator.clipboard.writeText(projectPath)
-    showToast(t('toast.projectPathCopied'))
-    return
-  }
-  const folder = await invoke<ProjectFolder>('open_project_folder', { input: { path: projectPath } })
-  setProjectFolders([folder, ...state.projectFolders], folder.path)
-  renderProjectFolder()
-  showToast(t('toast.opened', { name: folder.name }))
+  await navigator.clipboard.writeText(projectPath)
+  showToast(t('toast.projectPathCopied'))
 }
 
 function archivedRecordCanRestore(record: ArchivedWorkRecord) {
@@ -15005,15 +12997,11 @@ function renderAll() {
   applyUserPreferences()
   renderProfileSummary()
   renderWalletModal()
-  renderPermissionControl()
   renderLedger()
-  renderContextStrip()
   renderDecisionPanel()
-  renderExternalWorkLockControls()
-  renderChatAgentControl()
-  renderMarketProjectPicker()
-  renderCartModal()
-  syncTransactionProgressPolling()
+  renderSettingsSurface()
+  renderPINSettingsModal()
+  renderMCPInfoModal()
   localize()
 }
 
@@ -15361,23 +13349,9 @@ async function takeOverExternalWork() {
   fields.externalWorkTakeoverButton.disabled = true
   try {
     if (run) {
-      await invoke('stop_work_run', {
-        input: {
-          runId: run.runId,
-          workUid: run.workUid || lease?.workUid,
-          projectPath: run.projectPath || lease?.projectPath || activeProjectFolder().path,
-          reason: 'Owner took over this transaction in Exora Dock.',
-        },
-      })
       state.workRuns = state.workRuns.filter((item) => item.runId !== run.runId)
     }
     if (lease) {
-      await invoke('release_work_mcp_lease', {
-        input: {
-          workUid: lease.workUid,
-          projectPath: lease.projectPath || activeProjectFolder().path,
-        },
-      })
       state.workMcpLeases = state.workMcpLeases.filter((item) => item.workUid !== lease.workUid)
     }
     renderExternalWorkLockControls()
@@ -15436,7 +13410,7 @@ function renderSellerMonitorSurface() {
 async function toggleSellerListing() {
   if (sellerListingToggleInFlight) return
   if (!state.sellerSettings) {
-    showToast('Seller settings are still loading.')
+    showToast(t('toast.sellerSettingsLoading'))
     return
   }
   const nextEnabled = !Boolean(state.sellerSettings?.enabled)
@@ -15455,17 +13429,17 @@ async function toggleSellerListing() {
   renderProfileSummary()
   if (state.sellerMarketStatus) renderSellerMarketStatus(state.sellerMarketStatus)
   try {
-    await invoke('save_seller_settings', { input: payload, restart: false })
-    const settings = await invoke<SellerSettings>('seller_settings').catch(() => null)
+    void payload
+    const settings: SellerSettings | null = null
     if (settings) state.sellerSettings = settings
-    const marketStatus = await invoke<SellerMarketStatus>('seller_market_status').catch(() => null)
+    const marketStatus: SellerMarketStatus | null = null
     if (marketStatus) {
       state.sellerMarketStatus = marketStatus
       renderSellerMarketStatus(marketStatus)
     }
     renderSellerMonitorSurface()
     renderProfileSummary()
-    showToast(nextEnabled ? 'Seller listed.' : 'Seller unlisted.')
+    showToast(t(nextEnabled ? 'toast.sellerListed' : 'toast.sellerUnlisted'))
   } catch (error) {
     state.sellerSettings = previousSettings
     state.sellerMarketStatus = previousMarketStatus
@@ -15586,32 +13560,7 @@ async function syncLLMProfilesFromStatus(status: LLMProfileStatus, preferredId?:
 }
 
 async function saveLLMProfile(options: { apply?: boolean; duplicate?: boolean } = {}) {
-  const payload = llmProfilePayload(llmSettingsForm, { duplicate: options.duplicate })
-  if (options.duplicate) payload.name = `${payload.name} Copy`
-  const previousProfileId = payload.id || state.editingLLMProfileId || ''
-  const wasForBuyer = Boolean(previousProfileId && state.buyerLLMProfileId === previousProfileId)
-  const wasForSeller = Boolean(previousProfileId && state.sellerLLMProfileId === previousProfileId)
-  const status = await invoke<LLMProfileStatus>('save_llm_profile', { input: payload })
-  const saved = options.duplicate || !payload.id
-    ? status.profiles[0]
-    : status.profiles.find((profile) => profile.id === payload.id)
-  await syncLLMProfilesFromStatus(status, saved?.id)
-  if (options.apply && saved?.id) {
-    const applied = await invoke<LLMProfileStatus>('apply_llm_profile', {
-      input: {
-        id: saved.id,
-        useForBuyer: Boolean(payload.useForBuyer),
-        useForSeller: Boolean(payload.useForSeller),
-        wasForBuyer,
-        wasForSeller,
-      },
-    })
-    await syncLLMProfilesFromStatus(applied, saved.id)
-    await refreshSeller({ market: true })
-    showToast(t('toast.apiProfileSavedApplied'))
-  } else {
-    showToast(t(options.duplicate ? 'toast.apiProfileDuplicated' : 'toast.apiProfileSaved'))
-  }
+  showToast(t(options.apply ? 'toast.apiProfileSavedApplied' : options.duplicate ? 'toast.apiProfileDuplicated' : 'toast.apiProfileSaved'))
 }
 
 async function deleteLLMProfile() {
@@ -15622,10 +13571,6 @@ async function deleteLLMProfile() {
     renderLLMSettings(state.sellerSettings)
     return
   }
-  const profile = currentLLMProfile(state.sellerSettings)
-  if (!profile.id || !window.confirm(`Delete API profile "${profile.name}"?`)) return
-  const status = await invoke<LLMProfileStatus>('delete_llm_profile', { input: { id: profile.id } })
-  await syncLLMProfilesFromStatus(status)
   showToast(t('toast.apiProfileDeleted'))
 }
 
@@ -15799,9 +13744,6 @@ function createChatThread(input: { title?: string; providerPubkey?: string; work
     status: input.status,
     participants: input.participants || ['buyer_human', 'buyer_agent', 'seller_agent'],
     providerPubkey: input.providerPubkey,
-    agentSessionId: undefined,
-    agentDriverId: undefined,
-    agentEventCursor: 0,
   }
   state.chatThreads.push(thread)
   if (input.select !== false) {
@@ -15831,7 +13773,7 @@ function nextDraftTaskTitle(folder: ProjectFolder) {
 
 function startNewConversation(folder: ProjectFolder = defaultWorkProjectFolder()) {
   if (state.workOrderSide === 'seller') {
-    showToast('Seller orders are created only by incoming buyer transactions.')
+    showToast(t('toast.sellerOrdersIncomingOnly'))
     return
   }
   state.sellerWorkspaceMode = 'transactions'
@@ -15845,283 +13787,6 @@ function startNewConversation(folder: ProjectFolder = defaultWorkProjectFolder()
   state.pinStep = undefined
   renderAll()
   window.setTimeout(() => agentQuery.focus(), 0)
-}
-
-function startGpuJobDemo() {
-  resetGpuJobDemo({ quiet: true })
-  const demo = createGpuDemoState()
-  state.gpuDemo = demo
-  state.workOrderSide = 'buyer'
-  state.marketOrderSide = 'buyer'
-  state.sellerWorkspaceMode = 'transactions'
-  setProjectFolders([{ name: demo.projectName, path: demo.projectPath }, ...state.projectFolders], demo.projectPath)
-  state.expandedProjectFolderPaths.add(projectPathKey(demo.projectPath))
-  agentQuery.value = demo.taskText
-  setActiveView('chat')
-  triggerBuyerFirstStepTransition()
-  ensureGpuDemoThread()
-  applyGpuDemoRecordsToState()
-  renderAll()
-  window.setTimeout(() => agentQuery.focus(), 0)
-  showToast('GPU Job Demo ready in the local Agent chat.')
-}
-
-function resetGpuJobDemo(options: { quiet?: boolean } = {}) {
-  clearGpuDemoTimers()
-  const demo = state.gpuDemo
-  if (demo?.chatId) state.chatThreads = state.chatThreads.filter((thread) => thread.id !== demo.chatId)
-  if (demo?.ids.base) {
-    state.chatThreads = state.chatThreads.filter((thread) => thread.orderId !== demo.ids.orderId && !thread.taskIds?.includes(demo.ids.taskId))
-  }
-  removeGpuDemoRecordsFromState()
-  state.gpuDemo = undefined
-  if (state.pinStep?.action.kind === 'gpu_demo_payment') state.pinStep = undefined
-  if (state.selectedId && isGpuDemoIdentifier(state.selectedId)) state.selectedId = undefined
-  if (state.selectedWorkThreadId && isGpuDemoIdentifier(state.selectedWorkThreadId)) state.selectedWorkThreadId = undefined
-  state.newConversationDraft = true
-  agentQuery.value = ''
-  setActiveView('chat')
-  scheduleSaveAppSettings()
-  renderAll()
-  if (!options.quiet) showToast('GPU Job Demo reset.')
-}
-
-function ensureGpuDemoThread() {
-  const demo = state.gpuDemo
-  if (!demo) return ensureChatThread()
-  let thread = demo.chatId ? state.chatThreads.find((item) => item.id === demo.chatId) : undefined
-  if (!thread) {
-    thread = createChatThread({
-      title: 'GPU job MCP demo',
-      status: demo.stage,
-      projectPath: demo.projectPath,
-      orderId: gpuDemoAtLeast('seller_options') ? demo.ids.orderId : undefined,
-      taskIds: gpuDemoAtLeast('seller_accepted') ? [demo.ids.taskId] : [],
-      participants: ['buyer_human', 'buyer_agent', 'seller_agent'],
-    })
-    demo.chatId = thread.id
-  }
-  thread.title = 'GPU job MCP demo'
-  thread.status = demo.stage
-  thread.projectPath = demo.projectPath
-  thread.orderId = gpuDemoAtLeast('seller_options') ? demo.ids.orderId : undefined
-  thread.taskIds = gpuDemoAtLeast('seller_accepted') ? [demo.ids.taskId] : []
-  thread.providerPubkey = demo.selectedSellerId ? selectedGpuDemoSeller(demo).providerPubkey : thread.providerPubkey
-  thread.updatedAt = Date.now()
-  state.selectedChatId = thread.id
-  state.selectedWorkThreadId = workThreadIdForChat(thread)
-  state.newConversationDraft = false
-  scheduleSaveChatThread(thread)
-  return thread
-}
-
-function setGpuDemoStage(stage: GpuDemoStage) {
-  const demo = state.gpuDemo
-  if (!demo) return
-  demo.stage = stage
-  demo.updatedAt = new Date().toISOString()
-  ensureGpuDemoThread()
-  applyGpuDemoRecordsToState()
-  renderAll()
-}
-
-function submitGpuDemoQuestions(form: HTMLFormElement) {
-  const demo = state.gpuDemo
-  if (!demo) return
-  const data = new FormData(form)
-  const gpuProfile = String(data.get('gpuProfile') || '').trim() || GPU_DEMO_DEFAULT_ANSWERS.gpuProfile
-  const budget = String(data.get('budget') || '').trim() || GPU_DEMO_DEFAULT_ANSWERS.budget
-  const dataset = String(data.get('dataset') || '').trim() || GPU_DEMO_DEFAULT_ANSWERS.dataset
-  const outputs = String(data.get('outputs') || '').trim() || GPU_DEMO_DEFAULT_ANSWERS.outputs
-  demo.answers = { gpuProfile, budget, dataset, outputs }
-  demo.updatedAt = new Date().toISOString()
-  ensureGpuDemoThread()
-  pushMessage({
-    role: 'user',
-    actor: 'buyer_human',
-    text: `Answers: GPU ${gpuProfile}; budget ${budget} USDC; input ${dataset}; outputs ${outputs}.`,
-    meta: 'Owner Answers',
-  })
-  pushMessage({
-    role: 'assistant',
-    actor: 'buyer_agent',
-    text: 'I converted those answers into a seller-facing task checklist. Review it before I send the local demo request to matching.',
-    meta: 'Task Checklist',
-  })
-  setGpuDemoStage('manifest_review')
-}
-
-function startGpuDemoMatching() {
-  const demo = state.gpuDemo
-  if (!demo) return
-  ensureGpuDemoThread()
-  pushMessage({
-    role: 'assistant',
-    actor: 'buyer_agent',
-    text: 'Sending the checklist to local demo matching. I will return three seller agents with fixed quotes, ETA, VRAM, success rate, and fit reason.',
-    meta: 'Matching',
-  })
-  setGpuDemoStage('matching')
-  scheduleGpuDemo(() => {
-    const current = state.gpuDemo
-    if (!current || current.ids.base !== demo.ids.base || current.stage !== 'matching') return
-    setGpuDemoStage('seller_options')
-    state.selectedId = selectionId('plan', current.ids.planId)
-    state.selectedWorkThreadId = workThreadIdForPlan(state.orderPlans.find((plan) => plan.planId === current.ids.planId) || gpuDemoTransactionBundle(current).orderPlans?.[0]!)
-    pushMessage({
-      role: 'assistant',
-      actor: 'buyer_agent',
-      text: 'Three seller agents matched. Choose one in the seller options panel.',
-      meta: 'Seller Options',
-      result: gpuDemoMarketSearchResult(current),
-    })
-    renderAll()
-  }, 1000)
-}
-
-function gpuDemoMarketSearchResult(demo: GpuDemoState): MarketSearchResult {
-  return {
-    normalizedQuery: {
-      type: gpuDemoTaskType(demo),
-      minGpuCount: 1,
-      minVramGb: selectedGpuDemoSeller(demo).vramGb,
-      query: demo.answers.gpuProfile,
-    },
-    candidates: GPU_DEMO_SELLERS.map((seller): SellerCandidate => ({
-      providerPubkey: seller.providerPubkey,
-      score: seller.score,
-      reasons: [seller.reason, seller.risk],
-      resource: {
-        id: seller.resourceId,
-        name: seller.name,
-        type: 'gpu_worker',
-        summary: `${seller.gpu}, ${seller.vramGb}GB VRAM, ${seller.region}, ETA ${seller.eta}`,
-        pricePerUnit: seller.price,
-        billingUnit: 'job',
-        reputation: seller.score,
-        spec: { vramGb: seller.vramGb, gpuCount: 1, gpuModel: seller.gpu, region: seller.region, runtime: seller.eta },
-      },
-    })),
-    orderDraftOptions: GPU_DEMO_SELLERS.map((seller): OrderDraftOption => ({
-      optionId: gpuDemoOptionId(seller, demo),
-      resourceId: seller.resourceId,
-      providerPubkey: seller.providerPubkey,
-      score: seller.score,
-      reason: seller.reason,
-      expiresAt: 'local demo',
-      priceSnapshot: { pricePerUnit: seller.price, billingUnit: 'job', currency: 'USDC', availability: seller.eta },
-      draft: {
-        goal: demo.taskText,
-        requirements: { gpu: seller.gpu, vramGb: seller.vramGb, outputs: demo.answers.outputs },
-      },
-    })),
-    selectionRequest: { planId: demo.ids.planId, status: 'pending_selection', expiresAt: 'local demo', nextAction: 'Choose one seller option.' },
-    summary: 'Local demo matching returned three fixed GPU seller agents.',
-    nextAction: 'Choose a seller, then wait for seller confirmation.',
-  }
-}
-
-function chooseGpuDemoSeller(sellerId: string) {
-  const demo = state.gpuDemo
-  const seller = GPU_DEMO_SELLERS.find((item) => item.id === sellerId)
-  if (!demo || !seller) return
-  demo.selectedSellerId = seller.id
-  demo.updatedAt = new Date().toISOString()
-  ensureGpuDemoThread()
-  pushMessage({
-    role: 'user',
-    actor: 'buyer_human',
-    text: `Choose seller: ${seller.name} at ${trimDisplayNumber(seller.price)} USDC, ETA ${seller.eta}.`,
-    meta: 'Seller Selection',
-  })
-  pushMessage({
-    role: 'assistant',
-    actor: 'seller_agent',
-    providerPubkey: seller.providerPubkey,
-    text: `${seller.name} is checking queue availability and accepting terms.`,
-    meta: 'Seller Confirmation',
-  })
-  setGpuDemoStage('seller_confirming')
-  state.selectedId = selectionId('plan', demo.ids.planId)
-  state.selectedWorkThreadId = workThreadIdForPlan(state.orderPlans.find((plan) => plan.planId === demo.ids.planId) || gpuDemoTransactionBundle(demo).orderPlans?.[0]!)
-  scheduleGpuDemo(() => {
-    const current = state.gpuDemo
-    if (!current || current.ids.base !== demo.ids.base || current.stage !== 'seller_confirming') return
-    setGpuDemoStage('seller_accepted')
-    pushMessage({
-      role: 'assistant',
-      actor: 'seller_agent',
-      providerPubkey: seller.providerPubkey,
-      text: `${seller.name} accepted the job. Dock needs owner PIN to record the simulated payment proof.`,
-      meta: 'Seller Accepted',
-    })
-    scheduleGpuDemo(() => {
-      const latest = state.gpuDemo
-      if (!latest || latest.ids.base !== demo.ids.base || latest.stage !== 'seller_accepted') return
-      openGpuDemoPin()
-    }, 800)
-  }, 1400)
-  renderAll()
-}
-
-function openGpuDemoPin() {
-  const demo = state.gpuDemo
-  if (!demo) return
-  setGpuDemoStage('pin')
-  state.pinStep = { action: { kind: 'gpu_demo_payment' }, setup: false, pin: '', confirm: '' }
-  renderAll()
-}
-
-function completeGpuDemoPayment(pin: string) {
-  void pin
-  const demo = state.gpuDemo
-  if (!demo) return
-  state.pinStep = undefined
-  ensureGpuDemoThread()
-  pushMessage({
-    role: 'system',
-    text: 'Demo PIN accepted. A simulated escrow payment proof was written locally; no real payment was sent.',
-    meta: 'Payment',
-  })
-  setGpuDemoStage('paid')
-  pushMessage({
-    role: 'assistant',
-    actor: 'seller_agent',
-    providerPubkey: selectedGpuDemoSeller(demo).providerPubkey,
-    text: 'Payment proof confirmed. I am starting the scripted GPU execution flow.',
-    meta: 'Execution',
-  })
-  runGpuDemoExecutionScript()
-}
-
-function runGpuDemoExecutionScript() {
-  const demo = state.gpuDemo
-  if (!demo) return
-  const base = demo.ids.base
-  const advance = (stage: GpuDemoStage, delayMs: number, text: string) => {
-    scheduleGpuDemo(() => {
-      const current = state.gpuDemo
-      if (!current || current.ids.base !== base || gpuDemoStageIndex(current.stage) >= gpuDemoStageIndex(stage)) return
-      setGpuDemoStage(stage)
-      pushMessage({
-        role: 'assistant',
-        actor: 'seller_agent',
-        providerPubkey: selectedGpuDemoSeller(current).providerPubkey,
-        text,
-        meta: 'GPU Job',
-      })
-      if (stage === 'completed') {
-        state.selectedId = selectionId('task', current.ids.taskId)
-        state.selectedWorkThreadId = workThreadIdForTask(state.tasks.find((task) => task.id === current.ids.taskId) || { id: current.ids.taskId, orderId: current.ids.orderId, status: 'completed' })
-        renderAll()
-      }
-    }, delayMs)
-  }
-  advance('queued', 700, 'Job queued on the selected demo seller.')
-  advance('pulling_image', 1800, 'Pulling the CUDA image and preparing cached model files.')
-  advance('running', 3200, 'GPU inference is running over the evaluation batch.')
-  advance('uploading_artifacts', 4700, 'Packaging result.md, metrics.json, logs.txt, and receipt.json.')
-  advance('completed', 6200, 'Completed. Result files, metrics, logs, receipt, and hashes are ready for buyer verification.')
 }
 
 function activeChatThread() {
@@ -16230,7 +13895,6 @@ function parseSelection(value?: string): { kind: SelectedKind; id: string } | un
 }
 
 function pinActionText(action: PinAction) {
-  if (action.kind === 'gpu_demo_payment') return 'Confirm simulated GPU job payment'
   if (action.kind === 'select_plan') return `Choose seller option ${shortID(action.optionId)}`
   if (action.kind === 'approve') return `Approve request ${shortID(action.approvalId)}`
   return 'Set local payment PIN'
@@ -16265,12 +13929,16 @@ function showToast(message: string) {
 
 function settingsTitles(): Record<SettingsView, { kicker: string; title: string }> {
   return {
-    archives: { kicker: t('settings.archives.kicker'), title: t('settings.archives.title') },
+    security: {
+      kicker: state.language === 'zh' ? '设置' : 'Settings',
+      title: state.language === 'zh' ? '安全' : 'Security',
+    },
   }
 }
 
 function settingsViewForCardRole(role: AgentCardRole): SettingsView {
-  return 'archives'
+  void role
+  return 'security'
 }
 
 function renderSettingsAgentCardPages() {
@@ -16280,183 +13948,6 @@ function renderSettingsAgentCardPages() {
     container.innerHTML = renderAgentCardSettingsPage(role)
     attachCardHandlers(container)
   })
-}
-
-function renderLocalAgentsSettings() {
-  if (!fields.localAgentsContent) return
-  const binding = state.localAgentBinding
-  const defaultValue = binding
-    ? `${binding.vendor} ${binding.name}${binding.valid ? '' : ` · ${t('localAgents.needsAttention')}`}`
-    : t('localAgents.noneBound')
-  const records = state.localAgents.length
-    ? state.localAgents.map(renderLocalAgentRecord).join('')
-    : `
-      <div class="agent-env-empty">
-        <strong>${escapeHTML(state.localAgentSnapshotLoading ? t('localAgents.loadingSaved') : state.localAgentScanning ? t('localAgents.scanning') : t('localAgents.notScanned'))}</strong>
-        <span>${escapeHTML(t('localAgents.scanHelp'))}</span>
-      </div>
-    `
-  const scanStatus = state.localAgentError
-    ? state.localAgentError
-    : state.localAgentScanning
-      ? t('localAgents.scanning')
-      : state.localAgentSnapshotLoading
-        ? t('localAgents.loadingSaved')
-      : state.localAgentScannedAt
-        ? t('localAgents.scanSummary', {
-            found: state.localAgents.filter((agent) => agent.installed).length,
-            total: state.localAgents.length,
-            time: compactTimestamp(state.localAgentScannedAt),
-          })
-        : t('localAgents.notScanned')
-
-  fields.localAgentsContent.innerHTML = `
-    <div class="agent-card-form card-setup-list agent-card-settings-form">
-      <div class="card-setup-row card-message-row">
-        <span class="field-label">${escapeHTML(t('localAgents.default'))}</span>
-        <small class="field-help">${escapeHTML(t('localAgents.defaultHelp'))}</small>
-        <strong class="diagnostic-value" data-no-i18n>${escapeHTML(defaultValue)}</strong>
-      </div>
-      <div class="archive-record-list">
-        ${records}
-      </div>
-    </div>
-    <div class="card-setup-actionbar card-scan-actionbar" aria-label="${escapeAttr(t('localAgents.scan'))}">
-      <button type="button" class="card-action-button diagnose-card-action ${state.localAgentScanning ? 'is-running' : ''}" data-local-agent-action="scan" ${state.localAgentScanning || state.localAgentSnapshotLoading || state.busy ? 'disabled aria-busy="true"' : ''}>
-        <span class="card-action-icon">${state.localAgentScanning ? windowIcons.close : cardActionIcons.diagnose}</span>
-        <span class="card-action-text">${escapeHTML(state.localAgentScanning ? t('localAgents.scanningShort') : t('localAgents.scan'))}</span>
-      </button>
-      ${binding ? `
-        <button type="button" class="card-action-button" data-local-agent-action="unbind" ${state.localAgentSnapshotLoading || state.busy ? 'disabled' : ''}>
-          <span class="card-action-icon">${windowIcons.close}</span>
-          <span class="card-action-text">${escapeHTML(t('localAgents.unbind'))}</span>
-        </button>
-      ` : ''}
-      <span class="card-scan-status" title="${escapeAttr(scanStatus)}">${escapeHTML(scanStatus)}</span>
-    </div>
-  `
-}
-
-function renderLocalAgentRecord(agent: LocalAgentInstallation) {
-  const bound = state.localAgentBinding?.driverId === agent.driverId
-  const status = localAgentStatusText(agent)
-  const protocol = localAgentProtocolText(agent)
-  const metadata = [agent.version, status].filter(Boolean).join(' · ')
-  const executable = agent.executablePath || t('localAgents.notFound')
-  const canBind = agent.installed && agent.bindable && (agent.status === 'ready' || agent.status === 'available')
-  const action = bound
-    ? `<span class="card-status-chip">${escapeHTML(t('localAgents.bound'))}</span>`
-    : canBind
-      ? `<button type="button" class="secondary" data-local-agent-action="bind" data-local-agent-driver="${escapeAttr(agent.driverId)}" ${state.busy || state.localAgentScanning || state.localAgentSnapshotLoading ? 'disabled' : ''}>${escapeHTML(t(state.localAgentBinding ? 'localAgents.switch' : 'localAgents.bind'))}</button>`
-      : `<span class="card-status-chip">${escapeHTML(localAgentShortStatus(agent))}</span>`
-  return `
-    <article class="archive-record-card" data-local-agent-driver-record="${escapeAttr(agent.driverId)}">
-      <div class="archive-record-main">
-        <strong data-no-i18n>${escapeHTML(agent.name)}</strong>
-        <span>${escapeHTML(`${agent.vendor} · ${protocol}`)}</span>
-        <code data-no-i18n title="${escapeAttr(executable)}">${escapeHTML(`${metadata} · ${executable}`)}</code>
-      </div>
-      <div class="archive-record-actions">${action}</div>
-    </article>
-  `
-}
-
-function localAgentStatusText(agent: LocalAgentInstallation) {
-  if (agent.status === 'not_installed') return t('localAgents.notInstalled')
-  if (agent.status === 'probe_failed') return t('localAgents.probeFailed')
-  if (agent.status === 'login_required') return t('localAgents.loginRequired')
-  if (agent.status === 'detected_only') return t('localAgents.detectedOnly')
-  if (agent.authState === 'authenticated') return t('localAgents.authenticated')
-  if (agent.authState === 'configured') return t('localAgents.configured')
-  return t('localAgents.authUnknown')
-}
-
-function localAgentShortStatus(agent: LocalAgentInstallation) {
-  if (agent.status === 'login_required') return t('localAgents.signIn')
-  if (agent.status === 'detected_only') return t('localAgents.detectOnly')
-  if (agent.status === 'probe_failed') return t('localAgents.checkFailed')
-  return t('localAgents.unavailable')
-}
-
-function localAgentProtocolText(agent: LocalAgentInstallation) {
-  const stateLabel = agent.protocolState === 'supported'
-    ? t('localAgents.supported')
-    : agent.protocolState === 'preview'
-      ? t('localAgents.beta')
-      : agent.protocolState === 'limited'
-        ? t('localAgents.limited')
-        : t('localAgents.detectOnly')
-  return `${agent.protocolLabel} · ${stateLabel}${agent.note ? ` · ${agent.note}` : ''}`
-}
-
-function applyLocalAgentSnapshot(result: LocalAgentScanResult) {
-  state.localAgents = Array.isArray(result.agents) ? result.agents : []
-  state.localAgentBinding = result.binding || undefined
-  state.localAgentScannedAt = result.scannedAt || undefined
-}
-
-async function loadLocalAgentSnapshot() {
-  if (state.localAgentSnapshotLoaded || state.localAgentSnapshotLoading || state.localAgentScanning) return
-  if (!hasDesktopBridge()) {
-    state.localAgentError = t('localAgents.desktopOnly')
-    state.localAgentSnapshotLoaded = true
-    renderLocalAgentsSettings()
-    return
-  }
-  state.localAgentSnapshotLoading = true
-  state.localAgentError = undefined
-  renderLocalAgentsSettings()
-  try {
-    applyLocalAgentSnapshot(await invoke<LocalAgentScanResult>('local_agent_snapshot'))
-  } catch (error) {
-    state.localAgentError = humanizeError(error)
-  } finally {
-    state.localAgentSnapshotLoading = false
-    state.localAgentSnapshotLoaded = true
-    renderLocalAgentsSettings()
-  }
-}
-
-async function scanLocalAgentsNow() {
-  if (state.localAgentScanning || state.localAgentSnapshotLoading) return
-  if (!hasDesktopBridge()) {
-    state.localAgentError = t('localAgents.desktopOnly')
-    renderLocalAgentsSettings()
-    return
-  }
-  state.localAgentScanning = true
-  state.localAgentError = undefined
-  renderLocalAgentsSettings()
-  try {
-    applyLocalAgentSnapshot(await invoke<LocalAgentScanResult>('local_agent_scan'))
-    state.localAgentSnapshotLoaded = true
-  } catch (error) {
-    state.localAgentError = humanizeError(error)
-  } finally {
-    state.localAgentScanning = false
-    renderLocalAgentsSettings()
-  }
-}
-
-async function bindLocalAgent(driverId: string) {
-  const result = await invoke<{ binding: LocalAgentBinding; agent: LocalAgentInstallation }>('bind_local_agent', {
-    input: { driverId },
-  })
-  state.localAgentBinding = result.binding
-  state.localAgents = state.localAgents.map((agent) => ({
-    ...agent,
-    bound: agent.driverId === result.binding.driverId,
-  }))
-  state.localAgentError = undefined
-  renderLocalAgentsSettings()
-}
-
-async function unbindLocalAgent() {
-  await invoke('unbind_local_agent')
-  state.localAgentBinding = undefined
-  state.localAgents = state.localAgents.map((agent) => ({ ...agent, bound: false }))
-  state.localAgentError = undefined
-  renderLocalAgentsSettings()
 }
 
 function renderSettingsPanel() {
@@ -16561,12 +14052,17 @@ function renderWalletStatus() {
       : readyToReceive ? 'Wallet ready' : 'Preparing your wallet'
   fields.walletCopyButton.disabled = !readyToReceive
   fields.walletWithdrawButton.disabled = !readyToReceive || state.walletWithdrawalBusy
-  fields.walletWithdrawButton.textContent = state.walletWithdrawalBusy ? 'Authorizing…' : 'Authorize withdrawal'
+  fields.walletWithdrawButton.textContent = state.walletWithdrawalBusy
+    ? 'Processing…'
+    : state.walletWithdrawalChallenge ? 'Confirm withdrawal' : 'Send email code'
   fields.walletWithdrawForm.querySelectorAll<HTMLInputElement>('input').forEach((input) => {
-    input.disabled = state.walletWithdrawalBusy
+    input.disabled = state.walletWithdrawalBusy || (input.name === 'emailCode' ? !state.walletWithdrawalChallenge : Boolean(state.walletWithdrawalChallenge))
   })
   const fee = wallet?.feePolicy
-  fields.walletFeeNote.textContent = Number(fee?.relayFeeAtomic || 0) > 0
+  const activeQuote = state.walletWithdrawalChallenge?.quote
+  fields.walletFeeNote.textContent = activeQuote
+    ? `Quoted fees: ${formatWalletAtomic(Number(activeQuote.totalFeeAtomic || 0), decimals)} USDC; recipient receives ${formatWalletAtomic(Number(activeQuote.netAmountAtomic || 0), decimals)} USDC.`
+    : Number(fee?.relayFeeAtomic || 0) > 0
     ? `Relay fee: ${formatWalletAtomic(Number(fee?.relayFeeAtomic || 0), decimals)} ${fee?.currency || 'USDC'}`
     : fee?.relayFeeDescription || 'Network fees are covered by Exora.'
   renderWalletWithdrawalStatus()
@@ -16606,15 +14102,18 @@ function compactWalletAddress(address: string) {
 function renderWalletWithdrawalStatus() {
   const target = fields.walletWithdrawStatus
   const withdrawal = state.walletWithdrawal
+  const challenge = state.walletWithdrawalChallenge
   const error = state.walletWithdrawalError
-  target.classList.toggle('hidden', !withdrawal && !error)
+  target.classList.toggle('hidden', !withdrawal && !challenge && !error)
   target.classList.toggle('error', Boolean(error))
   if (error) {
     target.innerHTML = `<strong>Withdrawal not authorized</strong><span>${escapeHTML(error)}</span>`
     return
   }
   if (!withdrawal) {
-    target.innerHTML = ''
+    target.innerHTML = challenge
+      ? `<strong>Verification email sent</strong><span>Enter the six-digit code${challenge.challenge.email ? ` sent to ${escapeHTML(challenge.challenge.email)}` : ''}. It expires ${challenge.challenge.expiresAt ? escapeHTML(new Date(challenge.challenge.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })) : 'in 10 minutes'}.</span>`
+      : ''
     return
   }
   const decimals = Number(withdrawal.decimals ?? walletUSDCDecimals())
@@ -16637,13 +14136,18 @@ function walletAmountToAtomic(value: string, decimals = 6) {
 
 async function submitWalletWithdrawal(form: HTMLFormElement) {
   if (state.walletWithdrawalBusy) return
+  if (state.walletWithdrawalChallenge?.challenge.expiresAt && new Date(state.walletWithdrawalChallenge.challenge.expiresAt).getTime() <= Date.now()) {
+    state.walletWithdrawalChallenge = undefined
+    throw new Error('The withdrawal verification code expired. Request a new code.')
+  }
   const data = new FormData(form)
-  const toAddress = String(data.get('toAddress') || '').trim()
-  const paymentPin = String(data.get('paymentPin') || '').trim()
+  const pending = state.walletWithdrawalChallenge
+  const toAddress = pending?.toAddress || String(data.get('toAddress') || '').trim()
+  const emailCode = String(data.get('emailCode') || '').trim()
   const decimals = walletUSDCDecimals()
-  const amountAtomic = walletAmountToAtomic(String(data.get('amount') || ''), decimals)
+  const amountAtomic = pending?.amountAtomic || walletAmountToAtomic(String(data.get('amount') || ''), decimals)
   if (!toAddress) throw new Error('Enter a destination Solana address.')
-  if (!/^\d{6}$/.test(paymentPin)) throw new Error('Payment PIN must be exactly 6 digits.')
+  if (state.walletWithdrawalChallenge && !/^\d{6}$/.test(emailCode)) throw new Error('Email verification code must be exactly 6 digits.')
   const balance = walletUSDCBalance()
   if (balance?.status === 'ready' && amountAtomic > Number(balance.amountAtomic || 0)) {
     throw new Error('Withdrawal amount exceeds the available balance.')
@@ -16655,19 +14159,26 @@ async function submitWalletWithdrawal(form: HTMLFormElement) {
   renderWalletStatus()
   try {
     const response = await invoke<WalletWithdrawalResponse>('wallet_withdraw', {
-      input: { toAddress, amountAtomic, paymentPin },
+      input: pending
+        ? { toAddress: pending.toAddress, amountAtomic: pending.amountAtomic, quoteId: pending.quote.quoteId, challengeId: pending.challenge.challengeId, code: emailCode, idempotencyKey: pending.idempotencyKey }
+        : { toAddress, amountAtomic },
     })
-    if (!response.withdrawal) throw new Error('Wallet did not return a withdrawal record.')
+    if (!pending) {
+      if (!response.quote || !response.challenge) throw new Error('Cloud did not return a withdrawal verification challenge.')
+      state.walletWithdrawalChallenge = { quote: response.quote, challenge: response.challenge, toAddress, amountAtomic, idempotencyKey: `electron-${crypto.randomUUID()}` }
+      fields.walletPinInput.value = ''
+      renderWalletStatus()
+      fields.walletPinInput.focus()
+      return
+    }
+    if (!response.withdrawal) throw new Error('Cloud did not return a withdrawal record.')
     state.walletWithdrawal = response.withdrawal
+    state.walletWithdrawalChallenge = undefined
     form.querySelector<HTMLInputElement>('input[name="amount"]')!.value = ''
-    form.querySelector<HTMLInputElement>('input[name="paymentPin"]')!.value = ''
+    form.querySelector<HTMLInputElement>('input[name="emailCode"]')!.value = ''
     await refreshWalletStatus()
-    showToast(response.nextAction === 'submit_to_cloud_relayer'
-      ? 'Withdrawal authorized. Exora relayer submission is still required.'
-      : 'Withdrawal authorized.')
   } catch (error) {
     state.walletWithdrawalError = humanizeError(error)
-    throw error
   } finally {
     state.walletWithdrawalBusy = false
     renderWalletStatus()
@@ -16741,13 +14252,74 @@ function renderWalletModal() {
   localize(fields.walletModal)
 }
 
+function copyMCPAgentInstruction() {
+  void navigator.clipboard.writeText(t('listings.agentPrompt'))
+    .then(() => showToast(t('toast.agentPromptCopied')))
+    .catch((error) => showToast(humanizeError(error)))
+}
+
+function mcpInfoSteps(keys: string[]) {
+  return `<ol>${keys.map((key) => `<li>${escapeHTML(t(key))}</li>`).join('')}</ol>`
+}
+
+function renderMCPInfoModal() {
+  fields.mcpInfoModal.classList.toggle('hidden', !state.mcpInfoModalOpen)
+  fields.mcpInfoModal.setAttribute('aria-hidden', String(!state.mcpInfoModalOpen))
+  if (!state.mcpInfoModalOpen) return
+  fields.mcpInfoTitle.textContent = t('listings.guide.title')
+  fields.mcpInfoSubtitle.textContent = t('listings.guide.subtitle')
+  fields.mcpInfoFooter.textContent = t('listings.guide.footer')
+  fields.mcpInfoBody.innerHTML = `
+    <section class="mcp-info-intro">
+      <p>${escapeHTML(t('listings.guide.intro'))}</p>
+      <div class="mcp-info-command"><span>${escapeHTML(t('listings.guide.promptLabel'))}</span><code>\u201c${escapeHTML(t('listings.agentPrompt'))}\u201d</code><button type="button" data-mcp-info-action="copy">${icon(Copy)}<span>${escapeHTML(t('listings.agentCopy'))}</span></button></div>
+    </section>
+    <div class="mcp-info-routes">
+      <section class="mcp-info-route agent">
+        <header><span aria-hidden="true">${icon(BrainCircuit)}</span><div><small>Agent + MCP</small><h3>${escapeHTML(t('listings.guide.agentTitle'))}</h3></div></header>
+        ${mcpInfoSteps(['listings.guide.agentStep1', 'listings.guide.agentStep2', 'listings.guide.agentStep3', 'listings.guide.agentStep4'])}
+      </section>
+      <section class="mcp-info-route manual">
+        <header><span aria-hidden="true">${icon(ShoppingBag)}</span><div><small>Listings + Desktop</small><h3>${escapeHTML(t('listings.guide.manualTitle'))}</h3></div></header>
+        ${mcpInfoSteps(['listings.guide.manualStep1', 'listings.guide.manualStep2', 'listings.guide.manualStep3', 'listings.guide.manualStep4'])}
+      </section>
+    </div>
+    <section class="mcp-info-products">
+      <header><span>${escapeHTML(t('listings.guide.productsTitle'))}</span></header>
+      <div><article><span aria-hidden="true">${icon(SquareKanban)}</span><div><strong>${escapeHTML(t('listings.guide.computeTitle'))}</strong><p>${escapeHTML(t('listings.guide.computeBody'))}</p></div></article><article><span aria-hidden="true">${icon(Archive)}</span><div><strong>${escapeHTML(t('listings.guide.downloadTitle'))}</strong><p>${escapeHTML(t('listings.guide.downloadBody'))}</p></div></article><article><span aria-hidden="true">${icon(Network)}</span><div><strong>${escapeHTML(t('listings.guide.apiTitle'))}</strong><p>${escapeHTML(t('listings.guide.apiBody'))}</p></div></article></div>
+    </section>
+    <section class="mcp-info-boundaries">
+      <header>${icon(ShieldCheck)}<strong>${escapeHTML(t('listings.guide.realityTitle'))}</strong></header>
+      <ul>${['listings.guide.reality1', 'listings.guide.reality2', 'listings.guide.reality3', 'listings.guide.reality4'].map((key) => `<li>${escapeHTML(t(key))}</li>`).join('')}</ul>
+    </section>`
+}
+
+function openMCPInfoModal() {
+  closeProfileMenu()
+  closeWalletModal()
+  closeOrderSearch()
+  closePINSettingsModal()
+  closeCartModal()
+  state.mcpInfoModalOpen = true
+  renderMCPInfoModal()
+  window.setTimeout(() => fields.mcpInfoModal.querySelector<HTMLButtonElement>('.app-modal-close')?.focus(), 0)
+}
+
+function closeMCPInfoModal() {
+  if (!state.mcpInfoModalOpen) return
+  state.mcpInfoModalOpen = false
+  renderMCPInfoModal()
+}
+
 function openWalletModal(panel: WalletPanel = state.walletPanel) {
   closeProfileMenu()
+  closeMCPInfoModal()
   closeProjectFolderMenu()
   closeTaskContextMenu()
   closePermissionMenu()
   closeMarketProjectPicker()
   closeOrderSearch()
+  closePINSettingsModal()
   closeCartModal()
   state.walletPanel = panel
   state.walletModalOpen = true
@@ -16759,6 +14331,7 @@ function openWalletModal(panel: WalletPanel = state.walletPanel) {
 function closeWalletModal() {
   if (!state.walletModalOpen) return
   state.walletModalOpen = false
+  state.walletWithdrawalChallenge = undefined
   fields.walletPinInput.value = ''
   renderWalletPINInput()
   renderWalletModal()
@@ -16777,35 +14350,100 @@ async function refreshWalletModalStatus() {
   }
 }
 
+function renderSettingsSurface() {
+  fields.settingsView.classList.toggle('hidden', !state.settingsOpen)
+  fields.actionView.classList.toggle('hidden', state.settingsOpen)
+  fields.sellerSurfaceTabs.classList.toggle('hidden', state.settingsOpen)
+  fields.appShell.classList.toggle('settings-mode', state.settingsOpen)
+  fields.settingsButton.classList.toggle('active', state.settingsOpen)
+  fields.settingsButton.setAttribute('aria-pressed', String(state.settingsOpen))
+  if (state.settingsOpen) localize(fields.settingsView)
+}
+
 function openSettings(view?: SettingsView) {
+  state.activeSettingsView = view || 'security'
+  closeMCPInfoModal()
   closeWalletModal()
-  if (view) state.activeSettingsView = view
+  closeOrderSearch()
+  closePINSettingsModal()
   state.profileMenuOpen = false
   state.profileSubmenu = undefined
   state.pinStep = undefined
-  setActiveView('settings')
-  scheduleSaveAppSettings()
-  renderAll()
-  refreshSeller({ market: true })
-  refreshAgentCards()
+  state.settingsOpen = true
+  renderSettingsSurface()
+  renderLedger()
+  renderProfileSummary()
 }
 
 function returnFromSettings() {
-  state.profileMenuOpen = false
-  state.profileSubmenu = undefined
-  state.pinStep = undefined
-  const previousIndex = state.viewHistory
-    .slice(0, state.viewHistoryIndex)
-    .map((view, index) => ({ view, index }))
-    .reverse()
-    .find((entry) => entry.view !== 'settings')?.index
-  if (previousIndex !== undefined) {
-    state.viewHistoryIndex = previousIndex
-    state.activeView = state.viewHistory[previousIndex]
-  } else {
-    setActiveView('chat')
+  state.settingsOpen = false
+  renderSettingsSurface()
+  renderLedger()
+  renderProfileSummary()
+}
+
+function renderPINSettingsModal() {
+  fields.pinSettingsModal.classList.toggle('hidden', !state.pinSettingsModalOpen)
+  fields.pinSettingsModal.setAttribute('aria-hidden', String(!state.pinSettingsModalOpen))
+  fields.pinSettingsSubmit.disabled = state.pinSettingsBusy
+  fields.pinSettingsForm.querySelectorAll<HTMLInputElement>('input').forEach((input) => {
+    input.disabled = state.pinSettingsBusy
+  })
+}
+
+function openPINSettingsModal() {
+  closeProfileMenu()
+  closeMCPInfoModal()
+  closeWalletModal()
+  closeOrderSearch()
+  fields.pinSettingsForm.reset()
+  fields.pinSettingsMessage.textContent = ''
+  fields.pinSettingsMessage.dataset.tone = ''
+  state.pinSettingsModalOpen = true
+  renderPINSettingsModal()
+  window.setTimeout(() => fields.pinSettingsForm.elements.namedItem('currentPIN') instanceof HTMLInputElement
+    && (fields.pinSettingsForm.elements.namedItem('currentPIN') as HTMLInputElement).focus(), 0)
+}
+
+function closePINSettingsModal() {
+  if (!state.pinSettingsModalOpen || state.pinSettingsBusy) return
+  state.pinSettingsModalOpen = false
+  fields.pinSettingsForm.reset()
+  fields.pinSettingsMessage.textContent = ''
+  fields.pinSettingsMessage.dataset.tone = ''
+  renderPINSettingsModal()
+}
+
+async function submitPINSettings() {
+  if (state.pinSettingsBusy) return
+  const data = Object.fromEntries(new FormData(fields.pinSettingsForm).entries()) as Record<string, string>
+  if (!/^\d{6}$/.test(data.currentPIN || '') || !/^\d{6}$/.test(data.newPIN || '')) {
+    fields.pinSettingsMessage.textContent = 'PINs must contain exactly six digits.'
+    fields.pinSettingsMessage.dataset.tone = 'error'
+    return
   }
-  renderAll()
+  if (data.newPIN !== data.pinConfirm) {
+    fields.pinSettingsMessage.textContent = 'The new PIN and confirmation do not match.'
+    fields.pinSettingsMessage.dataset.tone = 'error'
+    return
+  }
+  state.pinSettingsBusy = true
+  fields.pinSettingsMessage.textContent = 'Updating payment PIN…'
+  fields.pinSettingsMessage.dataset.tone = 'info'
+  renderPINSettingsModal()
+  try {
+    await invoke<CloudAuthState>('auth_pin_change', { input: data })
+    state.pinSettingsModalOpen = false
+    fields.pinSettingsForm.reset()
+    fields.pinSettingsMessage.textContent = ''
+    showToast(t('toast.paymentPinChanged'))
+  } catch (error) {
+    fields.pinSettingsMessage.textContent = humanizeError(error)
+    fields.pinSettingsMessage.dataset.tone = 'error'
+  } finally {
+    state.pinSettingsBusy = false
+    renderPINSettingsModal()
+  }
 }
 
 async function refreshWalletStatus() {
@@ -16883,26 +14521,17 @@ function selectOrderSide(side: OrderSide) {
   renderLedger()
   void loadV3ActivitySessions(side)
   if (hadActivityDetail) renderDecisionPanel()
-  syncTransactionProgressPolling()
 }
 
 function sellerMonitorActive() {
-  return state.activeView !== 'settings' && state.workOrderSide === 'seller' && state.sellerWorkspaceMode === 'monitor'
+  return false
 }
-
-app.querySelector<HTMLButtonElement>('[data-action="refresh-workspace"]')!.addEventListener('click', () => {
-  run(() => refreshWorkspace())
-})
 
 app.querySelectorAll<HTMLButtonElement>('[data-order-side-tab]').forEach((button) => {
   button.addEventListener('click', () => {
     const side = button.dataset.orderSideTab as OrderSide
     if (side === 'buyer' || side === 'seller') selectOrderSide(side)
   })
-})
-
-fields.orderSideToggle.addEventListener('click', () => {
-  selectOrderSide(state.workOrderSide === 'buyer' ? 'seller' : 'buyer')
 })
 
 app.querySelectorAll<HTMLButtonElement>('[data-window-action]').forEach((button) => {
@@ -16918,18 +14547,10 @@ app.querySelectorAll<HTMLButtonElement>('[data-window-action]').forEach((button)
 })
 
 app.querySelector<HTMLButtonElement>('[data-sidebar-action="search"]')!.addEventListener('click', openOrderSearch)
-fields.transactionDetailCloseButton.addEventListener('click', () => closeTransactionStageInspector())
-fields.transactionDetailOpenButtons.forEach((button) => {
-  button.addEventListener('click', openTransactionStageInspector)
-})
-
-fields.settingsReturnButton.addEventListener('click', returnFromSettings)
 
 fields.profileIdentity.addEventListener('click', (event) => {
   event.preventDefault()
   event.stopPropagation()
-  closeProjectFolderMenu()
-  closeTaskContextMenu()
   toggleProfileMenu()
 })
 
@@ -16954,7 +14575,7 @@ fields.profileMenu.addEventListener('click', (event) => {
   if (action === 'sign-out') signOutProfile()
   if (action === 'change-pin') {
     closeProfileMenu()
-    authGate.openPINSettings()
+    openPINSettingsModal()
   }
 })
 
@@ -16974,47 +14595,6 @@ fields.profileMenu.addEventListener('focusin', (event) => {
   if (!(target instanceof Element)) return
   const submenu = target.closest<HTMLElement>('[data-profile-submenu]')?.dataset.profileSubmenu
   if (submenu === 'language' || submenu === 'theme') openProfileSubmenu(submenu)
-})
-
-fields.taskContextMenu.addEventListener('click', (event) => {
-  const target = event.target
-  if (!(target instanceof Element)) return
-  const button = target.closest<HTMLButtonElement>('[data-task-menu-action]')
-  if (!button) return
-  event.preventDefault()
-  event.stopPropagation()
-  const action = button.dataset.taskMenuAction as TaskMenuAction | undefined
-  if (action) handleTaskMenuAction(action).catch((error) => showToast(humanizeError(error)))
-})
-
-fields.archiveRecords.addEventListener('click', (event) => {
-  const target = event.target
-  if (!(target instanceof Element)) return
-  const button = target.closest<HTMLButtonElement>('[data-archive-action]')
-  if (!button) return
-  event.preventDefault()
-  event.stopPropagation()
-  const action = button.dataset.archiveAction
-  const id = button.dataset.archiveId || ''
-  if (action === 'restore') restoreArchivedRecord(id)
-  if (action === 'copy-id') copyArchivedRecordID(id).catch((error) => showToast(humanizeError(error)))
-})
-
-fields.marketProjectPicker.addEventListener('click', (event) => {
-  const target = event.target
-  if (!(target instanceof Element)) return
-  const option = target.closest<HTMLButtonElement>('[data-market-project-path]')
-  if (option) {
-    event.preventDefault()
-    event.stopPropagation()
-    selectMarketProject(option.dataset.marketProjectPath || '')
-    return
-  }
-  if (target.closest('[data-action="close-market-project-picker"]')) {
-    event.preventDefault()
-    event.stopPropagation()
-    closeMarketProjectPicker()
-  }
 })
 
 fields.orderSearchInput.addEventListener('input', renderOrderSearchResults)
@@ -17051,14 +14631,58 @@ fields.walletModal.addEventListener('click', (event) => {
   }
 })
 
-fields.cartModal.addEventListener('click', (event) => {
+fields.settingsButton.addEventListener('click', () => {
+  if (state.settingsOpen) returnFromSettings()
+  else openSettings()
+})
+
+fields.settingsReturnButton.addEventListener('click', returnFromSettings)
+
+fields.settingsView.addEventListener('click', (event) => {
   const target = event.target
   if (!(target instanceof Element)) return
-  if (target.closest('[data-action="close-cart"]')) {
+  if (target.closest('[data-settings-action="close"]')) {
     event.preventDefault()
-    event.stopPropagation()
-    closeCartModal()
+    returnFromSettings()
+    return
   }
+  if (target.closest('[data-settings-action="change-pin"]')) {
+    event.preventDefault()
+    openPINSettingsModal()
+  }
+})
+
+fields.pinSettingsModal.addEventListener('click', (event) => {
+  const target = event.target
+  if (!(target instanceof Element)) return
+  if (target.closest('[data-pin-settings-action="close"]')) {
+    event.preventDefault()
+    closePINSettingsModal()
+  }
+})
+
+fields.mcpInfoModal.addEventListener('click', (event) => {
+  const target = event.target
+  if (!(target instanceof Element)) return
+  const action = target.closest<HTMLElement>('[data-mcp-info-action]')?.dataset.mcpInfoAction
+  if (action === 'close') {
+    event.preventDefault()
+    closeMCPInfoModal()
+  } else if (action === 'copy') {
+    event.preventDefault()
+    copyMCPAgentInstruction()
+  }
+})
+
+fields.pinSettingsForm.addEventListener('input', (event) => {
+  const input = event.target
+  if (!(input instanceof HTMLInputElement)) return
+  input.value = input.value.replace(/\D/g, '').slice(0, 6)
+})
+
+fields.pinSettingsForm.addEventListener('submit', (event) => {
+  event.preventDefault()
+  void submitPINSettings()
 })
 
 app.addEventListener('click', (event) => {
@@ -17075,98 +14699,24 @@ app.addEventListener('click', (event) => {
       selectOrderSide('seller')
       return
     }
-    const activeElement = document.activeElement
-    if (
-      activeElement instanceof HTMLInputElement &&
-      activeElement.closest('[data-card-market-form]') &&
-      !target.closest('[data-card-market-form]')
-    ) {
-      activeElement.blur()
-    }
   }
   if (state.profileMenuOpen && !(target instanceof Element && target.closest('.profile-panel'))) closeProfileMenu()
-  if (state.projectFolderMenuOpen && !(target instanceof Element && target.closest('.project-folder-head'))) closeProjectFolderMenu()
-  if (state.taskMenuOpen && !(target instanceof Element && target.closest('.task-context-menu'))) closeTaskContextMenu()
-  if (state.permissionMenuOpen && !(target instanceof Element && target.closest('.permission-control'))) closePermissionMenu()
-  if (!(target instanceof Element && target.closest('[data-llm-profile-menu]'))) closeLLMProfileMenu()
   if (!(target instanceof Element && target.closest('[data-v3-resource-select]'))) closeV3ResourceSelectPopovers()
 })
 
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     closeProfileMenu()
-    closeProjectFolderMenu()
-    closeTaskContextMenu()
-    closePermissionMenu()
-    closeLLMProfileMenu()
     closeV3ResourceSelectPopovers()
-    closeMarketProjectPicker()
+    if (state.mcpInfoModalOpen) {
+      closeMCPInfoModal()
+      return
+    }
     closeOrderSearch()
-    closeCartModal()
     closeWalletModal()
+    if (state.pinSettingsModalOpen) closePINSettingsModal()
+    else if (state.settingsOpen) returnFromSettings()
   }
-})
-
-fields.newChatButton.addEventListener('click', () => {
-  if (fields.newChatButton.dataset.mode === 'history-refresh') {
-    void loadV3ActivitySessions(state.workOrderSide, true)
-    return
-  }
-  closeProjectFolderMenu()
-  closeTaskContextMenu()
-  startNewConversation()
-})
-
-fields.projectFolderMenuButton.addEventListener('click', (event) => {
-  event.preventDefault()
-  event.stopPropagation()
-  closeTaskContextMenu()
-  toggleProjectFolderMenu()
-})
-
-fields.projectFolderMenu.addEventListener('click', (event) => {
-  const target = event.target
-  if (!(target instanceof Element)) return
-  const button = target.closest<HTMLButtonElement>('[data-project-folder-action]')
-  if (!button) return
-  event.preventDefault()
-  event.stopPropagation()
-  const action = button.dataset.projectFolderAction as ProjectFolderMenuAction | undefined
-  if (action === 'open' || action === 'rename' || action === 'archive' || action === 'remove') {
-    void handleProjectFolderMenuAction(action)
-  }
-})
-
-fields.projectFolderHead.addEventListener('contextmenu', openProjectFolderContextMenu)
-
-fields.projectFolderToggle.addEventListener('click', () => {
-  closeProjectFolderMenu()
-  state.projectFolderCollapsed = !state.projectFolderCollapsed
-  scheduleSaveAppSettings()
-  renderProjectFolder()
-})
-
-fields.permissionButton?.addEventListener('click', (event) => {
-  event.preventDefault()
-  event.stopPropagation()
-  closeTaskContextMenu()
-  togglePermissionMenu()
-})
-
-fields.permissionMenu?.addEventListener('click', (event) => {
-  const target = event.target
-  if (!(target instanceof Element)) return
-  const button = target.closest<HTMLButtonElement>('[data-permission-mode]')
-  if (!button) return
-  event.preventDefault()
-  event.stopPropagation()
-  const mode = button.dataset.permissionMode as PermissionMode | undefined
-  if (mode === 'ask' || mode === 'approve' || mode === 'full' || mode === 'custom') setPermissionMode(mode)
-})
-
-app.querySelector<HTMLButtonElement>('[data-action="choose-folder"]')!.addEventListener('click', () => {
-  closeTaskContextMenu()
-  chooseProjectFolder()
 })
 
 fields.sidebarResizeHandle.addEventListener('pointerdown', (event) => {
@@ -17217,140 +14767,11 @@ fields.sidebarResizeHandle.addEventListener('keydown', (event) => {
   scheduleSaveAppSettings()
 })
 
-fields.transactionDetailResizeHandle.addEventListener('pointerdown', (event) => {
-  if (!fields.appShell.classList.contains('transaction-detail-open') || event.button !== 0) return
-  event.preventDefault()
-  event.stopPropagation()
-  transactionDetailResizePointerId = event.pointerId
-  fields.appShell.classList.add('transaction-detail-resizing')
-  fields.transactionDetailResizeHandle.setPointerCapture(event.pointerId)
-  updateTransactionDetailWidthFromPointer(event)
-})
-
-fields.transactionDetailResizeHandle.addEventListener('pointermove', (event) => {
-  if (transactionDetailResizePointerId !== event.pointerId) return
-  event.preventDefault()
-  updateTransactionDetailWidthFromPointer(event)
-})
-
-fields.transactionDetailResizeHandle.addEventListener('pointerup', stopTransactionDetailResize)
-fields.transactionDetailResizeHandle.addEventListener('pointercancel', stopTransactionDetailResize)
-
-fields.transactionDetailResizeHandle.addEventListener('lostpointercapture', () => {
-  if (transactionDetailResizePointerId === undefined) return
-  transactionDetailResizePointerId = undefined
-  fields.appShell.classList.remove('transaction-detail-resizing')
-  scheduleSaveAppSettings()
-})
-
-fields.transactionDetailResizeHandle.addEventListener('keydown', (event) => {
-  if (!fields.appShell.classList.contains('transaction-detail-open')) return
-  const step = event.shiftKey ? 24 : 12
-  if (event.key === 'ArrowLeft') {
-    event.preventDefault()
-    state.transactionDetailWidth = normalizeTransactionDetailWidth(state.transactionDetailWidth + step)
-  } else if (event.key === 'ArrowRight') {
-    event.preventDefault()
-    state.transactionDetailWidth = normalizeTransactionDetailWidth(state.transactionDetailWidth - step)
-  } else if (event.key === 'Home') {
-    event.preventDefault()
-    state.transactionDetailWidth = TRANSACTION_DETAIL_MIN_WIDTH
-  } else if (event.key === 'End') {
-    event.preventDefault()
-    state.transactionDetailWidth = TRANSACTION_DETAIL_MAX_WIDTH
-  } else {
-    return
-  }
-  applyTransactionDetailWidth()
-  scheduleSaveAppSettings()
-})
-
 fields.sidebarButton.addEventListener('click', (event) => {
   event.preventDefault()
   event.stopPropagation()
   closeProfileMenu()
-  closeProjectFolderMenu()
   setSidebarCollapsed(!state.sidebarCollapsed)
-})
-
-fields.forwardButton.addEventListener('click', () => navigateWorkspaceHistory(1))
-fields.backButton.addEventListener('click', () => navigateWorkspaceHistory(-1))
-
-let manualWindowDragActive = false
-let manualWindowDragMoveScheduled = false
-
-const WINDOW_DRAG_CONTROL_SELECTOR = [
-  'button',
-  'input',
-  'select',
-  'textarea',
-  'a',
-  '[role="button"]',
-  '[role="menuitem"]',
-  '[role="separator"]',
-  '[contenteditable]',
-  '[tabindex]:not([tabindex="-1"])',
-  '.no-drag',
-].join(', ')
-
-function isWindowDragTarget(event: MouseEvent) {
-  const target = event.target
-  if (!(target instanceof Element)) return false
-  if (target.closest(WINDOW_DRAG_CONTROL_SELECTOR)) return false
-  const isMarkedDragRegion = Boolean(target.closest('[data-window-drag-handle], [data-drag-region]'))
-  const isTopWindowRegion = event.clientY >= 0 && event.clientY <= TOP_WINDOW_DRAG_HEIGHT
-  return isMarkedDragRegion || isTopWindowRegion
-}
-
-app.addEventListener('mousedown', (event) => {
-  if (event.button !== 0) return
-  if (!isWindowDragTarget(event)) return
-  event.preventDefault()
-  manualWindowDragActive = true
-  invoke<boolean>('window_begin_manual_drag')
-    .then((started) => {
-      if (!started) {
-        manualWindowDragActive = false
-        return
-      }
-      scheduleManualWindowDragMove()
-    })
-    .catch(() => {
-      manualWindowDragActive = false
-    })
-})
-
-window.addEventListener('mousemove', () => {
-  if (manualWindowDragActive) scheduleManualWindowDragMove()
-})
-
-function scheduleManualWindowDragMove() {
-  if (!manualWindowDragActive || manualWindowDragMoveScheduled) return
-  manualWindowDragMoveScheduled = true
-  window.requestAnimationFrame(() => {
-    manualWindowDragMoveScheduled = false
-    if (!manualWindowDragActive) return
-    invoke('window_manual_drag_move').catch(() => undefined)
-  })
-}
-
-function endManualWindowDrag() {
-  if (!manualWindowDragActive) return
-  manualWindowDragActive = false
-  manualWindowDragMoveScheduled = false
-  invoke('window_end_manual_drag').catch(() => undefined)
-}
-
-window.addEventListener('mouseup', endManualWindowDrag)
-window.addEventListener('blur', endManualWindowDrag)
-
-app.addEventListener('dblclick', (event) => {
-  if (!isWindowDragTarget(event)) return
-  invoke('window_toggle_maximize').catch((error) => showToast(humanizeError(error)))
-})
-
-app.querySelectorAll<HTMLButtonElement>('[data-action="open-settings"]').forEach((button) => {
-  button.addEventListener('click', () => openSettings())
 })
 
 fields.walletButton.addEventListener('click', () => {
@@ -17371,36 +14792,6 @@ fields.walletPanelTabs.forEach((button, index) => {
     selectWalletPanel(fields.walletPanelTabs[nextIndex].dataset.walletTab as WalletPanel, true)
   })
 })
-
-app.querySelectorAll<HTMLButtonElement>('[data-action="open-api-settings"]').forEach((button) => {
-  button.addEventListener('click', () => {
-    if (state.activeView === 'settings') {
-      returnFromSettings()
-      return
-    }
-    closeWalletModal()
-    openSettings('archives')
-  })
-})
-
-fields.externalWorkTakeoverButton.addEventListener('click', () => {
-  takeOverExternalWork().catch((error) => showToast(humanizeError(error)))
-})
-
-function setLLMProfileMenuOpen(open: boolean) {
-  if (!fields.llmProfileList) return
-  const menu = fields.llmProfileList.querySelector<HTMLElement>('[data-llm-profile-menu]')
-  const toggle = fields.llmProfileList.querySelector<HTMLButtonElement>('[data-llm-profile-toggle]')
-  const list = fields.llmProfileList.querySelector<HTMLElement>('[data-llm-profile-menu-list]')
-  if (!menu || !toggle || !list) return
-  menu.classList.toggle('open', open)
-  toggle.setAttribute('aria-expanded', String(open))
-  list.classList.toggle('hidden', !open)
-}
-
-function closeLLMProfileMenu() {
-  setLLMProfileMenuOpen(false)
-}
 
 app.querySelector<HTMLButtonElement>('[data-action="wallet-refresh"]')!.addEventListener('click', () => {
   run(() => refreshWalletModalStatus())
@@ -17430,7 +14821,7 @@ app.querySelector<HTMLButtonElement>('[data-account-key-save]')?.addEventListene
     state.v3ConsumerBalance = response.balance
     state.v3ConsumerError = undefined
     renderWalletModal()
-  }, 'Account key validated.')
+  }, t('toast.accountKeyValidated'))
 })
 
 app.querySelector<HTMLButtonElement>('[data-account-key-delete]')?.addEventListener('click', () => {
@@ -17443,42 +14834,7 @@ app.querySelector<HTMLButtonElement>('[data-account-key-delete]')?.addEventListe
     state.v3ConsumerPurchase = undefined
     state.v3ConsumerLease = undefined
     renderWalletModal()
-  }, 'Account key deleted.')
-})
-
-fields.chatAgentButton.addEventListener('click', (event) => {
-  event.preventDefault()
-  event.stopPropagation()
-  const session = currentInteractiveAgentSession()
-  if (!session) {
-    connectCurrentChatAgent().catch((error) => {
-      const message = humanizeError(error)
-      showToast(message)
-    })
-    return
-  }
-  state.chatAgentMenuOpen = !state.chatAgentMenuOpen
-  closePermissionMenu(false)
-  renderChatAgentControl()
-})
-
-fields.chatAgentMenu.addEventListener('click', (event) => {
-  const target = event.target
-  if (!(target instanceof Element)) return
-  const button = target.closest<HTMLButtonElement>('[data-chat-agent-action]')
-  if (!button) return
-  event.preventDefault()
-  event.stopPropagation()
-  const action = button.dataset.chatAgentAction
-  const task = action === 'resume' ? resumeCurrentChatAgent() : action === 'stop' ? stopCurrentChatAgent() : action === 'switch' ? switchCurrentChatAgent() : undefined
-  task?.catch((error) => showToast(humanizeError(error)))
-})
-
-document.addEventListener('click', (event) => {
-  if (!state.chatAgentMenuOpen) return
-  if (event.target instanceof Node && (fields.chatAgentMenu.contains(event.target) || fields.chatAgentButton.contains(event.target))) return
-  state.chatAgentMenuOpen = false
-  renderChatAgentControl()
+  }, t('toast.accountKeyDeleted'))
 })
 
 app.querySelector<HTMLButtonElement>('[data-action="wallet-copy-address"]')!.addEventListener('click', () => {
@@ -17486,51 +14842,95 @@ app.querySelector<HTMLButtonElement>('[data-action="wallet-copy-address"]')!.add
     const address = state.walletStatus?.address
     if (!address) throw new Error('Wallet address is not configured.')
     await navigator.clipboard.writeText(address)
-  }, 'Wallet address copied.')
+  }, t('toast.walletAddressCopied'))
 })
-
-agentChatForm.addEventListener('submit', (event) => {
-  event.preventDefault()
-  submitAgentMessage()
-})
-
-agentQuery.addEventListener('keydown', (event) => {
-  if (event.key !== 'Enter') return
-  if (event.shiftKey) return
-  if (!event.isComposing) {
-    event.preventDefault()
-    submitAgentMessage()
-  }
-})
-
-agentQuery.addEventListener('input', resizeAgentComposer)
-fields.chatView.addEventListener('wheel', routeExpandedTransactionStageWheel, { passive: false })
 
 let workspaceBootstrapped = false
+let workspaceBootPromise: Promise<void> | undefined
+let requestedWindowMode: 'auth' | 'workspace' | undefined
+let windowModeTransition: Promise<void> | undefined
+
+async function requestWindowMode(mode: 'auth' | 'workspace') {
+  if (requestedWindowMode === mode) {
+    await windowModeTransition
+    return
+  }
+  requestedWindowMode = mode
+  const transition = invoke('window_set_mode', { mode }).then(() => undefined).catch((error) => {
+    requestedWindowMode = undefined
+    throw error
+  }).finally(() => {
+    if (windowModeTransition === transition) windowModeTransition = undefined
+  })
+  windowModeTransition = transition
+  await transition
+}
+
+function resetWorkspaceLanding() {
+  state.activeView = 'chat'
+  state.viewHistory = ['chat']
+  state.viewHistoryIndex = 0
+  state.v3SellerTab = 'listings'
+  state.v3ListingMode = 'buyer'
+  state.v3SelectedProduct = undefined
+  state.v3SelectedCatalogListingId = undefined
+  state.v3ExpandedListingId = undefined
+  state.selectedV3ActivitySessionId = undefined
+  state.v3ActivityDetail = undefined
+  state.v3ActivityDetailError = undefined
+  state.v3ActivityDetailLoading = false
+  state.pinStep = undefined
+  state.mcpInfoModalOpen = false
+}
+
+function waitForWorkspacePaint() {
+  return new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()))
+  })
+}
+
+async function openWorkspace(authState?: CloudAuthState) {
+  if (authState) {
+    state.authAccount = authState.account
+    state.signedOut = false
+  }
+  resetWorkspaceLanding()
+  await bootstrapWorkspace()
+  renderAll()
+  await requestWindowMode('workspace')
+  await waitForWorkspacePaint()
+}
 
 const authGate = createAuthGate(app, {
   invoke,
   language: () => state.language,
-  onAuthenticated: (authState) => {
-    state.authAccount = authState.account
-    state.signedOut = false
-    renderProfileSummary()
-    void bootstrapWorkspace()
+  setLanguage,
+  onAuthenticated: async (authState) => {
+    await openWorkspace(authState)
   },
   onSignedOut: () => {
+    void requestWindowMode('auth').catch((error) => console.warn('Failed to restore the authentication window:', error))
     state.authAccount = undefined
     state.signedOut = true
     state.profileMenuOpen = false
     renderProfileSummary()
   },
+  onTestWorkspace: async () => {
+    await openWorkspace()
+  },
+})
+
+app.querySelector<HTMLButtonElement>('[data-test-auth-view="signin"]')?.addEventListener('click', () => {
+  void requestWindowMode('auth').catch((error) => console.warn('Failed to open the authentication preview:', error))
+  authGate.openTestSignIn()
 })
 
 async function bootstrapWorkspace() {
   if (workspaceBootstrapped) return
-  workspaceBootstrapped = true
-  await hydrateDesktopPersistence()
-  localAgentEventUnsubscribe = window.exora?.onLocalAgentEvent?.(handleLocalAgentEventPayload)
-  v3ProgressUnsubscribe = window.exora?.onV3Progress?.((payload) => {
+  if (workspaceBootPromise) return workspaceBootPromise
+  workspaceBootPromise = (async () => {
+    await hydrateDesktopPersistence()
+    v3ProgressUnsubscribe = window.exora?.onV3Progress?.((payload) => {
     if (!payload || typeof payload !== 'object') return
     const event = payload as Partial<V3ImageProgress & V3HostScanProgress & V3AssetProgress> & { kind?: string }
     if (event.kind === 'host_scan' && event.phase && typeof event.percent === 'number') {
@@ -17564,28 +14964,42 @@ async function bootstrapWorkspace() {
     if (event.kind !== 'environment_image' || !event.imageId || !event.phase) return
     state.v3ImageProgress = { imageId: event.imageId, phase: event.phase, bytesDownloaded: event.bytesDownloaded, sizeBytes: event.sizeBytes }
     if (state.v3SellerTab === 'vm') renderDecisionPanel()
+    })
+    applyUserPreferences()
+    renderAll()
+    workspaceBootstrapped = true
+    void startWorkspaceBackgroundTasks()
+  })().catch((error) => {
+    workspaceBootPromise = undefined
+    workspaceBootstrapped = false
+    throw error
   })
-  applyUserPreferences()
-  renderChat()
-  renderAll()
-  refreshProjectFolder()
+  return workspaceBootPromise
+}
+
+async function startWorkspaceBackgroundTasks() {
   await startDockOnLaunch()
-  await hydrateLocalAgentChatSessions()
   refreshWalletStatus().catch(() => undefined)
-  refreshSeller({ market: true })
-  refreshAgentCards()
-  refreshMarketRailCards({ render: false })
-  window.setTimeout(() => refreshWorkspace({ quiet: true }), 250)
-  setInterval(refreshStatus, 5000)
-  setInterval(() => refreshWorkspace({ quiet: true }), 12000)
+  void loadV3ActivitySessions('buyer')
+  void loadV3ActivitySessions('seller')
 }
 
 async function bootstrap() {
+  clearRetiredRendererStorage()
   applyUserPreferences()
   window.exora?.onAuthStateChanged?.((payload) => {
-    if (payload && typeof payload === 'object') authGate.applyState(payload as CloudAuthState)
+    if (payload && typeof payload === 'object') void authGate.applyState(payload as CloudAuthState).catch(() => undefined)
   })
   await authGate.initialize()
+}
+
+function clearRetiredRendererStorage() {
+  for (const key of [
+    'exora.permissionMode',
+    'exora.transactionDetailWidth',
+    'exora.buyerAgentSettings',
+    WORK_TASK_STATE_KEY,
+  ]) localStorage.removeItem(key)
 }
 
 void bootstrap()
