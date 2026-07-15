@@ -6,7 +6,7 @@ require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/dgraph-io/badger/v4 v4.2.0
 	github.com/gagliardetto/solana-go v1.10.0
-	github.com/go-chi/chi/v5 v5.2.2
+	github.com/go-chi/chi/v5 v5.2.4
 	github.com/go-chi/cors v1.2.1
 	github.com/gorilla/websocket v1.5.3
 	golang.org/x/crypto v0.52.0
