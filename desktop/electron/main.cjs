@@ -51,7 +51,6 @@ let mainWindow
 let activeWindowMode = 'auth'
 let tray
 let appIsQuitting = false
-let sessionAccountKey = ''
 const cloudAuth = createCloudAuth({
   safeStorage,
   isPackaged: app.isPackaged,
@@ -61,9 +60,7 @@ const cloudAuth = createCloudAuth({
   writeState: writeDesktopState,
   configuredCloudURL,
   deviceName: () => `${app.getName()} on ${process.platform}`,
-  getPINStatus: payment_pin_status,
-  setPIN: async (pin, accountId) => set_payment_pin({ input: { pin, accountId } }),
-  verifyPIN: verify_payment_pin,
+	clearLocalPIN: async (paths) => fsp.rm(path.join(paths.dataDir, 'payment-pin.json'), { force: true }),
   ensureDockLink,
   clearDockLink,
   broadcast: (payload) => mainWindow?.webContents.send('exora:auth-state-changed', payload),
@@ -224,9 +221,11 @@ function createIpcHandlerGroups() {
       catalog_products,
       catalog_product,
       catalog_listings,
-      account_key_status,
-      account_key_save,
-      account_key_delete,
+      order_access_key_status,
+      order_access_key_create,
+      order_access_key_rotate,
+      order_access_key_revoke,
+      consumer_approval_decide,
       consumer_account_balance,
       consumer_purchase_estimate,
       consumer_invoke_operation,
@@ -283,6 +282,7 @@ function createIpcHandlerGroups() {
     },
     walletAndSecurity: {
       wallet_status,
+      wallet_spend_policy_save,
       wallet_create,
       wallet_unlock,
       wallet_restore,
@@ -319,12 +319,7 @@ async function window_set_mode(payload = {}) {
   if (mode !== activeWindowMode && !mainWindow.isMaximized() && !mainWindow.isFullScreen()) {
     const display = screen.getDisplayMatching(mainWindow.getBounds())
     const size = windowSizeForWorkArea(profile, display.workArea)
-    mainWindow.setBounds({
-      x: display.workArea.x + Math.max(0, Math.floor((display.workArea.width - size.width) / 2)),
-      y: display.workArea.y + Math.max(0, Math.floor((display.workArea.height - size.height) / 2)),
-      width: size.width,
-      height: size.height,
-    }, true)
+    mainWindow.setSize(size.width, size.height, true)
   }
 
   activeWindowMode = mode
@@ -538,38 +533,20 @@ async function set_locale(payload = {}) {
   }
 }
 
-async function payment_pin_status() {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  return httpJson('GET', '/v1/payment-pin/status', undefined, await localOwnerToken(paths))
-}
-
-async function set_payment_pin(payload) {
-  const input = payload?.input ?? {}
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  return httpJson('POST', '/v1/payment-pin/set', { pin: input.pin, accountId: input.accountId || '' }, await localOwnerToken(paths))
-}
-
-async function verify_payment_pin(pin, accountId) {
-  if (pin && typeof pin === 'object') {
-    const input = pin.input || pin
-    accountId = input.accountId
-    pin = input.pin
-  }
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  return httpJson('POST', '/v1/payment-pin/verify', { pin, accountId }, await localOwnerToken(paths))
-}
-
 async function wallet_status() {
-  const [balanceResult, addressResult, custodyResult, depositsResult, withdrawalsResult] = await Promise.all([
+	const [balanceResult, custodyResult, depositsResult, withdrawalsResult, spendPolicyResult] = await Promise.all([
     cloudAuth.apiRequest('GET', '/v3/billing/balance'),
-    cloudAuth.apiRequest('GET', '/v3/billing/deposit-address'),
     cloudAuth.apiRequest('GET', '/v3/billing/custody-status'),
     cloudAuth.apiRequest('GET', '/v3/billing/deposits'),
     cloudAuth.apiRequest('GET', '/v3/billing/withdrawals'),
+		cloudAuth.apiRequest('GET', '/v3/account/spend-policy'),
   ])
+	let addressResult = {}
+	try {
+		addressResult = await cloudAuth.apiRequest('GET', '/v3/billing/deposit-address')
+	} catch (error) {
+		if (Number(error?.status || 0) !== 423 && Number(error?.status || 0) !== 503) throw error
+	}
   const balance = objectOr(balanceResult.balance || balanceResult)
   const address = String(addressResult.address || '').trim()
   return {
@@ -595,8 +572,20 @@ async function wallet_status() {
       custody: custodyResult,
       deposits: Array.isArray(depositsResult.deposits) ? depositsResult.deposits : [],
       withdrawals: Array.isArray(withdrawalsResult.withdrawals) ? withdrawalsResult.withdrawals : [],
+			agentSpendPolicy: objectOr(spendPolicyResult.spendPolicy || spendPolicyResult),
     },
   }
+}
+
+async function wallet_spend_policy_save(payload = {}) {
+	const input = payload.input || {}
+	const pin = String(input.pin || '').trim()
+	if (!/^\d{6}$/.test(pin)) throw new Error('Payment PIN must be exactly 6 digits.')
+	const enabled = input.enabled === true
+	const singleLimitAtomic = Math.max(0, Math.trunc(Number(input.singleLimitAtomic || 0)))
+	const periodLimitAtomic = Math.max(0, Math.trunc(Number(input.periodLimitAtomic || 0)))
+	if (enabled && (!singleLimitAtomic || !periodLimitAtomic || periodLimitAtomic < singleLimitAtomic)) throw new Error('Enter positive limits and keep the 24-hour limit at least as large as the single-payment limit.')
+	return cloudAuth.apiRequest('PUT', '/v3/account/spend-policy', { enabled, singleLimitAtomic, periodLimitAtomic, periodSeconds: 86400, pin })
 }
 
 async function wallet_create() { throw new Error('Local Solana wallets are retired; Exora now uses platform custody.') }
@@ -608,12 +597,31 @@ async function wallet_withdraw(payload) {
   const challengeId = String(input.challengeId || '').trim()
   const quoteId = String(input.quoteId || '').trim()
   const code = String(input.code || '').trim()
+	if (input.resend === true) {
+		const quote = objectOr(input.quote)
+		const pin = String(input.pin || '').trim()
+		if (!quoteId || !String(quote.requestFingerprint || '') || !/^\d{6}$/.test(pin)) throw new Error('A valid quote and six-digit payment PIN are required to resend the code.')
+		const authorization = await cloudAuth.apiRequest('POST', '/v1/auth/payment-pin/authorizations', {
+			pin, purpose: 'withdrawal', requestFingerprint: String(quote.requestFingerprint),
+		})
+		const challenge = await cloudAuth.apiRequest('POST', '/v3/billing/withdrawal-challenges', {
+			quoteId, pinAuthorizationToken: authorization.authorizationToken,
+		})
+		return { quote, challenge, nextAction: 'enter_email_code' }
+	}
   if (!challengeId || !quoteId || !code) {
+	const pin = String(input.pin || '').trim()
+	if (!/^\d{6}$/.test(pin)) throw new Error('Payment PIN must be exactly 6 digits.')
     const quote = await cloudAuth.apiRequest('POST', '/v3/billing/withdrawal-quotes', {
       destination: String(input.toAddress || '').trim(),
       amountAtomic: Number(input.amountAtomic || 0),
     })
-    const challenge = await cloudAuth.apiRequest('POST', '/v3/billing/withdrawal-challenges', { quoteId: quote.quoteId })
+	const authorization = await cloudAuth.apiRequest('POST', '/v1/auth/payment-pin/authorizations', {
+		pin, purpose: 'withdrawal', requestFingerprint: String(quote.requestFingerprint || ''),
+	})
+	const challenge = await cloudAuth.apiRequest('POST', '/v3/billing/withdrawal-challenges', {
+		quoteId: quote.quoteId, pinAuthorizationToken: authorization.authorizationToken,
+	})
     return { quote, challenge, nextAction: 'enter_email_code' }
   }
   const withdrawal = await cloudAuth.apiRequest('POST', '/v3/billing/withdrawals', {
@@ -626,26 +634,16 @@ async function wallet_withdraw(payload) {
 }
 
 async function security_status() {
-  const paths = await dockPaths()
-  await ensureLocalLayout(paths)
-  let auth
-  try {
-    auth = await localAuthTokens(paths)
-  } catch {
-    auth = undefined
-  }
-  const token = await localOwnerToken(paths)
   let pin
   try {
-    pin = await httpJson('GET', '/v1/payment-pin/status', undefined, token)
+	  pin = await cloudAuth.apiRequest('GET', '/v1/auth/payment-pin')
   } catch (error) {
-    pin = { paymentPin: { configured: false, error: errorMessage(error) } }
+	  pin = { configured: false, error: errorMessage(error) }
   }
   return {
-    paymentPinConfigured: pin?.paymentPin?.configured === true,
-    ownerTokenPresent: Boolean(auth?.ownerToken),
-    agentTokenPresent: Boolean(auth?.agentToken),
-    authPath: authPathForConfig(paths),
+	  paymentPinConfigured: pin?.configured === true,
+	  paymentPinLockedUntil: String(pin?.lockedUntil || ''),
+	  cloudManaged: true,
   }
 }
 
@@ -1819,14 +1817,6 @@ async function cloudAbsoluteJSON(cloudURL, method, route, body, token = '', time
   return decoded
 }
 
-async function storedAccountKey(paths) {
-  if (sessionAccountKey) return sessionAccountKey
-  const state = await readDesktopState(paths)
-  const record = state.accountKey || {}
-  if (record.keyStorage !== 'safeStorage' || !record.encryptedKey || !safeStorage.isEncryptionAvailable()) return ''
-  try { return safeStorage.decryptString(Buffer.from(String(record.encryptedKey), 'base64')) } catch { return '' }
-}
-
 async function cloudConsumerJson(method, route, body, explicitKey = '') {
   const connection = await cloudAuth.connection()
   const key = String(explicitKey || connection.token).trim()
@@ -1849,51 +1839,43 @@ async function cloudConsumerJson(method, route, body, explicitKey = '') {
   return decoded
 }
 
-async function account_key_status() {
-  const paths = await dockPaths()
-  const state = await readDesktopState(paths)
-  const record = state.accountKey || {}
-  const secureConfigured = Boolean(record.encryptedKey && record.keyStorage === 'safeStorage' && safeStorage.isEncryptionAvailable())
-  const configured = Boolean(sessionAccountKey || secureConfigured)
-  return {
-    configured,
-    maskedKey: sessionAccountKey ? `exa_...${sessionAccountKey.slice(-6)}` : secureConfigured ? String(record.maskedKey || 'exa_...') : '',
-    savedAt: sessionAccountKey ? undefined : record.savedAt,
-    keyStorageAvailable: safeStorage.isEncryptionAvailable(),
-    storageMode: sessionAccountKey ? 'session' : secureConfigured ? 'safeStorage' : undefined,
-  }
+async function order_access_key_status(payload = {}) {
+	const id = String(payload?.input?.activitySessionId || '').trim()
+	if (!id) throw new Error('activitySessionId is required')
+	return cloudAuth.apiRequest('GET', `/v3/activity-sessions/${encodeURIComponent(id)}/access-key`)
 }
 
-async function account_key_save() {
-  const clipboardValue = clipboard.readText()
-  const key = String(clipboardValue || '').trim()
-  if (!/^exa_[a-f0-9]{64}$/i.test(key)) throw new Error('Clipboard does not contain a valid exa_ account key.')
-  const balance = await cloudConsumerJson('GET', '/v3/account/balance', undefined, key)
-  const paths = await dockPaths()
-  sessionAccountKey = ''
-  if (safeStorage.isEncryptionAvailable()) {
-    const state = await readDesktopState(paths)
-    state.accountKey = {
-      encryptedKey: safeStorage.encryptString(key).toString('base64'),
-      keyStorage: 'safeStorage',
-      maskedKey: `exa_...${key.slice(-6)}`,
-      savedAt: new Date().toISOString(),
-    }
-    await writeDesktopState(paths, state)
-  } else {
-    sessionAccountKey = key
-  }
-  if (clipboardValue.trim() === key) clipboard.clear()
-  return { ...(await account_key_status()), balance: balance.balance }
+async function issueOrderAccessKey(payload = {}, rotate = false) {
+	const input = payload.input || {}
+	const id = String(input.activitySessionId || '').trim()
+	const listingId = String(input.listingId || '').trim()
+	if (!id || !listingId) throw new Error('activitySessionId and listingId are required')
+	const suffix = rotate ? '/rotate' : ''
+	const response = await cloudAuth.apiRequest('POST', `/v3/activity-sessions/${encodeURIComponent(id)}/access-key${suffix}`, { listingId, allowedActions: Array.isArray(input.allowedActions) ? input.allowedActions : [] })
+	const token = String(response.token || '')
+	if (token) {
+		clipboard.writeText(token)
+		setTimeout(() => { if (clipboard.readText() === token) clipboard.clear() }, 60_000)
+	}
+	delete response.token
+	return { ...response, copied: Boolean(token) }
 }
 
-async function account_key_delete() {
-  sessionAccountKey = ''
-  const paths = await dockPaths()
-  const state = await readDesktopState(paths)
-  delete state.accountKey
-  await writeDesktopState(paths, state)
-  return { configured: false, maskedKey: '', keyStorageAvailable: safeStorage.isEncryptionAvailable() }
+async function order_access_key_create(payload = {}) { return issueOrderAccessKey(payload, false) }
+async function order_access_key_rotate(payload = {}) { return issueOrderAccessKey(payload, true) }
+async function order_access_key_revoke(payload = {}) {
+	const id = String(payload?.input?.activitySessionId || '').trim()
+	if (!id) throw new Error('activitySessionId is required')
+	return cloudAuth.apiRequest('DELETE', `/v3/activity-sessions/${encodeURIComponent(id)}/access-key`)
+}
+
+async function consumer_approval_decide(payload = {}) {
+	const input = payload.input || {}
+	const approvalId = String(input.approvalId || '').trim()
+	const decision = input.decision === 'reject' ? 'reject' : 'approve'
+	const pin = String(input.pin || '').trim()
+	if (!approvalId || !/^\d{6}$/.test(pin)) throw new Error('Approval and a six-digit payment PIN are required.')
+	return cloudAuth.apiRequest('POST', `/v3/approvals/${encodeURIComponent(approvalId)}/${decision}`, { pin })
 }
 
 async function consumer_account_balance() { return cloudConsumerJson('GET', '/v3/account/balance') }

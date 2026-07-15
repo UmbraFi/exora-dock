@@ -17,7 +17,7 @@ export type CloudAuthState = {
 }
 
 type Invoke = <T = unknown>(command: string, payload?: Record<string, unknown>) => Promise<T>
-type AuthView = 'login' | 'register' | 'registration-code' | 'forgot' | 'reset-code' | 'pin' | 'pin-change' | 'pin-reset'
+type AuthView = 'login' | 'register' | 'registration-code' | 'forgot' | 'reset-code' | 'pin-change' | 'pin-reset' | 'pin-reset-code'
 
 type AuthGateOptions = {
   invoke: Invoke
@@ -59,6 +59,7 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
   let status: CloudAuthState = { phase: 'loading' }
   let challenge: Challenge | undefined
   let resetEmail = ''
+	let pinResetPassword = ''
   let busy = false
   let message = ''
   let messageTone: 'error' | 'info' = 'info'
@@ -87,7 +88,8 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
     const c = copy()
     featureObserver?.disconnect()
     featureObserver = undefined
-    element.classList.toggle('hidden', testWorkspacePreview || (status.phase === 'authenticated' && !forceOpen && !workspaceOpening && !workspaceError))
+    const workspaceSession = status.phase === 'authenticated' || status.phase === 'needs_pin'
+    element.classList.toggle('hidden', testWorkspacePreview || (workspaceSession && !forceOpen && !workspaceOpening && !workspaceError))
     if (workspaceOpening) {
       element.innerHTML = authFrame(`<div class="auth-loading"><span class="auth-spinner"></span><p>${c.openingWorkspace}</p></div>`, c)
       bind()
@@ -105,11 +107,6 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
     }
     if (status.phase === 'configuration_error') {
       element.innerHTML = authFrame(renderStateNotice(c.cloudConfiguration, status.error?.message || c.cloudConfigurationDetail, 'auth_retry', c.retry, c), c)
-      bind()
-      return
-    }
-    if (status.phase === 'needs_pin' || view === 'pin') {
-      element.innerHTML = authFrame(renderPIN(c), c)
       bind()
       return
     }
@@ -212,6 +209,7 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
   function renderCurrentView(c: typeof enCopy) {
     if (view === 'pin-change') return renderPINChange(c)
     if (view === 'pin-reset') return renderPINReset(c)
+	if (view === 'pin-reset-code') return renderPINResetCode(c)
     if (view === 'register') return renderRegister(c)
     if (view === 'registration-code') return renderRegistrationCode(c)
     if (view === 'forgot') return renderForgot(c)
@@ -248,11 +246,7 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
           ${field('password', c.password, 'password', 'new-password', c.passwordRules)}
           ${field('passwordConfirm', c.confirmPassword, 'password', 'new-password', c.confirmPassword)}
         </div>
-        <div class="auth-field-grid">
-          ${field('pin', c.paymentPin, 'password', 'off', c.pinPlaceholder, 'numeric', 6)}
-          ${field('pinConfirm', c.confirmPin, 'password', 'off', c.pinPlaceholder, 'numeric', 6)}
-        </div>
-        <button class="auth-primary" type="submit" ${busy ? 'disabled' : ''}>${busy ? c.sendingCode : c.verifyEmail}</button>
+		<button class="auth-primary" type="submit" ${busy ? 'disabled' : ''}>${busy ? c.sendingCode : c.verifyEmail}</button>
       </form>
       <p class="auth-switch">${c.haveAccount} <button type="button" data-auth-action="login">${c.signIn}</button></p>
     `
@@ -303,19 +297,6 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
     `
   }
 
-  function renderPIN(c: typeof enCopy) {
-    return `
-      <div class="auth-heading"><span>${c.securityStep}</span><h1>${c.pinTitle}</h1><p>${c.pinSetupDetail}</p></div>
-      ${renderMessage()}
-      <form class="auth-form" data-auth-form="pin">
-        ${field('pin', c.paymentPin, 'password', 'off', c.pinPlaceholder, 'numeric', 6)}
-        ${field('pinConfirm', c.confirmPin, 'password', 'off', c.pinPlaceholder, 'numeric', 6)}
-        <button class="auth-primary" type="submit" ${busy ? 'disabled' : ''}>${busy ? c.working : c.finishSetup}</button>
-      </form>
-      <button class="auth-secondary" type="button" data-auth-action="logout">${c.useAnotherAccount}</button>
-    `
-  }
-
   function renderPINChange(c: typeof enCopy) {
     return `
       <button class="auth-back" type="button" data-auth-action="close-pin">← ${c.backToWorkspace}</button>
@@ -340,14 +321,27 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
       ${renderMessage()}
       <form class="auth-form" data-auth-form="pin-reset">
         ${field('password', c.password, 'password', 'current-password', c.passwordPlaceholder)}
-        <div class="auth-field-grid">
-          ${field('newPIN', c.newPin, 'password', 'off', c.pinPlaceholder, 'numeric', 6)}
-          ${field('pinConfirm', c.confirmPin, 'password', 'off', c.pinPlaceholder, 'numeric', 6)}
-        </div>
-        <button class="auth-primary" type="submit" ${busy ? 'disabled' : ''}>${busy ? c.working : c.resetPin}</button>
+		<button class="auth-primary" type="submit" ${busy ? 'disabled' : ''}>${busy ? c.sendingCode : c.sendResetCode}</button>
       </form>
     `
   }
+
+	function renderPINResetCode(c: typeof enCopy) {
+	  return `
+		<button class="auth-back" type="button" data-auth-action="pin-reset">鈫?${c.backToPinChange}</button>
+		<div class="auth-heading"><span>${c.emailVerification}</span><h1>${c.resetPinTitle}</h1><p>${c.verifyDetail.replace('{email}', challenge?.email || status.account?.email || '')}</p></div>
+		${renderMessage()}
+		<form class="auth-form" data-auth-form="pin-reset-code">
+		  ${codeField(c)}
+		  <div class="auth-field-grid">
+			${field('newPIN', c.newPin, 'password', 'off', c.pinPlaceholder, 'numeric', 6)}
+			${field('pinConfirm', c.confirmPin, 'password', 'off', c.pinPlaceholder, 'numeric', 6)}
+		  </div>
+		  <button class="auth-primary" type="submit" ${busy ? 'disabled' : ''}>${busy ? c.working : c.resetPin}</button>
+		</form>
+		${renderResend(c)}
+	  `
+	}
 
   function renderStateNotice(title: string, detail: string, action: string, label: string, c: typeof enCopy, allowContinue = false) {
     return `
@@ -529,11 +523,13 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
       else await enterWorkspacePreview(true)
       return
     }
-    if (action === 'resend') {
+	if (action === 'resend') {
       await run(async () => {
         if (view === 'registration-code') {
           challenge = await options.invoke<Challenge>('auth_registration_start', { input: { resend: true, locale: options.language() } })
-        } else {
+		} else if (view === 'pin-reset-code') {
+		  challenge = await options.invoke<Challenge>('auth_pin_reset', { input: { password: pinResetPassword, locale: options.language() } })
+		} else {
           challenge = await options.invoke<Challenge>('auth_password_reset_start', { input: { email: resetEmail, locale: options.language() } })
         }
         scheduleResend(challenge)
@@ -579,17 +575,27 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
       } })))
       return
     }
-    if (formName === 'pin') {
-      await run(async () => applyState(await options.invoke<CloudAuthState>('auth_pin_set', { input: data })))
-      return
-    }
     if (formName === 'pin-change') {
       await run(async () => applyState(await options.invoke<CloudAuthState>('auth_pin_change', { input: data })))
       return
     }
-    if (formName === 'pin-reset') {
-      await run(async () => applyState(await options.invoke<CloudAuthState>('auth_pin_reset', { input: data })))
-    }
+	if (formName === 'pin-reset') {
+	  await run(async () => {
+		pinResetPassword = data.password
+		challenge = await options.invoke<Challenge>('auth_pin_reset', { input: { password: data.password, locale: options.language() } })
+		scheduleResend(challenge)
+		form.reset()
+		view = 'pin-reset-code'
+	  })
+	  return
+	}
+	if (formName === 'pin-reset-code') {
+	  await run(async () => {
+		const next = await options.invoke<CloudAuthState>('auth_pin_reset', { input: { ...data, challengeId: challenge?.challengeId } })
+		pinResetPassword = ''
+		await applyState(next)
+	  })
+	}
   }
 
   async function run(task: () => Promise<void>) {
@@ -611,7 +617,7 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
   async function applyState(next: CloudAuthState) {
     status = next
     testWorkspacePreview = false
-    if (next.phase === 'authenticated') {
+    if (next.phase === 'authenticated' || next.phase === 'needs_pin') {
       await enterWorkspace(next)
       return
     }
@@ -620,7 +626,6 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
       view = 'login'
       options.onSignedOut?.(next)
     }
-    if (next.phase === 'needs_pin') view = 'pin'
     render()
   }
 
@@ -764,7 +769,10 @@ function shieldIcon() {
 
 function humanError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error || 'Authentication failed.')
-  return message.replace(/^Error invoking remote method '[^']+':\s*/i, '').replace(/^Error:\s*/i, '')
+  return message
+    .replace(/^Error invoking remote method '[^']+':\s*/i, '')
+    .replace(/^CloudAuthError:\s*/i, '')
+    .replace(/^Error:\s*/i, '')
 }
 
 function escapeHTML(value: unknown) {
@@ -818,7 +826,7 @@ const enCopy = {
   showPassword: 'Show password', hidePassword: 'Hide password', securityNoticeTitle: 'Account and payment security', securityNoticeDetail: 'Sign-in credentials and payment PIN are managed by Exora Cloud. Sensitive actions still require verification.',
   noAccount: 'New to Exora?', createAccount: 'Create an account', orContinue: 'or continue with',
   backToSignIn: 'Back to sign in', registrationEyebrow: 'CREATE YOUR ACCOUNT', createTitle: 'Set up Exora Dock',
-  createDetail: 'Verify your email, choose a strong password, and protect payments with a six-digit PIN.',
+  createDetail: 'Verify your email and choose a strong password. You will set a six-digit payment PIN after verification.',
   confirmPassword: 'Confirm password', passwordRules: '10–128 characters', paymentPin: 'Six-digit payment PIN', confirmPin: 'Confirm PIN',
   pinPlaceholder: '6 digits',
   sendingCode: 'Sending code…', verifyEmail: 'Verify email', haveAccount: 'Already have an account?',
@@ -880,7 +888,7 @@ const zhCopy: typeof enCopy = {
   showPassword: '显示密码', hidePassword: '隐藏密码', securityNoticeTitle: '账号与支付安全', securityNoticeDetail: '登录凭据与支付 PIN 由 Exora Cloud 统一管理，执行敏感操作前仍需完成身份验证。',
   noAccount: '第一次使用 Exora？', createAccount: '创建账号', orContinue: '或使用以下方式继续',
   backToSignIn: '返回登录', registrationEyebrow: '创建你的账号', createTitle: '设置 Exora Dock',
-  createDetail: '验证邮箱、设置安全密码，并使用六位 PIN 保护支付。',
+  createDetail: '先验证邮箱并设置安全密码，验证完成后再设置六位支付 PIN。',
   confirmPassword: '确认密码', passwordRules: '10–128 个字符', paymentPin: '六位支付 PIN', confirmPin: '确认 PIN',
   pinPlaceholder: '6 位数字',
   sendingCode: '正在发送验证码…', verifyEmail: '验证邮箱', haveAccount: '已经有账号？',

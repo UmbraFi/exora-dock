@@ -1,5 +1,6 @@
 import { invoke } from './bridge'
 import { createAuthGate, type CloudAuthAccount, type CloudAuthState } from './auth-ui'
+import { localActivityDetailForSession, localActivitySessionsForRole } from './activity-fixtures'
 import {
   htmlLangForLanguage,
   initialI18nLanguage,
@@ -181,7 +182,7 @@ type V3CatalogListing = {
   availability?: Record<string, unknown>
   ownerMetadata?: { providerDockId?: string; isOwner?: boolean }
 }
-type V3AccountKeyStatus = { configured: boolean; maskedKey?: string; savedAt?: string; keyStorageAvailable: boolean; storageMode?: 'safeStorage' | 'session' }
+type OrderAccessKeyStatus = { tokenId?: string; status?: string; credentialKind?: 'order_key'; activitySessionId?: string; listingId?: string; allowedActions?: string[]; maskedKey?: string; createdAt?: string; lastUsedAt?: string; expiresAt?: string; revokedAt?: string }
 type V3ConsumerBalance = { accountId?: string; asset: string; availableAtomic: number; reservedAtomic: number; pendingAtomic: number }
 type V3LocalEndpoint = { endpointId: string; localBaseUrl: string; healthPath: string; routeFingerprint: string; lastProbeHealthy: boolean; lastProbeAt?: string; timeoutSeconds: number; concurrency: number }
 
@@ -193,10 +194,12 @@ type V3ActivitySession = {
   productId: string
   listingId: string
   productTitle: string
+  counterpartyId?: string
   counterpartyLabel: string
   status: string
   outcome: string
   attentionRequired: boolean
+  inFlightCount?: number
   itemCount: number
   amountAtomic: number
   grossAmountAtomic: number
@@ -205,6 +208,35 @@ type V3ActivitySession = {
   startedAt: string
   updatedAt: string
   endedAt?: string
+  retainUntil?: string
+}
+
+type V3ActivityBucket = 'current' | 'history'
+
+type V3ActivityArchiveMarker = {
+  id: string
+  archiveKey: string
+  role: OrderSide
+  productKind: string
+  archivedAt: string
+  archivedThrough: string
+  records: V3ActivitySession[]
+  baselines: V3ActivitySession[]
+  detailAfterBySession?: Record<string, string>
+}
+
+type V3ActivityDisplayRecord = V3ActivitySession & {
+  displayId: string
+  archiveKey: string
+  bucket: V3ActivityBucket
+  sessionIds: string[]
+  sourceRecords: V3ActivitySession[]
+  baselineRecords: V3ActivitySession[]
+  canArchive: boolean
+  manuallyArchived: boolean
+  archiveMarkerId?: string
+  detailAfterBySession?: Record<string, string>
+  detailThroughBySession?: Record<string, string>
 }
 
 type V3ActivityInvocation = {
@@ -223,7 +255,7 @@ type V3ActivityDetail = V3ActivitySession & {
   operations?: string[]
   usage?: Record<string, number>
   invocations?: V3ActivityInvocation[]
-  events?: Array<{ eventId: string; type: string; status: string; title: string; detail: string; occurredAt: string }>
+  events?: Array<{ eventId: string; approvalId?: string; type: string; status: string; title: string; detail: string; occurredAt: string }>
   identifiers?: Record<string, string>
   delivery?: Record<string, any>
   purchases?: Array<Record<string, any>>
@@ -244,7 +276,8 @@ type V3APIMaterial = { id: string; name: string; extension: string; sizeBytes: n
 type V3APIBridgeDraft = { draftId: string; version: number; status: string; bridgeMode?: 'transparent' | 'dock_tunnel'; title: string; description: string; protocol: V3APIBridgeProtocol; baseUrl: string; healthPath: string; routes: Array<{ routeId: string; operationId: string; method: string; path: string; displayName: string; pricing: V3APIPricingComponent[]; maxChargePerInvocationAtomic: number }>; agentNotes?: string; unresolvedFields?: string[] }
 type V3APIProbe = { ok: boolean; status?: number; latencyMs?: number; contentType?: string; checkedURL?: string; checkedAt?: string; error?: string }
 type SettingsView = 'security'
-type WalletPanel = 'receive' | 'withdraw' | 'key'
+type WalletPanel = 'receive' | 'withdraw' | 'agent-limit' | 'history'
+type WalletHistoryFilter = 'all' | 'deposit' | 'withdrawal'
 type AppTheme = 'light' | 'dark'
 type LLMTestStatus = 'passed' | 'failed'
 type ProfileSubmenu = 'language' | 'theme'
@@ -378,6 +411,7 @@ type PersistedAppSettings = {
   workOrderSide?: OrderSide
   sidebarCollapsed?: boolean
   sidebarWidth?: number
+  activityArchiveMarkers?: V3ActivityArchiveMarker[]
 }
 
 type DesktopConversationRecord = {
@@ -659,22 +693,57 @@ type WalletStatus = {
   usdcMint?: string
   balances?: Record<string, { amountAtomic?: number; decimals?: number; currency?: string; mint?: string; status?: string; updatedAt?: string }>
   feePolicy?: { currency?: string; relayFeeAtomic?: number; relayFeeDescription?: string; gasPaidBy?: string }
+	custody?: { mode?: string; depositsPaused?: boolean; withdrawalsPaused?: boolean; signerPaused?: boolean; accountFrozen?: boolean }
+	deposits?: WalletDeposit[]
+	withdrawals?: WalletWithdrawal[]
+	agentSpendPolicy?: AgentSpendPolicy
+}
+
+type AgentSpendPolicy = {
+	accountId?: string
+	enabled: boolean
+	singleLimitAtomic: number
+	periodLimitAtomic: number
+	periodSeconds: number
+	periodStartedAt?: string
+	spentAtomic: number
+	updatedAt?: string
+}
+
+type WalletDeposit = {
+	depositId?: string
+	amountAtomic?: number
+	signature?: string
+	status?: string
+	network?: string
+	mint?: string
+	detectedAt?: string
+	finalizedAt?: string
+	creditedAt?: string
 }
 
 type WalletWithdrawal = {
+	withdrawalId?: string
   fromAddress?: string
   toAddress?: string
+	destination?: string
   amountAtomic?: number
   currency?: string
   decimals?: number
   signature?: string
-  status?: string
+	status?: string
+	createdAt?: string
+	updatedAt?: string
+	finalizedAt?: string
+	networkFeeAtomic?: number
+	serviceFeeAtomic?: number
+	totalFeeAtomic?: number
 }
 
 type WalletWithdrawalResponse = {
   withdrawal?: WalletWithdrawal
-  quote?: { quoteId: string; amountAtomic?: number; networkFeeAtomic?: number; serviceFeeAtomic?: number; totalFeeAtomic?: number; netAmountAtomic?: number; expiresAt?: string }
-  challenge?: { challengeId: string; expiresAt?: string; email?: string }
+	quote?: { quoteId: string; requestFingerprint?: string; amountAtomic?: number; networkFeeAtomic?: number; serviceFeeAtomic?: number; totalFeeAtomic?: number; netAmountAtomic?: number; expiresAt?: string }
+	challenge?: { challengeId: string; expiresAt?: string; resendAfter?: string; email?: string }
   nextAction?: string
   feePolicy?: WalletStatus['feePolicy']
 }
@@ -875,6 +944,7 @@ const toolbarIcons = {
   hand: icon(Hand),
   refresh: icon(RefreshCw),
   monitor: icon(Activity),
+  archive: icon(Archive),
   emptyContent: icon(Inbox),
   authTest: icon(KeyRound),
 }
@@ -1114,50 +1184,73 @@ app.innerHTML = `
                     <span class="wallet-panel-icon wallet-panel-icon-send">${toolbarIcons.forward}</span>
                     <span><strong>Withdraw</strong><small>Send to a wallet</small></span>
                   </button>
-                  <button class="wallet-panel-tab" id="wallet-tab-key" type="button" role="tab" aria-selected="false" aria-controls="wallet-panel-key" data-wallet-tab="key">
-                    <span class="wallet-panel-icon wallet-panel-icon-key">${icon(KeyRound)}</span>
-                    <span><strong>Account key</strong><small>Cloud access</small></span>
-                    <em class="wallet-status-pill" data-account-key-state>checking</em>
+                  <button class="wallet-panel-tab" id="wallet-tab-agent-limit" type="button" role="tab" aria-selected="false" aria-controls="wallet-panel-agent-limit" data-wallet-tab="agent-limit">
+                    <span class="wallet-panel-icon wallet-panel-icon-limit">${icon(ShieldCheck)}</span>
+                    <span><strong>Agent limit</strong><small>Automatic payments</small></span>
+                    <em class="wallet-status-pill" data-wallet-limit-state>off</em>
+                  </button>
+                  <button class="wallet-panel-tab" id="wallet-tab-history" type="button" role="tab" aria-selected="false" aria-controls="wallet-panel-history" data-wallet-tab="history">
+                    <span class="wallet-panel-icon wallet-panel-icon-history">${icon(Activity)}</span>
+                    <span><strong>History</strong><small>Deposits and withdrawals</small></span>
                   </button>
                 </nav>
               </section>
 
               <div class="wallet-panel-stage">
                 <section class="wallet-panel wallet-receive-panel" id="wallet-panel-receive" role="tabpanel" aria-labelledby="wallet-tab-receive" data-wallet-panel="receive" data-wallet-receive>
-                  <div class="wallet-receive-body">
-                    <div class="wallet-qr" data-wallet-qr><span>QR</span></div>
-                  </div>
-                  <div class="wallet-receive-details">
-                    <div class="wallet-receive-meta">
-                      <span>Solana · USDC</span>
-                      <p>Only send USDC on Solana to this address.</p>
+                  <header class="wallet-panel-heading wallet-receive-heading">
+                    <div><span>RECEIVE USDC</span><h3>Fund your Exora wallet</h3><p>Scan the QR code or copy your personal deposit address.</p></div>
+                    <span class="wallet-panel-badge"><i aria-hidden="true"></i>Solana network</span>
+                  </header>
+                  <div class="wallet-receive-layout">
+                    <div class="wallet-receive-body">
+                      <div class="wallet-qr" data-wallet-qr><span>QR</span></div>
                     </div>
-                    <div class="wallet-address-row">
-                      <div><span>Deposit address</span><code data-wallet-address>not configured</code></div>
-                      <button type="button" data-action="wallet-copy-address" aria-label="Copy wallet address" title="Copy address">${toolbarIcons.copy}</button>
+                    <div class="wallet-receive-details">
+                      <div class="wallet-receive-meta">
+                        <span>USDC on Solana</span>
+                        <p>Only send native USDC on Solana. Other assets or networks cannot be recovered.</p>
+                      </div>
+                      <div class="wallet-address-row">
+                        <div><span>Your deposit address</span><code data-wallet-address>not configured</code></div>
+                        <button type="button" data-action="wallet-copy-address" aria-label="Copy wallet address" title="Copy address">${toolbarIcons.copy}</button>
+                      </div>
                     </div>
                   </div>
                 </section>
 
-                  <section class="wallet-panel wallet-withdraw-panel hidden" id="wallet-panel-withdraw" role="tabpanel" aria-labelledby="wallet-tab-withdraw" data-wallet-panel="withdraw">
+                <section class="wallet-panel wallet-withdraw-panel hidden" id="wallet-panel-withdraw" role="tabpanel" aria-labelledby="wallet-tab-withdraw" data-wallet-panel="withdraw">
+                    <header class="wallet-panel-heading wallet-withdraw-heading">
+                      <div><span>SECURE TRANSFER</span><h3>Withdraw USDC</h3><p>Confirm the transfer with your Cloud PIN, then enter the code sent to your email.</p></div>
+                      <span class="wallet-panel-badge">PIN + Email</span>
+                    </header>
                     <form class="wallet-withdraw-form" data-wallet-withdraw-form>
                       <label class="wallet-field wallet-destination-field">
                         <span>Destination address</span>
                         <input name="toAddress" type="text" spellcheck="false" autocomplete="off" placeholder="Solana address" required />
                       </label>
-                      <div class="wallet-withdraw-fields">
+					  <div class="wallet-withdraw-fields">
                         <label class="wallet-field wallet-amount-field">
                           <span>Amount</span>
                           <div><input name="amount" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" required /><button type="button" data-action="wallet-withdraw-max">Max</button></div>
                         </label>
-                        <label class="wallet-field">
+						<label class="wallet-field wallet-code-field">
+						  <span>Cloud payment PIN</span>
+                          <span class="wallet-code-control masked" data-wallet-code-control>
+                            <input name="paymentPin" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="6" aria-label="Six digit Cloud payment PIN" required />
+                            <span class="wallet-code-cells" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>
+                          </span>
+                          <small>Required to request the email code</small>
+						</label>
+						<label class="wallet-field wallet-code-field">
                           <span>Email verification code</span>
-                          <span class="wallet-pin-control" data-wallet-pin-control>
+                          <span class="wallet-code-control plain" data-wallet-code-control>
                             <input name="emailCode" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" maxlength="6" aria-label="Six digit email verification code" />
-                            <span class="wallet-pin-cells" aria-hidden="true">
+                            <span class="wallet-code-cells" aria-hidden="true">
                               <i></i><i></i><i></i><i></i><i></i><i></i>
                             </span>
                           </span>
+                          <small>Available after PIN authorization</small>
                         </label>
                       </div>
                       <div class="wallet-withdraw-footer">
@@ -1165,20 +1258,34 @@ app.innerHTML = `
                         <button type="submit" data-wallet-withdraw-submit>Authorize withdrawal</button>
                       </div>
                     </form>
-                    <div class="wallet-withdraw-status hidden" data-wallet-withdraw-status aria-live="polite"></div>
-                  </section>
+					<div class="wallet-withdraw-status hidden" data-wallet-withdraw-status aria-live="polite"></div>
+				</section>
 
-                  <section class="wallet-panel wallet-key-panel account-key-section hidden" id="wallet-panel-key" role="tabpanel" aria-labelledby="wallet-tab-key" data-wallet-panel="key" data-account-key-section>
-                    <div class="account-key-status" data-account-key-status></div>
-                    <div class="account-key-form">
-                      <p>Copy an <code>exa_...</code> key first. Validation happens inside the secure main process and the raw key never enters this page.</p>
-                      <div class="wallet-key-actions">
-                        <button type="button" data-account-key-save>Validate from clipboard</button>
-                        <button class="secondary danger" type="button" data-account-key-delete>Delete key</button>
-                      </div>
+                <section class="wallet-panel wallet-agent-limit-panel hidden" id="wallet-panel-agent-limit" role="tabpanel" aria-labelledby="wallet-tab-agent-limit" data-wallet-panel="agent-limit">
+                  <header class="wallet-panel-heading">
+                    <div><span>AGENT PAYMENT POLICY</span><h3>Automatic payment limits</h3><p>Agent purchases proceed automatically only while both limits remain available. Manual purchases are not counted.</p></div>
+                    <label class="wallet-limit-toggle"><input type="checkbox" data-wallet-limit-enabled /><span></span><strong>Enable</strong></label>
+                  </header>
+                  <div class="wallet-limit-usage" data-wallet-limit-usage></div>
+                  <form class="wallet-limit-form" data-wallet-limit-form>
+                    <label class="wallet-field"><span>Per payment limit</span><div class="wallet-money-input"><input name="singleLimit" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" /><em>USDC</em></div></label>
+                    <label class="wallet-field"><span>24-hour limit</span><div class="wallet-money-input"><input name="periodLimit" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" /><em>USDC</em></div></label>
+                    <label class="wallet-field wallet-code-field"><span>Cloud payment PIN</span><span class="wallet-code-control masked" data-wallet-code-control><input name="paymentPin" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="6" aria-label="Six digit Cloud payment PIN" /><span class="wallet-code-cells" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span></span><small>Required to save this policy</small></label>
+                    <div class="wallet-limit-actions"><span data-wallet-limit-error aria-live="polite"></span><button type="submit" data-wallet-limit-save>Save limits</button></div>
+                  </form>
+                </section>
+
+                <section class="wallet-panel wallet-history-panel hidden" id="wallet-panel-history" role="tabpanel" aria-labelledby="wallet-tab-history" data-wallet-panel="history">
+                  <header class="wallet-panel-heading wallet-history-heading">
+                    <div><span>FUNDS ACTIVITY</span><h3>Deposits and withdrawals</h3><p>Wallet funding activity only. Marketplace purchases remain in order history.</p></div>
+                    <div class="wallet-history-filters" role="group" aria-label="History filter">
+                      <button class="active" type="button" data-wallet-history-filter="all">All</button>
+                      <button type="button" data-wallet-history-filter="deposit">Deposits</button>
+                      <button type="button" data-wallet-history-filter="withdrawal">Withdrawals</button>
                     </div>
-                    <p class="account-key-storage-note" data-account-key-storage-note></p>
-                  </section>
+                  </header>
+                  <section class="wallet-history" data-wallet-history aria-live="polite"></section>
+                </section>
               </div>
             </div>
           </section>
@@ -1229,26 +1336,26 @@ app.innerHTML = `
           <div class="app-modal-head-copy">
             <span class="app-modal-head-mark" aria-hidden="true">${icon(KeyRound)}</span>
             <div>
-              <p class="eyebrow">Account security</p>
-              <h2 id="pin-settings-title">Change payment PIN</h2>
-              <span>Enter your current PIN, then choose a new six-digit PIN.</span>
+              <p class="eyebrow" data-pin-settings-eyebrow>Account security</p>
+              <h2 id="pin-settings-title" data-pin-settings-title>Change payment PIN</h2>
+              <span data-pin-settings-detail>Enter your current PIN, then choose a new six-digit PIN.</span>
             </div>
           </div>
           <button class="app-modal-close" type="button" data-pin-settings-action="close" aria-label="Close PIN settings" title="Close">${windowIcons.close}</button>
         </header>
         <form class="pin-settings-form" data-pin-settings-form>
-          <label><span>Current PIN</span><input name="currentPIN" type="password" inputmode="numeric" autocomplete="off" maxlength="6" pattern="[0-9]{6}" required /></label>
+          <label data-pin-settings-current><span>Current PIN</span><input name="currentPIN" type="password" inputmode="numeric" autocomplete="off" maxlength="6" pattern="[0-9]{6}" required /></label>
           <div class="pin-settings-grid">
-            <label><span>New PIN</span><input name="newPIN" type="password" inputmode="numeric" autocomplete="off" maxlength="6" pattern="[0-9]{6}" required /></label>
-            <label><span>Confirm new PIN</span><input name="pinConfirm" type="password" inputmode="numeric" autocomplete="off" maxlength="6" pattern="[0-9]{6}" required /></label>
+            <label><span data-pin-settings-pin-label>New PIN</span><input name="newPIN" type="password" inputmode="numeric" autocomplete="new-password" maxlength="6" pattern="[0-9]{6}" required /></label>
+            <label><span data-pin-settings-confirm-label>Confirm new PIN</span><input name="pinConfirm" type="password" inputmode="numeric" autocomplete="new-password" maxlength="6" pattern="[0-9]{6}" required /></label>
           </div>
           <p class="pin-settings-message" data-pin-settings-message aria-live="polite"></p>
           <div class="pin-settings-actions">
-            <button class="secondary" type="button" data-pin-settings-action="close">Cancel</button>
+            <button class="secondary" type="button" data-pin-settings-action="close" data-pin-settings-cancel>Cancel</button>
             <button type="submit" data-pin-settings-submit>Change PIN</button>
           </div>
         </form>
-        <footer class="app-modal-footer"><span>PIN changes apply to sensitive account actions.</span><span><kbd>Esc</kbd> to close</span></footer>
+        <footer class="app-modal-footer"><span data-pin-settings-footer>PIN changes apply to sensitive account actions.</span><span data-pin-settings-escape><kbd>Esc</kbd> to close</span></footer>
       </section>
     </div>
 
@@ -1341,8 +1448,17 @@ const fields = {
   orderSearchCount: app.querySelector<HTMLElement>('[data-order-search-count]')!,
   pinSettingsModal: app.querySelector<HTMLElement>('[data-pin-settings-modal]')!,
   pinSettingsForm: app.querySelector<HTMLFormElement>('[data-pin-settings-form]')!,
+  pinSettingsEyebrow: app.querySelector<HTMLElement>('[data-pin-settings-eyebrow]')!,
+  pinSettingsTitle: app.querySelector<HTMLElement>('[data-pin-settings-title]')!,
+  pinSettingsDetail: app.querySelector<HTMLElement>('[data-pin-settings-detail]')!,
+  pinSettingsCurrent: app.querySelector<HTMLElement>('[data-pin-settings-current]')!,
+  pinSettingsPINLabel: app.querySelector<HTMLElement>('[data-pin-settings-pin-label]')!,
+  pinSettingsConfirmLabel: app.querySelector<HTMLElement>('[data-pin-settings-confirm-label]')!,
   pinSettingsMessage: app.querySelector<HTMLElement>('[data-pin-settings-message]')!,
   pinSettingsSubmit: app.querySelector<HTMLButtonElement>('[data-pin-settings-submit]')!,
+  pinSettingsCancel: app.querySelector<HTMLButtonElement>('[data-pin-settings-cancel]')!,
+  pinSettingsFooter: app.querySelector<HTMLElement>('[data-pin-settings-footer]')!,
+  pinSettingsEscape: app.querySelector<HTMLElement>('[data-pin-settings-escape]')!,
   mcpInfoModal: app.querySelector<HTMLElement>('[data-mcp-info-modal]')!,
   mcpInfoTitle: app.querySelector<HTMLElement>('[data-mcp-info-title]')!,
   mcpInfoSubtitle: app.querySelector<HTMLElement>('[data-mcp-info-subtitle]')!,
@@ -1372,11 +1488,18 @@ const fields = {
   walletFeeNote: app.querySelector<HTMLElement>('[data-wallet-fee-note]')!,
   walletCopyButton: app.querySelector<HTMLButtonElement>('[data-action="wallet-copy-address"]')!,
   walletWithdrawForm: app.querySelector<HTMLFormElement>('[data-wallet-withdraw-form]')!,
-  walletPinControl: app.querySelector<HTMLElement>('[data-wallet-pin-control]')!,
-  walletPinInput: app.querySelector<HTMLInputElement>('input[name="emailCode"]')!,
-  walletPinCells: Array.from(app.querySelectorAll<HTMLElement>('.wallet-pin-cells > i')),
+  walletCodeControls: Array.from(app.querySelectorAll<HTMLElement>('[data-wallet-code-control]')),
+  walletEmailCodeInput: app.querySelector<HTMLInputElement>('input[name="emailCode"]')!,
   walletWithdrawButton: app.querySelector<HTMLButtonElement>('[data-wallet-withdraw-submit]')!,
   walletWithdrawStatus: app.querySelector<HTMLElement>('[data-wallet-withdraw-status]')!,
+  walletLimitState: app.querySelector<HTMLElement>('[data-wallet-limit-state]')!,
+  walletLimitEnabled: app.querySelector<HTMLInputElement>('[data-wallet-limit-enabled]')!,
+  walletLimitUsage: app.querySelector<HTMLElement>('[data-wallet-limit-usage]')!,
+  walletLimitForm: app.querySelector<HTMLFormElement>('[data-wallet-limit-form]')!,
+  walletLimitSave: app.querySelector<HTMLButtonElement>('[data-wallet-limit-save]')!,
+  walletLimitError: app.querySelector<HTMLElement>('[data-wallet-limit-error]')!,
+  walletHistory: app.querySelector<HTMLElement>('[data-wallet-history]')!,
+  walletHistoryFilters: Array.from(app.querySelectorAll<HTMLButtonElement>('[data-wallet-history-filter]')),
   archiveRecords: app.querySelector<HTMLElement>('[data-archive-records]')!,
 }
 
@@ -1620,6 +1743,7 @@ const state: {
   settingsOpen: boolean
   pinSettingsModalOpen: boolean
   pinSettingsBusy: boolean
+  pinSettingsMode: 'setup' | 'change'
   mcpInfoModalOpen: boolean
   walletModalOpen: boolean
   walletPanel: WalletPanel
@@ -1628,6 +1752,9 @@ const state: {
   walletWithdrawalChallenge?: WalletWithdrawalChallenge
   walletWithdrawalBusy: boolean
   walletWithdrawalError?: string
+  walletSpendBusy: boolean
+  walletSpendError?: string
+  walletHistoryFilter: WalletHistoryFilter
   appStatus?: AppStatus
   projectFolder?: ProjectFolder
   projectFolders: ProjectFolder[]
@@ -1697,12 +1824,18 @@ const state: {
   v3ConsumerTransferProgress?: { phase: string; bytesDownloaded: number; sizeBytes: number }
   v3ConsumerPurchase?: Record<string, any>
   v3ConsumerLease?: Record<string, any>
-  v3AccountKeyStatus?: V3AccountKeyStatus
-  v3AccountKeyLoaded: boolean
+  v3OrderAccessKey?: OrderAccessKeyStatus
+  v3OrderAccessKeySessionId?: string
+  v3OrderAccessKeyBusy: boolean
+  v3ApprovalBusyId?: string
   v3ActivitySessions: Record<OrderSide, V3ActivitySession[]>
   v3ActivityLoaded: Record<OrderSide, boolean>
   v3ActivityLoading: Record<OrderSide, boolean>
   v3ActivityErrors: Partial<Record<OrderSide, string>>
+  localActivityFixturesEnabled: boolean
+  v3ActivityBucket: Record<OrderSide, V3ActivityBucket>
+  v3ActivityArchiveMarkers: V3ActivityArchiveMarker[]
+  v3ActivityArchiveUndo?: { marker: V3ActivityArchiveMarker; side: OrderSide }
   selectedV3ActivitySessionId?: string
   v3ActivityDetail?: V3ActivityDetail
   v3ActivityDetailLoading: boolean
@@ -1858,6 +1991,7 @@ const state: {
   settingsOpen: false,
   pinSettingsModalOpen: false,
   pinSettingsBusy: false,
+  pinSettingsMode: 'change',
   mcpInfoModalOpen: false,
   walletModalOpen: false,
   walletPanel: 'receive',
@@ -1865,6 +1999,9 @@ const state: {
   walletWithdrawalChallenge: undefined,
   walletWithdrawalBusy: false,
   walletWithdrawalError: undefined,
+  walletSpendBusy: false,
+  walletSpendError: undefined,
+  walletHistoryFilter: 'all',
   projectFolders: [],
   mcpConnections: [],
   workMcpLeases: [],
@@ -1925,12 +2062,18 @@ const state: {
   v3ConsumerTransferProgress: undefined,
   v3ConsumerPurchase: undefined,
   v3ConsumerLease: undefined,
-  v3AccountKeyStatus: undefined,
-  v3AccountKeyLoaded: false,
+  v3OrderAccessKey: undefined,
+  v3OrderAccessKeySessionId: undefined,
+  v3OrderAccessKeyBusy: false,
+  v3ApprovalBusyId: undefined,
   v3ActivitySessions: { buyer: [], seller: [] },
   v3ActivityLoaded: { buyer: false, seller: false },
   v3ActivityLoading: { buyer: false, seller: false },
   v3ActivityErrors: {},
+  localActivityFixturesEnabled: false,
+  v3ActivityBucket: { buyer: 'current', seller: 'current' },
+  v3ActivityArchiveMarkers: [],
+  v3ActivityArchiveUndo: undefined,
   selectedV3ActivitySessionId: undefined,
   v3ActivityDetail: undefined,
   v3ActivityDetailLoading: false,
@@ -2111,6 +2254,52 @@ function legacyAppSettingsSnapshot(): PersistedAppSettings {
   }
 }
 
+function normalizeActivitySessionSnapshot(value: unknown): V3ActivitySession | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const input = value as Partial<V3ActivitySession>
+  if (!input.sessionId || !isOrderSide(input.role) || !input.productKind || !input.updatedAt) return undefined
+  return {
+    sessionId: String(input.sessionId),
+    activitySessionId: input.activitySessionId ? String(input.activitySessionId) : undefined,
+    role: input.role,
+    productKind: String(input.productKind),
+    productId: String(input.productId || ''),
+    listingId: String(input.listingId || ''),
+    productTitle: String(input.productTitle || ''),
+    counterpartyId: input.counterpartyId ? String(input.counterpartyId) : undefined,
+    counterpartyLabel: String(input.counterpartyLabel || ''),
+    status: String(input.status || 'completed'),
+    outcome: String(input.outcome || ''),
+    attentionRequired: Boolean(input.attentionRequired),
+    inFlightCount: Math.max(0, Number(input.inFlightCount || 0)),
+    itemCount: Math.max(0, Number(input.itemCount || 0)),
+    amountAtomic: Number(input.amountAtomic || 0),
+    grossAmountAtomic: Number(input.grossAmountAtomic || 0),
+    platformFeeAtomic: Number(input.platformFeeAtomic || 0),
+    asset: String(input.asset || 'USDC'),
+    startedAt: String(input.startedAt || input.updatedAt),
+    updatedAt: String(input.updatedAt),
+    endedAt: input.endedAt ? String(input.endedAt) : undefined,
+    retainUntil: input.retainUntil ? String(input.retainUntil) : undefined,
+  }
+}
+
+function normalizeActivityArchiveMarkers(value: unknown): V3ActivityArchiveMarker[] {
+  if (!Array.isArray(value)) return []
+  return value.slice(-200).flatMap((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return []
+    const input = entry as Partial<V3ActivityArchiveMarker>
+    if (!input.id || !input.archiveKey || !isOrderSide(input.role) || !input.productKind || !input.archivedAt || !input.archivedThrough) return []
+    const records = Array.isArray(input.records) ? input.records.map(normalizeActivitySessionSnapshot).filter((item): item is V3ActivitySession => Boolean(item)) : []
+    const baselines = Array.isArray(input.baselines) ? input.baselines.map(normalizeActivitySessionSnapshot).filter((item): item is V3ActivitySession => Boolean(item)) : []
+    if (!records.length || !baselines.length) return []
+    const detailAfterBySession = input.detailAfterBySession && typeof input.detailAfterBySession === 'object' && !Array.isArray(input.detailAfterBySession)
+      ? Object.fromEntries(Object.entries(input.detailAfterBySession).filter(([, timestamp]) => typeof timestamp === 'string'))
+      : undefined
+    return [{ id: String(input.id), archiveKey: String(input.archiveKey), role: input.role, productKind: String(input.productKind), archivedAt: String(input.archivedAt), archivedThrough: String(input.archivedThrough), records, baselines, detailAfterBySession }]
+  })
+}
+
 function normalizePersistedSettings(value: unknown): PersistedAppSettings {
   const input = value && typeof value === 'object' && !Array.isArray(value) ? value as PersistedAppSettings : {}
   return {
@@ -2119,6 +2308,7 @@ function normalizePersistedSettings(value: unknown): PersistedAppSettings {
     workOrderSide: isOrderSide(input.workOrderSide) ? input.workOrderSide : undefined,
     sidebarCollapsed: typeof input.sidebarCollapsed === 'boolean' ? input.sidebarCollapsed : undefined,
     sidebarWidth: input.sidebarWidth === undefined ? undefined : normalizeSidebarWidth(input.sidebarWidth),
+    activityArchiveMarkers: normalizeActivityArchiveMarkers(input.activityArchiveMarkers),
   }
 }
 
@@ -2129,6 +2319,7 @@ function mergePersistedSettings(fallback: PersistedAppSettings, value: Persisted
     workOrderSide: value.workOrderSide ?? fallback.workOrderSide,
     sidebarCollapsed: value.sidebarCollapsed ?? fallback.sidebarCollapsed,
     sidebarWidth: value.sidebarWidth ?? fallback.sidebarWidth,
+    activityArchiveMarkers: value.activityArchiveMarkers ?? fallback.activityArchiveMarkers,
   }
 }
 
@@ -2150,6 +2341,7 @@ function applyPersistedSettings(settings: PersistedAppSettings) {
   }
   if (typeof settings.sidebarCollapsed === 'boolean') state.sidebarCollapsed = settings.sidebarCollapsed
   if (typeof settings.sidebarWidth === 'number') state.sidebarWidth = normalizeSidebarWidth(settings.sidebarWidth)
+  if (settings.activityArchiveMarkers) state.v3ActivityArchiveMarkers = settings.activityArchiveMarkers
 }
 
 function appSettingsSnapshot(): PersistedAppSettings {
@@ -2159,6 +2351,7 @@ function appSettingsSnapshot(): PersistedAppSettings {
     workOrderSide: state.workOrderSide,
     sidebarCollapsed: state.sidebarCollapsed,
     sidebarWidth: state.sidebarWidth,
+    activityArchiveMarkers: state.v3ActivityArchiveMarkers,
   }
 }
 
@@ -2177,6 +2370,7 @@ async function saveAppSettingsNow() {
     localStorage.setItem('exora.language', settings.language || 'en')
     localStorage.setItem('exora.theme', settings.theme || 'light')
     localStorage.setItem('exora.sidebarWidth', String(settings.sidebarWidth || DEFAULT_SIDEBAR_WIDTH))
+    localStorage.setItem('exora.activityArchiveMarkers', JSON.stringify(settings.activityArchiveMarkers || []))
     return
   }
   try {
@@ -2188,6 +2382,11 @@ async function saveAppSettingsNow() {
 
 async function hydrateDesktopPersistence() {
   if (!hasDesktopBridge()) {
+    try {
+      state.v3ActivityArchiveMarkers = normalizeActivityArchiveMarkers(JSON.parse(localStorage.getItem('exora.activityArchiveMarkers') || '[]'))
+    } catch {
+      state.v3ActivityArchiveMarkers = []
+    }
     settingsPersistenceReady = true
     return
   }
@@ -3469,6 +3668,181 @@ function setTheme(theme: AppTheme) {
   renderAll()
 }
 
+const V3_ACTIVITY_RETENTION_MS = 24 * 60 * 60 * 1000
+
+function v3HistoryCopy(english: string, chinese: string) {
+  return state.language === 'zh' ? chinese : english
+}
+
+function v3ActivityCounterpartyKey(record: V3ActivitySession) {
+  const stable = String(record.counterpartyId || record.counterpartyLabel || 'counterparty').trim().toLowerCase()
+  return stable.replace(/[^a-z0-9._:@-]+/g, '-') || 'counterparty'
+}
+
+function v3ActivityArchiveKey(record: V3ActivitySession) {
+  if (record.productKind === 'api_operation') return `${record.role}:api:${v3ActivityCounterpartyKey(record)}`
+  return `${record.role}:${record.productKind}:${record.sessionId}`
+}
+
+function v3ActivityIsBusy(record: V3ActivitySession) {
+  return record.status === 'active' || Number(record.inFlightCount || 0) > 0
+}
+
+function v3ActivityRetainUntil(record: V3ActivitySession) {
+  if (record.productKind !== 'api_operation' && record.productKind !== 'download') return undefined
+  if (record.retainUntil) return record.retainUntil
+  const anchor = record.productKind === 'api_operation' ? record.updatedAt : record.startedAt
+  const timestamp = sortTime(anchor)
+  return timestamp ? new Date(timestamp + V3_ACTIVITY_RETENTION_MS).toISOString() : undefined
+}
+
+function v3ActivityNaturallyCurrent(record: V3ActivitySession) {
+  if (v3ActivityIsBusy(record)) return true
+  if (record.productKind === 'compute') return false
+  const retainUntil = v3ActivityRetainUntil(record)
+  return Boolean(retainUntil && sortTime(retainUntil) > Date.now())
+}
+
+function v3ActivityDelta(record: V3ActivitySession, baseline: V3ActivitySession) {
+  if (sortTime(record.updatedAt) <= sortTime(baseline.updatedAt)) return undefined
+  return {
+    ...record,
+    startedAt: baseline.updatedAt,
+    itemCount: Math.max(0, Number(record.itemCount || 0) - Number(baseline.itemCount || 0)),
+    amountAtomic: Number(record.amountAtomic || 0) - Number(baseline.amountAtomic || 0),
+    grossAmountAtomic: Number(record.grossAmountAtomic || 0) - Number(baseline.grossAmountAtomic || 0),
+    platformFeeAtomic: Number(record.platformFeeAtomic || 0) - Number(baseline.platformFeeAtomic || 0),
+    outcome: v3HistoryCopy('New activity since the previous archived batch.', '自上次收纳后产生的新活动。'),
+  }
+}
+
+function v3LatestActivityBaselines(side: OrderSide) {
+  const latest = new Map<string, { record: V3ActivitySession; archivedAt: string }>()
+  for (const marker of state.v3ActivityArchiveMarkers) {
+    if (marker.role !== side) continue
+    for (const baseline of marker.baselines) {
+      const previous = latest.get(baseline.sessionId)
+      if (!previous || sortTime(marker.archivedAt) > sortTime(previous.archivedAt)) latest.set(baseline.sessionId, { record: baseline, archivedAt: marker.archivedAt })
+    }
+  }
+  return latest
+}
+
+type V3ActivityDisplaySource = {
+  summary: V3ActivitySession
+  baseline: V3ActivitySession
+  detailAfter?: string
+}
+
+function v3AggregateActivityDisplay(
+  sources: V3ActivityDisplaySource[],
+  bucket: V3ActivityBucket,
+  archiveKey: string,
+  displayId: string,
+  options: { manuallyArchived?: boolean; archiveMarkerId?: string; detailThroughBySession?: Record<string, string> } = {},
+): V3ActivityDisplayRecord {
+  const summaries = sources.map((source) => source.summary)
+  const baselines = sources.map((source) => source.baseline)
+  const first = summaries[0]
+  const productTitles = [...new Set(summaries.map((item) => item.productTitle).filter(Boolean))]
+  const productIds = [...new Set(summaries.map((item) => item.productId).filter(Boolean))]
+  const sessionIds = [...new Set(summaries.map((item) => item.sessionId))]
+  const itemCount = summaries.reduce((total, item) => total + Number(item.itemCount || 0), 0)
+  const active = summaries.some(v3ActivityIsBusy)
+  const attentionRequired = summaries.some((item) => item.attentionRequired || item.status === 'needs_attention')
+  const startedAt = summaries.reduce((value, item) => !value || sortTime(item.startedAt) < sortTime(value) ? item.startedAt : value, '')
+  const updatedAt = summaries.reduce((value, item) => sortTime(item.updatedAt) > sortTime(value) ? item.updatedAt : value, '')
+  const endedAt = summaries.reduce((value, item) => sortTime(item.endedAt) > sortTime(value) ? item.endedAt : value, '') || undefined
+  const retainUntil = summaries.reduce((value, item) => {
+    const candidate = v3ActivityRetainUntil(item)
+    return sortTime(candidate) > sortTime(value) ? candidate : value
+  }, undefined as string | undefined)
+  const detailAfterBySession = Object.fromEntries(sources.filter((source) => source.detailAfter).map((source) => [source.summary.sessionId, source.detailAfter as string]))
+  const groupedAPI = first.productKind === 'api_operation' && (sessionIds.length > 1 || productIds.length > 1 || options.manuallyArchived)
+  const productTitle = groupedAPI && productTitles.length > 1
+    ? v3HistoryCopy(`${first.counterpartyLabel || 'Counterparty'} · ${productTitles.length} API products`, `${first.counterpartyLabel || '交易方'} · ${productTitles.length} 个 API 产品`)
+    : first.productTitle
+  const outcome = groupedAPI
+    ? v3HistoryCopy(`${itemCount} API calls grouped by counterparty; every invocation remains immutable.`, `按交易方收纳了 ${itemCount} 次 API 调用；每条调用记录仍保持不可变。`)
+    : first.outcome
+  return {
+    ...first,
+    displayId,
+    archiveKey,
+    bucket,
+    sessionId: first.sessionId,
+    sessionIds,
+    sourceRecords: summaries,
+    baselineRecords: baselines,
+    canArchive: bucket === 'current' && baselines.every((item) => !v3ActivityIsBusy(item)),
+    manuallyArchived: Boolean(options.manuallyArchived),
+    archiveMarkerId: options.archiveMarkerId,
+    detailAfterBySession: Object.keys(detailAfterBySession).length ? detailAfterBySession : undefined,
+    detailThroughBySession: options.detailThroughBySession,
+    activitySessionId: sessionIds.length === 1 ? first.activitySessionId : undefined,
+    productId: productIds.length === 1 ? first.productId : '',
+    listingId: [...new Set(summaries.map((item) => item.listingId))].length === 1 ? first.listingId : '',
+    productTitle,
+    status: active ? 'active' : attentionRequired ? 'needs_attention' : 'completed',
+    outcome,
+    attentionRequired,
+    inFlightCount: summaries.reduce((total, item) => total + Number(item.inFlightCount || 0), 0),
+    itemCount,
+    amountAtomic: summaries.reduce((total, item) => total + Number(item.amountAtomic || 0), 0),
+    grossAmountAtomic: summaries.reduce((total, item) => total + Number(item.grossAmountAtomic || 0), 0),
+    platformFeeAtomic: summaries.reduce((total, item) => total + Number(item.platformFeeAtomic || 0), 0),
+    startedAt,
+    updatedAt,
+    endedAt,
+    retainUntil,
+  }
+}
+
+function v3ActivityDisplayRecords(side: OrderSide, bucket: V3ActivityBucket): V3ActivityDisplayRecord[] {
+  const latestBaselines = v3LatestActivityBaselines(side)
+  const candidates: Array<V3ActivityDisplaySource & { bucket: V3ActivityBucket; archiveKey: string }> = []
+  for (const record of state.v3ActivitySessions[side]) {
+    const latest = latestBaselines.get(record.sessionId)?.record
+    const summary = latest ? v3ActivityDelta(record, latest) : record
+    if (!summary) continue
+    const naturalBucket: V3ActivityBucket = v3ActivityNaturallyCurrent(record) ? 'current' : 'history'
+    candidates.push({ summary, baseline: record, detailAfter: latest?.updatedAt, bucket: naturalBucket, archiveKey: v3ActivityArchiveKey(record) })
+  }
+
+  const output: V3ActivityDisplayRecord[] = []
+  const apiGroups = new Map<string, V3ActivityDisplaySource[]>()
+  for (const candidate of candidates.filter((item) => item.bucket === bucket)) {
+    if (candidate.summary.productKind === 'api_operation') {
+      const grouped = apiGroups.get(candidate.archiveKey) || []
+      grouped.push(candidate)
+      apiGroups.set(candidate.archiveKey, grouped)
+      continue
+    }
+    output.push(v3AggregateActivityDisplay([candidate], bucket, candidate.archiveKey, `${bucket}:${candidate.summary.sessionId}`))
+  }
+  for (const [archiveKey, sources] of apiGroups) {
+    output.push(v3AggregateActivityDisplay(sources, bucket, archiveKey, `${bucket}:${archiveKey}`))
+  }
+
+  if (bucket === 'history') {
+    for (const marker of state.v3ActivityArchiveMarkers.filter((item) => item.role === side)) {
+      const baselines = new Map(marker.baselines.map((item) => [item.sessionId, item]))
+      const detailThroughBySession = Object.fromEntries(marker.baselines.map((item) => [item.sessionId, item.updatedAt]))
+      const sources = marker.records.map((summary) => ({ summary, baseline: baselines.get(summary.sessionId) || summary, detailAfter: marker.detailAfterBySession?.[summary.sessionId] }))
+      output.push(v3AggregateActivityDisplay(sources, 'history', marker.archiveKey, `history:archive:${marker.id}`, { manuallyArchived: true, archiveMarkerId: marker.id, detailThroughBySession }))
+    }
+  }
+  return output.sort((a, b) => sortTime(b.updatedAt) - sortTime(a.updatedAt))
+}
+
+function findV3ActivityDisplayRecord(displayId: string, side: OrderSide = state.workOrderSide) {
+  return [...v3ActivityDisplayRecords(side, 'current'), ...v3ActivityDisplayRecords(side, 'history')].find((item) => item.displayId === displayId)
+}
+
+function findV3ActivityDisplayForSession(sessionId: string, side: OrderSide = state.workOrderSide) {
+  return [...v3ActivityDisplayRecords(side, 'current'), ...v3ActivityDisplayRecords(side, 'history')].find((item) => item.sessionIds.includes(sessionId))
+}
+
 function orderSearchMatches(record: V3ActivitySession, query: string) {
   if (!query) return true
   const searchable = [
@@ -3489,7 +3863,7 @@ function orderSearchMatches(record: V3ActivitySession, query: string) {
 
 function renderOrderSearchResults() {
   const side = state.workOrderSide
-  const records = [...state.v3ActivitySessions[side]].sort((a, b) => sortTime(b.updatedAt) - sortTime(a.updatedAt))
+  const records = [...v3ActivityDisplayRecords(side, 'current'), ...v3ActivityDisplayRecords(side, 'history')].sort((a, b) => sortTime(b.updatedAt) - sortTime(a.updatedAt))
   const query = fields.orderSearchInput.value.trim().toLowerCase()
   const matches = records.filter((record) => orderSearchMatches(record, query))
   const loading = state.v3ActivityLoading[side]
@@ -3509,11 +3883,11 @@ function renderOrderSearchResults() {
     return
   }
   fields.orderSearchResults.innerHTML = matches.slice(0, 50).map((record) => `
-    <button class="order-search-result" type="button" role="option" data-order-search-session="${escapeAttr(record.sessionId)}" title="${escapeAttr([record.productTitle, record.counterpartyLabel, record.status, record.sessionId].filter(Boolean).join(' / '))}">
+    <button class="order-search-result" type="button" role="option" data-order-search-session="${escapeAttr(record.displayId)}" title="${escapeAttr([record.productTitle, record.counterpartyLabel, record.status, record.displayId].filter(Boolean).join(' / '))}">
       <span class="order-search-kind kind-${escapeAttr(record.productKind)}" aria-hidden="true">${v3ActivityKindLabel(record.productKind)}</span>
       <span class="order-search-result-copy">
         <strong>${escapeHTML(record.productTitle || 'Resource session')}</strong>
-        <small>${escapeHTML([record.counterpartyLabel, v3ActivityStatusLabel(record.status), compactTimestamp(record.updatedAt)].filter(Boolean).join(' · '))}</small>
+        <small>${escapeHTML([record.bucket === 'current' ? v3HistoryCopy('Current', '当前') : v3HistoryCopy('History', '历史'), record.counterpartyLabel, v3ActivityStatusLabel(record.status), compactTimestamp(record.updatedAt)].filter(Boolean).join(' · '))}</small>
       </span>
       <span class="order-search-result-amount">${escapeHTML(v3AtomicMoney(record.amountAtomic, record.asset))}</span>
       <span class="order-search-result-arrow" aria-hidden="true">${toolbarIcons.disclosure}</span>
@@ -3547,10 +3921,10 @@ function closeOrderSearch() {
   fields.orderSearchResults.innerHTML = ''
 }
 
-function openOrderSearchResult(sessionId: string) {
-  if (!sessionId) return
+function openOrderSearchResult(displayId: string) {
+  if (!displayId) return
   closeOrderSearch()
-  selectV3ActivitySession(sessionId)
+  selectV3ActivityDisplayRecord(displayId)
 }
 
 function renderProjectFolder() {
@@ -7499,24 +7873,6 @@ async function loadV3Catalog() {
   }
 }
 
-async function loadV3AccountKeyStatus(force = false) {
-  if (state.v3AccountKeyLoaded && !force) return
-  try {
-    state.v3AccountKeyStatus = await invoke<V3AccountKeyStatus>('account_key_status')
-    state.v3AccountKeyLoaded = true
-    if (state.v3AccountKeyStatus.configured) {
-      const response = await invoke<{ balance?: V3ConsumerBalance }>('consumer_account_balance').catch(() => ({ balance: undefined }))
-      state.v3ConsumerBalance = response.balance
-    }
-  } catch (error) {
-    state.v3AccountKeyStatus = { configured: false, keyStorageAvailable: false }
-    state.v3AccountKeyLoaded = true
-    state.v3ConsumerError = humanizeError(error)
-  }
-  if (state.walletModalOpen) renderWalletModal()
-  if (state.v3SellerTab === 'listings') renderDecisionPanel()
-}
-
 async function runV3Consumer<T extends Record<string, any>>(task: () => Promise<T>) {
   if (state.v3ConsumerBusy) return undefined
   state.v3ConsumerBusy = true
@@ -7561,7 +7917,30 @@ function v3ConsumerMaxCharge(listing: V3Listing, product: V3Product, quantity = 
   return v3AtomicFromPrice(price, ['amountAtomic', 'fixedAmountAtomic'])
 }
 
+function setLocalActivityFixturesEnabled(enabled: boolean) {
+  state.localActivityFixturesEnabled = enabled
+  for (const side of ['buyer', 'seller'] as const) {
+    state.v3ActivitySessions[side] = enabled ? localActivitySessionsForRole(side) : []
+    state.v3ActivityLoaded[side] = enabled
+    state.v3ActivityLoading[side] = false
+    delete state.v3ActivityErrors[side]
+  }
+  state.selectedV3ActivitySessionId = undefined
+  state.v3ActivityDetail = undefined
+  state.v3ActivityDetailLoading = false
+  state.v3ActivityDetailError = undefined
+}
+
 async function loadV3ActivitySessions(side: OrderSide = state.workOrderSide, force = false) {
+  if (state.localActivityFixturesEnabled) {
+    if (!force && state.v3ActivityLoaded[side]) return
+    state.v3ActivitySessions[side] = localActivitySessionsForRole(side)
+    state.v3ActivityLoaded[side] = true
+    state.v3ActivityLoading[side] = false
+    delete state.v3ActivityErrors[side]
+    if (side === state.workOrderSide) renderLedger()
+    return
+  }
   if (state.v3ActivityLoading[side] || (!force && (state.v3ActivityLoaded[side] || state.v3ActivityErrors[side]))) return
   state.v3ActivityLoading[side] = true
   delete state.v3ActivityErrors[side]
@@ -7581,6 +7960,16 @@ async function loadV3ActivitySessions(side: OrderSide = state.workOrderSide, for
 
 async function loadV3ActivityDetail(sessionId: string) {
   if (!sessionId) return
+  if (state.localActivityFixturesEnabled) {
+    const fixture = localActivityDetailForSession(sessionId)
+    if (state.selectedV3ActivitySessionId !== sessionId) return
+    state.v3ActivityDetail = fixture
+    state.v3ActivityDetailLoading = false
+    state.v3ActivityDetailError = fixture ? undefined : 'Local test order detail was not found.'
+    renderDecisionPanel()
+    renderLedger()
+    return
+  }
   state.v3ActivityDetailLoading = true
   state.v3ActivityDetailError = undefined
   state.v3ActivityDetail = undefined
@@ -7589,6 +7978,8 @@ async function loadV3ActivityDetail(sessionId: string) {
     const response = await invoke<{ session?: V3ActivityDetail }>('activity_session', { input: { id: sessionId } })
     if (state.selectedV3ActivitySessionId !== sessionId) return
     state.v3ActivityDetail = response.session
+    const activitySessionId = response.session?.role === 'buyer' ? response.session.activitySessionId : undefined
+    if (activitySessionId) void loadOrderAccessKeyStatus(activitySessionId)
   } catch (error) {
     if (state.selectedV3ActivitySessionId === sessionId) state.v3ActivityDetailError = humanizeError(error)
   } finally {
@@ -7607,6 +7998,9 @@ function selectV3ActivitySession(sessionId: string) {
   const cached = state.v3ActivitySessions[state.workOrderSide].find((item) => item.sessionId === sessionId)
   state.v3ActivityDetail = cached as V3ActivityDetail | undefined
   state.v3ActivityDetailError = undefined
+  state.v3OrderAccessKey = undefined
+  state.v3OrderAccessKeySessionId = cached?.activitySessionId
+  state.v3OrderAccessKeyBusy = false
   renderLedger()
   void loadV3ActivityDetail(sessionId)
 }
@@ -7616,7 +8010,29 @@ function closeV3ActivityDetail() {
   state.v3ActivityDetail = undefined
   state.v3ActivityDetailError = undefined
   state.v3ActivityDetailLoading = false
+  state.v3OrderAccessKey = undefined
+  state.v3OrderAccessKeySessionId = undefined
+  state.v3OrderAccessKeyBusy = false
   renderAll()
+}
+
+async function loadOrderAccessKeyStatus(activitySessionId: string) {
+  if (!activitySessionId) return
+  state.v3OrderAccessKeySessionId = activitySessionId
+  state.v3OrderAccessKeyBusy = true
+  renderDecisionPanel()
+  try {
+    const response = await invoke<{ accessKey?: OrderAccessKeyStatus }>('order_access_key_status', { input: { activitySessionId } })
+    if (state.v3ActivityDetail?.activitySessionId !== activitySessionId) return
+    state.v3OrderAccessKey = response.accessKey
+  } catch (error) {
+    if (state.v3ActivityDetail?.activitySessionId === activitySessionId) showToast(humanizeError(error))
+  } finally {
+    if (state.v3ActivityDetail?.activitySessionId === activitySessionId) {
+      state.v3OrderAccessKeyBusy = false
+      renderDecisionPanel()
+    }
+  }
 }
 
 async function loadV3Listings() {
@@ -7685,7 +8101,7 @@ function ensureV3SurfaceData() {
   void loadV3ActivitySessions(state.workOrderSide)
   if (!state.v3CatalogLoading && !state.v3CatalogLoaded && !state.v3CatalogError) void loadV3Catalog()
   if (!state.v3ListingsLoading && !state.v3ListingsLoaded && !state.v3SellerError) void loadV3Listings()
-  if (!state.v3AccountKeyLoaded) void loadV3AccountKeyStatus()
+  if (!state.v3ConsumerBalance) void invoke<{ balance?: V3ConsumerBalance }>('consumer_account_balance').then((response) => { state.v3ConsumerBalance = response.balance; if (state.v3SellerTab === 'listings') renderDecisionPanel() }).catch(() => undefined)
 }
 
 function v3ActivityUsageLabel(key: string) {
@@ -7731,6 +8147,81 @@ function renderV3ActivityDelivery(detail: V3ActivityDetail) {
   `
 }
 
+function v3OrderAccessActions(detail: V3ActivityDetail) {
+  if (detail.productKind === 'api_operation') return ['invoke_operation', 'get_balance']
+  if (detail.productKind === 'compute') return ['extend_compute_minutes', 'get_lease', 'release_lease', 'get_balance']
+  return ['create_download_transfer', 'get_balance']
+}
+
+function renderV3OrderAccessKey(detail: V3ActivityDetail) {
+  if (detail.role !== 'buyer' || !detail.activitySessionId) return ''
+  const key = state.v3OrderAccessKeySessionId === detail.activitySessionId ? state.v3OrderAccessKey : undefined
+  const expired = Boolean(key?.expiresAt && new Date(key.expiresAt).getTime() <= Date.now())
+  const active = key?.status === 'active' && !expired
+  const busy = state.v3OrderAccessKeyBusy
+  const actionSummary = (key?.allowedActions || v3OrderAccessActions(detail)).map((action) => action.replaceAll('_', ' ')).join(' · ')
+  return `<section class="v3-activity-panel v3-order-access-key ${active ? 'is-active' : ''}">
+    <header><span>ORDER ACCESS</span><h3>Agent access key</h3></header>
+    ${busy && !key ? '<div class="v3-order-key-loading"><span class="v3-history-spinner"></span>Checking order access…</div>' : active ? `
+      <div class="v3-order-key-status"><span>${icon(KeyRound)}</span><div><strong>${escapeHTML(key?.maskedKey || 'exa_…')}</strong><small>Scoped to this order and listing only</small></div><em>Active</em></div>
+      <dl><div><dt>Allowed</dt><dd>${escapeHTML(actionSummary)}</dd></div><div><dt>Expires</dt><dd>${key?.expiresAt ? escapeHTML(new Date(key.expiresAt).toLocaleString()) : '24 hours after issue'}</dd></div><div><dt>Last used</dt><dd>${key?.lastUsedAt ? escapeHTML(new Date(key.lastUsedAt).toLocaleString()) : 'Never'}</dd></div></dl>
+      <p>The raw key is shown once by copying it directly to the system clipboard. It is never exposed to the page and the clipboard is cleared after 60 seconds.</p>
+      <div class="v3-order-key-actions"><button type="button" data-v3-order-key-action="rotate" ${busy ? 'disabled' : ''}>Rotate & copy</button><button class="ghost danger" type="button" data-v3-order-key-action="revoke" ${busy ? 'disabled' : ''}>Revoke</button></div>` : `
+      <div class="v3-order-key-empty"><span>${icon(KeyRound)}</span><div><strong>${key ? 'No active key' : 'Create an order-scoped key'}</strong><p>Give an Agent limited access to continue this specific order without revealing an account-wide credential.</p></div></div>
+      <button type="button" data-v3-order-key-action="create" ${busy ? 'disabled' : ''}>${busy ? 'Creating…' : 'Create & copy key'}</button>`}
+  </section>`
+}
+
+function renderV3ActivityEvents(events: NonNullable<V3ActivityDetail['events']>) {
+  const decidedApprovals = new Set(events.filter((event) => event.approvalId && event.type !== 'approval_required' && event.status !== 'pending').map((event) => event.approvalId))
+  return events.map((event) => {
+    const awaitingDecision = event.type === 'approval_required' && Boolean(event.approvalId) && !decidedApprovals.has(event.approvalId)
+    const busy = state.v3ApprovalBusyId === event.approvalId
+    return `<article class="${awaitingDecision ? 'requires-approval' : ''}"><span class="v3-activity-event-dot ${escapeAttr(event.status)}"></span><div><strong>${escapeHTML(event.title)}</strong><small>${escapeHTML(event.detail)}</small>${awaitingDecision ? `<form class="v3-approval-decision" data-v3-approval-form="${escapeAttr(event.approvalId || '')}"><label><span>Payment PIN</span><input name="pin" type="password" inputmode="numeric" autocomplete="off" maxlength="6" pattern="[0-9]{6}" placeholder="Six digits" required /></label><div><button type="submit" name="decision" value="approve" ${busy ? 'disabled' : ''}>${busy ? 'Working…' : 'Approve'}</button><button class="ghost danger" type="submit" name="decision" value="reject" ${busy ? 'disabled' : ''}>Reject</button></div></form>` : ''}</div><time>${escapeHTML(compactTimestamp(event.occurredAt))}</time></article>`
+  }).join('')
+}
+
+async function updateOrderAccessKey(action: 'create' | 'rotate' | 'revoke') {
+  const detail = state.v3ActivityDetail
+  const activitySessionId = detail?.activitySessionId || ''
+  if (!detail || detail.role !== 'buyer' || !activitySessionId || state.v3OrderAccessKeyBusy) return
+  state.v3OrderAccessKeyBusy = true
+  renderDecisionPanel()
+  try {
+    if (action === 'revoke') {
+      await invoke('order_access_key_revoke', { input: { activitySessionId } })
+      state.v3OrderAccessKey = state.v3OrderAccessKey ? { ...state.v3OrderAccessKey, status: 'revoked', revokedAt: new Date().toISOString() } : undefined
+      showToast(t('toast.orderKeyRevoked'))
+    } else {
+      const response = await invoke<{ accessKey?: OrderAccessKeyStatus; copied?: boolean }>(`order_access_key_${action}`, { input: { activitySessionId, listingId: detail.listingId, allowedActions: v3OrderAccessActions(detail) } })
+      state.v3OrderAccessKey = response.accessKey
+      showToast(t(response.copied ? 'toast.orderKeyCopied' : 'toast.orderKeyCreated'))
+    }
+  } catch (error) {
+    showToast(humanizeError(error))
+  } finally {
+    state.v3OrderAccessKeyBusy = false
+    renderDecisionPanel()
+  }
+}
+
+async function decideV3Approval(approvalId: string, decision: 'approve' | 'reject', pin: string) {
+  if (!approvalId || state.v3ApprovalBusyId) return
+  if (!/^\d{6}$/.test(pin)) throw new Error('Cloud payment PIN must be exactly 6 digits.')
+  state.v3ApprovalBusyId = approvalId
+  renderDecisionPanel()
+  try {
+    await invoke('consumer_approval_decide', { input: { approvalId, decision, pin } })
+    showToast(t(decision === 'approve' ? 'toast.approvalApproved' : 'toast.approvalRejected'))
+    const sessionId = state.selectedV3ActivitySessionId
+    if (sessionId) await loadV3ActivityDetail(sessionId)
+    await loadV3ActivitySessions('buyer', true)
+  } finally {
+    state.v3ApprovalBusyId = undefined
+    renderDecisionPanel()
+  }
+}
+
 function renderV3ActivityDetail() {
   if (state.v3ActivityDetailError) {
     return `<section class="v3-activity-loading error"><span>History detail unavailable</span><p>${escapeHTML(state.v3ActivityDetailError)}</p><div><button class="ghost" type="button" data-v3-action="activity-back">Back</button><button type="button" data-v3-action="activity-refresh">Try again</button></div></section>`
@@ -7742,6 +8233,7 @@ function renderV3ActivityDetail() {
   const usage = Object.entries(detail.usage || {}).filter(([, value]) => Number(value) !== 0)
   const invocations = detail.invocations || []
   const events = detail.events || []
+  const supplementalEvents = invocations.length ? events.filter((event) => event.type !== 'api_invocation') : events
   const identifiers = Object.entries(detail.identifiers || {}).filter(([, value]) => Boolean(value))
   const roleAmountLabel = detail.role === 'seller' ? 'Net revenue' : 'Paid'
   const productDescription = String(detail.product?.description || '')
@@ -7780,10 +8272,13 @@ function renderV3ActivityDetail() {
           </section>
           <section class="v3-activity-panel">
             <header><span>SESSION ACTIVITY</span><h3>${detail.productKind === 'api_operation' ? 'Invocations' : 'Events'}</h3></header>
-            ${invocations.length ? `<div class="v3-activity-invocations">${invocations.map((item) => `<article><span class="v3-activity-event-dot ${escapeAttr(item.status)}"></span><div><strong>${escapeHTML(item.operationId || 'API invocation')}</strong><small>${escapeHTML(compactTimestamp(item.completedAt || item.startedAt))} · ${escapeHTML(item.invocationId)}</small></div><em>${escapeHTML(v3AtomicMoney(item.chargedAtomic, detail.asset))}</em><b>${escapeHTML(item.status.replaceAll('_', ' '))}</b></article>`).join('')}</div>` : events.length ? `<div class="v3-activity-events">${events.map((event) => `<article><span class="v3-activity-event-dot ${escapeAttr(event.status)}"></span><div><strong>${escapeHTML(event.title)}</strong><small>${escapeHTML(event.detail)}</small></div><time>${escapeHTML(compactTimestamp(event.occurredAt))}</time></article>`).join('')}</div>` : '<p class="v3-activity-empty">No activity events have been recorded yet.</p>'}
+            ${invocations.length ? `<div class="v3-activity-invocations">${invocations.map((item) => `<article><span class="v3-activity-event-dot ${escapeAttr(item.status)}"></span><div><strong>${escapeHTML(item.operationId || 'API invocation')}</strong><small>${escapeHTML(compactTimestamp(item.completedAt || item.startedAt))} · ${escapeHTML(item.invocationId)}</small></div><em>${escapeHTML(v3AtomicMoney(item.chargedAtomic, detail.asset))}</em><b>${escapeHTML(item.status.replaceAll('_', ' '))}</b></article>`).join('')}</div>` : ''}
+            ${supplementalEvents.length ? `<div class="v3-activity-events">${renderV3ActivityEvents(supplementalEvents)}</div>` : ''}
+            ${!invocations.length && !supplementalEvents.length ? '<p class="v3-activity-empty">No activity events have been recorded yet.</p>' : ''}
           </section>
         </div>
         <aside class="v3-activity-side-column">
+          ${renderV3OrderAccessKey(detail)}
           <section class="v3-activity-panel v3-activity-money">
             <header><span>MONEY</span><h3>Ledger summary</h3></header>
             <dl>
@@ -7879,6 +8374,11 @@ function syncV3SellerTabs() {
   } else {
     existingCount?.remove()
   }
+}
+
+function syncV3SellerTabsVisibility() {
+  const hidden = state.settingsOpen || Boolean(state.selectedV3ActivitySessionId)
+  fields.sellerSurfaceTabs.classList.toggle('hidden', hidden)
 }
 
 function v3HostScanPhaseLabel(phase: string) {
@@ -8787,9 +9287,9 @@ function renderV3APIConsumerPanel(item: V3UnifiedListingItem, operations: Array<
 
 function renderV3ConsumerPanel(item: V3UnifiedListingItem) {
   const { listing, product } = item
-  const configured = Boolean(state.v3AccountKeyStatus?.configured)
+  const configured = true
   const balance = state.v3ConsumerBalance
-  const balanceLabel = balance ? v3AtomicMoney(balance.availableAtomic, balance.asset || 'USDC') : configured ? 'Checking…' : 'Account key required'
+  const balanceLabel = balance ? v3AtomicMoney(balance.availableAtomic, balance.asset || 'USDC') : 'Checking balance…'
   const maxCharge = v3ConsumerMaxCharge(listing, product, product.productKind === 'compute' ? state.v3ConsumerMinutes : 1)
   const operations = Array.isArray(product.manifest?.operations)
     ? product.manifest.operations as Array<Record<string, any>>
@@ -8797,11 +9297,11 @@ function renderV3ConsumerPanel(item: V3UnifiedListingItem) {
   const disclosure = product.productKind === 'compute' && product.manifest?.runtimeBackend === 'wsl2'
     ? `<div class="v3-consumer-disclosure"><strong>Managed WSL2 · shared host</strong><span>One Exora lease per host. CPU and memory are configured caps; the Windows GPU driver is shared and is not hardware passthrough.</span></div>`
     : product.productKind === 'compute' ? `<div class="v3-consumer-disclosure kvm"><strong>KVM/libvirt hardware isolation</strong><span>Disposable encrypted write layer, Guest Root, and provider-controlled reset.</span></div>` : ''
-  const result = state.v3ConsumerResponse ? `<section class="v3-consumer-result"><header><strong>Latest result</strong><span>Account key and provider credentials are redacted</span></header><pre>${escapeHTML(v3RedactedConsumerJSON(state.v3ConsumerResponse))}</pre></section>` : ''
+  const result = state.v3ConsumerResponse ? `<section class="v3-consumer-result"><header><strong>Latest result</strong><span>Secrets and provider credentials are redacted</span></header><pre>${escapeHTML(v3RedactedConsumerJSON(state.v3ConsumerResponse))}</pre></section>` : ''
   const transfer = state.v3ConsumerTransferProgress
   const transferStatus = transfer ? `<div class="v3-consumer-transfer"><span>${escapeHTML(transfer.phase)}</span><progress max="${Math.max(1, transfer.sizeBytes || transfer.bytesDownloaded || 1)}" value="${transfer.bytesDownloaded}"></progress><strong>${escapeHTML(v3FormatBytes(transfer.bytesDownloaded))}${transfer.sizeBytes ? ` / ${escapeHTML(v3FormatBytes(transfer.sizeBytes))}` : ''}</strong></div>` : ''
   const error = `${state.v3ConsumerError ? `<div class="v3-error">${escapeHTML(state.v3ConsumerError)}</div>` : ''}${transferStatus}`
-  const keyAction = !configured ? `<button type="button" data-v3-consumer-action="settings-key">Configure account key</button>` : ''
+  const keyAction = ''
   if (product.productKind === 'api_operation') {
     return renderV3APIConsumerPanel(item, operations, configured, balanceLabel, maxCharge, keyAction, error, result)
     const operationOptions = operations.length ? operations.map((operation) => `<option value="${escapeAttr(String(operation.operationId || ''))}">${escapeHTML(`${String(operation.method || 'POST').toUpperCase()} ${operation.path || '/'} · ${operation.title || operation.operationId}`)}</option>`).join('') : '<option value="default">Default operation</option>'
@@ -9067,6 +9567,16 @@ function attachV3SurfaceHandlers() {
   fields.actionView.querySelectorAll<HTMLButtonElement>('[data-copy-v3-identifier]').forEach((button) => button.addEventListener('click', () => {
     const value = button.dataset.copyV3Identifier || ''
     if (value) void navigator.clipboard.writeText(value).then(() => showToast(t('toast.identifierCopied')))
+  }))
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-order-key-action]').forEach((button) => button.addEventListener('click', () => {
+    void updateOrderAccessKey(button.dataset.v3OrderKeyAction as 'create' | 'rotate' | 'revoke')
+  }))
+  fields.actionView.querySelectorAll<HTMLFormElement>('[data-v3-approval-form]').forEach((form) => form.addEventListener('submit', (event) => {
+    event.preventDefault()
+    const submitter = (event as SubmitEvent).submitter as HTMLButtonElement | null
+    const decision = submitter?.value === 'reject' ? 'reject' : 'approve'
+    const pin = String(new FormData(form).get('pin') || '').trim()
+    void decideV3Approval(form.dataset.v3ApprovalForm || '', decision, pin).catch((error) => showToast(humanizeError(error)))
   }))
   action('catalog-back', () => { state.v3SelectedProduct = undefined; renderDecisionPanel() })
   action('catalog-refresh', () => void loadV3Catalog())
@@ -9754,7 +10264,7 @@ function attachV3SurfaceHandlers() {
       state.v3ConsumerTransferProgress = undefined
       state.v3ConsumerPurchase = undefined
       state.v3ConsumerLease = undefined
-      if (state.v3AccountKeyStatus?.configured) void loadV3AccountKeyStatus(true)
+      void invoke<{ balance?: V3ConsumerBalance }>('consumer_account_balance').then((response) => { state.v3ConsumerBalance = response.balance; renderDecisionPanel() }).catch(() => undefined)
     }
     renderDecisionPanel()
   }))
@@ -9787,7 +10297,6 @@ function attachV3SurfaceHandlers() {
     renderDecisionPanel()
   }))
   applyListingFilters()
-  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-consumer-action="settings-key"]').forEach((button) => button.addEventListener('click', () => openWalletModal('key')))
   fields.actionView.querySelector<HTMLSelectElement>('[data-v3-consumer-operation]')?.addEventListener('change', (event) => {
     state.v3ConsumerOperationId = (event.currentTarget as HTMLSelectElement).value
     state.v3ConsumerResponse = undefined
@@ -9909,7 +10418,7 @@ function renderDecisionPanel() {
   renderViewTabs()
   const showingActivityDetail = Boolean(state.selectedV3ActivitySessionId)
   fields.appShell.classList.add('resource-console-mode', 'seller-surface-mode', 'right-workspace-white')
-  fields.sellerSurfaceTabs.classList.remove('hidden')
+  syncV3SellerTabsVisibility()
   fields.actionView.classList.remove('hidden')
   syncV3SellerTabs()
   localize(fields.sellerSurfaceTabs)
@@ -13967,37 +14476,6 @@ function renderSettingsPanel() {
   localize(fields.settingsView)
 }
 
-function renderAccountKeySettings() {
-  const section = app.querySelector<HTMLElement>('[data-account-key-section]')
-  if (!section) return
-  const status = state.v3AccountKeyStatus
-  const stateLabel = fields.walletModal.querySelector<HTMLElement>('[data-account-key-state]')
-  const statusBody = section.querySelector<HTMLElement>('[data-account-key-status]')
-  const note = section.querySelector<HTMLElement>('[data-account-key-storage-note]')
-  const deleteButton = section.querySelector<HTMLButtonElement>('[data-account-key-delete]')
-  const saveButton = section.querySelector<HTMLButtonElement>('[data-account-key-save]')
-  if (!state.v3AccountKeyLoaded) {
-    if (stateLabel) stateLabel.textContent = 'checking'
-    if (statusBody) statusBody.innerHTML = '<div class="wallet-key-summary is-loading"><span>Checking secure storage and Cloud account status...</span></div>'
-    void loadV3AccountKeyStatus()
-    return
-  }
-  const configured = Boolean(status?.configured)
-  if (stateLabel) {
-    stateLabel.textContent = configured ? 'connected' : 'not connected'
-    stateLabel.classList.toggle('ready', configured)
-  }
-  if (deleteButton) deleteButton.disabled = !configured || state.v3ConsumerBusy
-  if (saveButton) saveButton.textContent = configured ? 'Replace from clipboard' : 'Validate from clipboard'
-  const balance = state.v3ConsumerBalance
-  if (statusBody) statusBody.innerHTML = configured
-    ? `<div class="wallet-key-summary ready"><div><strong>${escapeHTML(status?.maskedKey || 'exa_...')}</strong><span>Encrypted for this Desktop</span></div><dl><div><dt>Cloud balance</dt><dd>${balance ? escapeHTML(v3AtomicMoney(balance.availableAtomic, balance.asset || 'USDC')) : 'Unavailable'}</dd></div><div><dt>Saved</dt><dd>${status?.savedAt ? escapeHTML(new Date(status.savedAt).toLocaleDateString()) : 'This session'}</dd></div></dl></div>`
-    : '<div class="wallet-key-summary empty"><strong>No account key connected</strong><span>Add a key to use Cloud purchases, API calls, ledger, and approvals.</span></div>'
-  if (note) note.textContent = status?.storageMode === 'session' || status?.keyStorageAvailable === false
-    ? 'Secure storage is unavailable; the key stays in memory for this session only.'
-    : 'Protected by Electron safeStorage. The raw key is never exposed to the page or logs.'
-}
-
 function renderArchiveRecords() {
   const records = state.workTaskState.archivedRecords
   fields.archiveRecords.innerHTML = `
@@ -14056,7 +14534,7 @@ function renderWalletStatus() {
     ? 'Processing…'
     : state.walletWithdrawalChallenge ? 'Confirm withdrawal' : 'Send email code'
   fields.walletWithdrawForm.querySelectorAll<HTMLInputElement>('input').forEach((input) => {
-    input.disabled = state.walletWithdrawalBusy || (input.name === 'emailCode' ? !state.walletWithdrawalChallenge : Boolean(state.walletWithdrawalChallenge))
+	input.disabled = state.walletWithdrawalBusy || (input.name === 'emailCode' ? !state.walletWithdrawalChallenge : input.name === 'paymentPin' ? false : Boolean(state.walletWithdrawalChallenge))
   })
   const fee = wallet?.feePolicy
   const activeQuote = state.walletWithdrawalChallenge?.quote
@@ -14066,13 +14544,15 @@ function renderWalletStatus() {
     ? `Relay fee: ${formatWalletAtomic(Number(fee?.relayFeeAtomic || 0), decimals)} ${fee?.currency || 'USDC'}`
     : fee?.relayFeeDescription || 'Network fees are covered by Exora.'
   renderWalletWithdrawalStatus()
+  renderWalletSpendPolicy()
+  renderWalletHistory()
 
   if (readyToReceive) {
     void renderWalletQRCode(address)
   } else {
     fields.walletQR.innerHTML = `<span>${escapeHTML(uiText('QR'))}</span>`
   }
-  renderWalletPINInput()
+  renderWalletCodeInputs()
 }
 
 function walletUSDCBalance(wallet = state.walletStatus) {
@@ -14111,8 +14591,10 @@ function renderWalletWithdrawalStatus() {
     return
   }
   if (!withdrawal) {
+	const expiresRemaining = challenge?.challenge.expiresAt ? Math.max(0, Math.ceil((new Date(challenge.challenge.expiresAt).getTime() - Date.now()) / 1000)) : 0
+	const resendRemaining = challenge?.challenge.resendAfter ? Math.max(0, Math.ceil((new Date(challenge.challenge.resendAfter).getTime() - Date.now()) / 1000)) : 0
     target.innerHTML = challenge
-      ? `<strong>Verification email sent</strong><span>Enter the six-digit code${challenge.challenge.email ? ` sent to ${escapeHTML(challenge.challenge.email)}` : ''}. It expires ${challenge.challenge.expiresAt ? escapeHTML(new Date(challenge.challenge.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })) : 'in 10 minutes'}.</span>`
+	  ? `<strong>Verification email sent</strong><span>Enter the six-digit code${challenge.challenge.email ? ` sent to ${escapeHTML(challenge.challenge.email)}` : ''}. Expires in ${Math.floor(expiresRemaining / 60)}:${String(expiresRemaining % 60).padStart(2, '0')}.</span><button class="secondary" type="button" data-wallet-resend-code ${resendRemaining > 0 || state.walletWithdrawalBusy ? 'disabled' : ''}>${resendRemaining > 0 ? `Resend in ${resendRemaining}s` : 'Resend code'}</button>`
       : ''
     return
   }
@@ -14120,6 +14602,119 @@ function renderWalletWithdrawalStatus() {
   target.innerHTML = withdrawal.status === 'relayer_required'
     ? `<strong>Ready for relayer</strong><span>${escapeHTML(formatWalletAtomic(Number(withdrawal.amountAtomic || 0), decimals))} ${escapeHTML(withdrawal.currency || 'USDC')} · Signed securely on this Desktop; Exora relayer submission is still required.</span>`
     : `<strong>Withdrawal authorized</strong><span>${escapeHTML(formatWalletAtomic(Number(withdrawal.amountAtomic || 0), decimals))} ${escapeHTML(withdrawal.currency || 'USDC')} · ${escapeHTML(withdrawal.status || 'Processing')}</span>`
+}
+
+function walletSolscanURL(signature: string) {
+	return `https://solscan.io/tx/${encodeURIComponent(signature)}`
+}
+
+function renderWalletHistory() {
+	const deposits = Array.isArray(state.walletStatus?.deposits) ? state.walletStatus!.deposits! : []
+	const withdrawals = Array.isArray(state.walletStatus?.withdrawals) ? state.walletStatus!.withdrawals! : []
+  const allRows = [
+    ...deposits.map((item) => ({
+      id: item.depositId || item.signature || '', kind: 'deposit' as const, amount: Number(item.amountAtomic || 0), status: item.status || 'pending',
+      signature: item.signature || '', at: item.finalizedAt || item.creditedAt || item.detectedAt || '', detail: item.network || 'Solana', fee: 0,
+    })),
+    ...withdrawals.map((item) => ({
+      id: item.withdrawalId || item.signature || '', kind: 'withdrawal' as const, amount: Number(item.amountAtomic || 0), status: item.status || 'pending',
+      signature: item.signature || '', at: item.finalizedAt || item.updatedAt || item.createdAt || '', detail: item.destination || item.toAddress || 'External wallet', fee: Number(item.totalFeeAtomic || 0),
+    })),
+  ].sort((a, b) => String(b.at).localeCompare(String(a.at)))
+  const rows = state.walletHistoryFilter === 'all' ? allRows : allRows.filter((item) => item.kind === state.walletHistoryFilter)
+  fields.walletHistoryFilters.forEach((button) => {
+    const active = button.dataset.walletHistoryFilter === state.walletHistoryFilter
+    button.classList.toggle('active', active)
+    button.setAttribute('aria-pressed', String(active))
+  })
+  if (!rows.length) {
+    fields.walletHistory.innerHTML = `<div class="wallet-history-empty"><span aria-hidden="true">${icon(Activity)}</span><strong>No ${state.walletHistoryFilter === 'all' ? 'funding activity' : `${state.walletHistoryFilter}s`} yet</strong><p>Completed and pending wallet transfers will appear here.</p></div>`
+    return
+  }
+  fields.walletHistory.innerHTML = `<div class="wallet-history-list">${rows.map((item) => {
+    const label = item.kind === 'deposit' ? 'Deposit' : 'Withdrawal'
+    const amount = `${item.kind === 'deposit' ? '+' : '−'}${formatWalletAtomic(item.amount, walletUSDCDecimals())} USDC`
+    const detail = item.kind === 'withdrawal' && item.detail.length > 18 ? compactWalletAddress(item.detail) : item.detail
+    return `<article class="wallet-history-row ${item.kind}"><span class="wallet-history-kind" aria-hidden="true">${item.kind === 'deposit' ? walletSurfaceIcon : toolbarIcons.forward}</span><div class="wallet-history-copy"><strong>${label}</strong><small>${escapeHTML(item.status.replaceAll('_', ' '))}${item.at ? ` · ${escapeHTML(new Date(item.at).toLocaleString())}` : ''}</small><code title="${escapeAttr(item.detail)}">${escapeHTML(detail || item.id)}</code></div><div class="wallet-history-amount"><strong>${escapeHTML(amount)}</strong>${item.fee > 0 ? `<small>Fee ${escapeHTML(formatWalletAtomic(item.fee, walletUSDCDecimals()))} USDC</small>` : '<small>No Exora fee</small>'}${item.signature ? `<a href="${escapeAttr(walletSolscanURL(item.signature))}" target="_blank" rel="noreferrer">View on Solscan</a>` : ''}</div></article>`
+  }).join('')}</div>`
+}
+
+function walletPolicyAmountToAtomic(value: string, decimals = 6) {
+  const normalized = value.trim() || '0'
+  if (!/^\d+(?:\.\d+)?$/.test(normalized)) throw new Error('Enter valid USDC limits.')
+  const [whole, fraction = ''] = normalized.split('.')
+  if (fraction.length > decimals) throw new Error(`USDC supports up to ${decimals} decimal places.`)
+  const atomic = BigInt(whole) * (10n ** BigInt(decimals)) + BigInt(fraction.padEnd(decimals, '0') || '0')
+  if (atomic > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('The payment limit is too large.')
+  return Number(atomic)
+}
+
+function syncWalletSpendFormDisabled() {
+  const enabled = fields.walletLimitEnabled.checked
+  fields.walletLimitForm.querySelectorAll<HTMLInputElement>('input').forEach((input) => {
+    input.disabled = state.walletSpendBusy || (input.name !== 'paymentPin' && !enabled)
+  })
+  fields.walletLimitEnabled.disabled = state.walletSpendBusy
+  fields.walletLimitSave.disabled = state.walletSpendBusy
+  fields.walletLimitSave.textContent = state.walletSpendBusy ? 'Saving…' : 'Save limits'
+}
+
+function renderWalletSpendPolicy() {
+  const policy = state.walletStatus?.agentSpendPolicy
+  const enabled = policy?.enabled === true
+  fields.walletLimitState.textContent = enabled ? 'on' : 'off'
+  fields.walletLimitState.classList.toggle('ready', enabled)
+  const singleInput = fields.walletLimitForm.querySelector<HTMLInputElement>('input[name="singleLimit"]')!
+  const periodInput = fields.walletLimitForm.querySelector<HTMLInputElement>('input[name="periodLimit"]')!
+  const fingerprint = policy ? [policy.enabled, policy.singleLimitAtomic, policy.periodLimitAtomic, policy.spentAtomic, policy.updatedAt].join(':') : 'empty'
+  if (fields.walletLimitForm.dataset.policyFingerprint !== fingerprint && !fields.walletLimitForm.contains(document.activeElement)) {
+    fields.walletLimitEnabled.checked = enabled
+    singleInput.value = walletAtomicInput(Number(policy?.singleLimitAtomic || 0), walletUSDCDecimals())
+    periodInput.value = walletAtomicInput(Number(policy?.periodLimitAtomic || 0), walletUSDCDecimals())
+    fields.walletLimitForm.dataset.policyFingerprint = fingerprint
+  }
+  const spent = Number(policy?.spentAtomic || 0)
+  const periodLimit = Number(policy?.periodLimitAtomic || 0)
+  const remaining = Math.max(0, periodLimit - spent)
+  const resetsAt = policy?.periodStartedAt
+    ? new Date(new Date(policy.periodStartedAt).getTime() + Math.max(1, Number(policy.periodSeconds || 86400)) * 1000)
+    : undefined
+  fields.walletLimitUsage.innerHTML = `
+    <div><span>Used this period</span><strong>${escapeHTML(formatWalletAtomic(spent, walletUSDCDecimals()))} USDC</strong></div>
+    <div><span>Remaining</span><strong>${enabled ? `${escapeHTML(formatWalletAtomic(remaining, walletUSDCDecimals()))} USDC` : '—'}</strong></div>
+    <div><span>Resets</span><strong>${enabled && resetsAt ? escapeHTML(resetsAt.toLocaleString()) : 'When enabled'}</strong></div>`
+  fields.walletLimitError.textContent = state.walletSpendError || ''
+  fields.walletLimitError.classList.toggle('show', Boolean(state.walletSpendError))
+  syncWalletSpendFormDisabled()
+  renderWalletCodeInputs()
+}
+
+async function submitWalletSpendPolicy() {
+  if (state.walletSpendBusy) return
+  const data = new FormData(fields.walletLimitForm)
+  const enabled = fields.walletLimitEnabled.checked
+  const pin = String(data.get('paymentPin') || '').trim()
+  if (!/^\d{6}$/.test(pin)) throw new Error('Cloud payment PIN must be exactly 6 digits.')
+  const singleLimitAtomic = walletPolicyAmountToAtomic(String(data.get('singleLimit') || ''), walletUSDCDecimals())
+  const periodLimitAtomic = walletPolicyAmountToAtomic(String(data.get('periodLimit') || ''), walletUSDCDecimals())
+  if (enabled && (singleLimitAtomic <= 0 || periodLimitAtomic <= 0)) throw new Error('Enabled limits must be greater than zero.')
+  if (enabled && periodLimitAtomic < singleLimitAtomic) throw new Error('The 24-hour limit must be at least the per-payment limit.')
+  state.walletSpendBusy = true
+  state.walletSpendError = undefined
+  renderWalletSpendPolicy()
+  try {
+    const response = await invoke<{ spendPolicy?: AgentSpendPolicy }>('wallet_spend_policy_save', { input: { enabled, singleLimitAtomic, periodLimitAtomic, pin } })
+    if (!state.walletStatus) state.walletStatus = {}
+    state.walletStatus.agentSpendPolicy = response.spendPolicy || (response as unknown as AgentSpendPolicy)
+    fields.walletLimitForm.querySelector<HTMLInputElement>('input[name="paymentPin"]')!.value = ''
+    fields.walletLimitForm.dataset.policyFingerprint = ''
+    showToast(t(enabled ? 'toast.agentLimitsUpdated' : 'toast.agentPaymentsDisabled'))
+  } catch (error) {
+    state.walletSpendError = humanizeError(error)
+  } finally {
+    state.walletSpendBusy = false
+    renderWalletSpendPolicy()
+  }
 }
 
 function walletAmountToAtomic(value: string, decimals = 6) {
@@ -14144,9 +14739,11 @@ async function submitWalletWithdrawal(form: HTMLFormElement) {
   const pending = state.walletWithdrawalChallenge
   const toAddress = pending?.toAddress || String(data.get('toAddress') || '').trim()
   const emailCode = String(data.get('emailCode') || '').trim()
+	const paymentPin = String(data.get('paymentPin') || '').trim()
   const decimals = walletUSDCDecimals()
   const amountAtomic = pending?.amountAtomic || walletAmountToAtomic(String(data.get('amount') || ''), decimals)
   if (!toAddress) throw new Error('Enter a destination Solana address.')
+	if (!pending && !/^\d{6}$/.test(paymentPin)) throw new Error('Cloud payment PIN must be exactly 6 digits.')
   if (state.walletWithdrawalChallenge && !/^\d{6}$/.test(emailCode)) throw new Error('Email verification code must be exactly 6 digits.')
   const balance = walletUSDCBalance()
   if (balance?.status === 'ready' && amountAtomic > Number(balance.amountAtomic || 0)) {
@@ -14161,14 +14758,15 @@ async function submitWalletWithdrawal(form: HTMLFormElement) {
     const response = await invoke<WalletWithdrawalResponse>('wallet_withdraw', {
       input: pending
         ? { toAddress: pending.toAddress, amountAtomic: pending.amountAtomic, quoteId: pending.quote.quoteId, challengeId: pending.challenge.challengeId, code: emailCode, idempotencyKey: pending.idempotencyKey }
-        : { toAddress, amountAtomic },
+		: { toAddress, amountAtomic, pin: paymentPin },
     })
     if (!pending) {
       if (!response.quote || !response.challenge) throw new Error('Cloud did not return a withdrawal verification challenge.')
       state.walletWithdrawalChallenge = { quote: response.quote, challenge: response.challenge, toAddress, amountAtomic, idempotencyKey: `electron-${crypto.randomUUID()}` }
-      fields.walletPinInput.value = ''
+      fields.walletEmailCodeInput.value = ''
+	  form.querySelector<HTMLInputElement>('input[name="paymentPin"]')!.value = ''
       renderWalletStatus()
-      fields.walletPinInput.focus()
+      fields.walletEmailCodeInput.focus()
       return
     }
     if (!response.withdrawal) throw new Error('Cloud did not return a withdrawal record.')
@@ -14176,6 +14774,7 @@ async function submitWalletWithdrawal(form: HTMLFormElement) {
     state.walletWithdrawalChallenge = undefined
     form.querySelector<HTMLInputElement>('input[name="amount"]')!.value = ''
     form.querySelector<HTMLInputElement>('input[name="emailCode"]')!.value = ''
+	form.querySelector<HTMLInputElement>('input[name="paymentPin"]')!.value = ''
     await refreshWalletStatus()
   } catch (error) {
     state.walletWithdrawalError = humanizeError(error)
@@ -14183,6 +14782,32 @@ async function submitWalletWithdrawal(form: HTMLFormElement) {
     state.walletWithdrawalBusy = false
     renderWalletStatus()
   }
+}
+
+async function resendWalletWithdrawalCode() {
+	const pending = state.walletWithdrawalChallenge
+	if (!pending || state.walletWithdrawalBusy) return
+	const pinInput = fields.walletWithdrawForm.querySelector<HTMLInputElement>('input[name="paymentPin"]')!
+	const pin = pinInput.value.trim()
+	if (!/^\d{6}$/.test(pin)) throw new Error('Enter the six-digit Cloud payment PIN to resend the email code.')
+	state.walletWithdrawalBusy = true
+	state.walletWithdrawalError = undefined
+	renderWalletStatus()
+	try {
+		const response = await invoke<WalletWithdrawalResponse>('wallet_withdraw', { input: {
+			resend: true, pin, quoteId: pending.quote.quoteId, quote: pending.quote,
+		} })
+		if (!response.challenge) throw new Error('Cloud did not return a replacement verification challenge.')
+		state.walletWithdrawalChallenge = { ...pending, challenge: response.challenge }
+		pinInput.value = ''
+		fields.walletEmailCodeInput.value = ''
+		fields.walletEmailCodeInput.focus()
+	} catch (error) {
+		state.walletWithdrawalError = humanizeError(error)
+	} finally {
+		state.walletWithdrawalBusy = false
+		renderWalletStatus()
+	}
 }
 
 async function renderWalletQRCode(address: string) {
@@ -14228,17 +14853,23 @@ function selectWalletPanel(panel: WalletPanel, focus = false) {
   if (focus) fields.walletPanelTabs.find((button) => button.dataset.walletTab === panel)?.focus()
 }
 
-function renderWalletPINInput() {
-  const digits = fields.walletPinInput.value.replace(/\D/g, '').slice(0, 6)
-  if (fields.walletPinInput.value !== digits) fields.walletPinInput.value = digits
-  const focused = document.activeElement === fields.walletPinInput
-  const activeIndex = Math.min(digits.length, fields.walletPinCells.length - 1)
-  fields.walletPinCells.forEach((cell, index) => {
-    cell.classList.toggle('filled', index < digits.length)
-    cell.classList.toggle('active', focused && index === activeIndex)
+function renderWalletCodeInputs() {
+  fields.walletCodeControls.forEach((control) => {
+    const input = control.querySelector<HTMLInputElement>('input')
+    const cells = Array.from(control.querySelectorAll<HTMLElement>('.wallet-code-cells > i'))
+    if (!input || !cells.length) return
+    const digits = input.value.replace(/\D/g, '').slice(0, cells.length)
+    if (input.value !== digits) input.value = digits
+    const focused = document.activeElement === input
+    const activeIndex = Math.min(digits.length, cells.length - 1)
+    cells.forEach((cell, index) => {
+      cell.textContent = control.classList.contains('plain') ? digits[index] || '' : ''
+      cell.classList.toggle('filled', index < digits.length)
+      cell.classList.toggle('active', focused && index === activeIndex)
+    })
+    control.classList.toggle('complete', digits.length === cells.length)
+    control.classList.toggle('disabled', input.disabled)
   })
-  fields.walletPinControl.classList.toggle('complete', digits.length === fields.walletPinCells.length)
-  fields.walletPinControl.classList.toggle('disabled', fields.walletPinInput.disabled)
 }
 
 function renderWalletModal() {
@@ -14247,8 +14878,7 @@ function renderWalletModal() {
   if (!state.walletModalOpen) return
   renderWalletPanelState()
   renderWalletStatus()
-  renderAccountKeySettings()
-  renderWalletPINInput()
+  renderWalletCodeInputs()
   localize(fields.walletModal)
 }
 
@@ -14332,8 +14962,11 @@ function closeWalletModal() {
   if (!state.walletModalOpen) return
   state.walletModalOpen = false
   state.walletWithdrawalChallenge = undefined
-  fields.walletPinInput.value = ''
-  renderWalletPINInput()
+  fields.walletCodeControls.forEach((control) => {
+    const input = control.querySelector<HTMLInputElement>('input')
+    if (input) input.value = ''
+  })
+	renderWalletCodeInputs()
   renderWalletModal()
   renderProfileSummary()
 }
@@ -14353,7 +14986,7 @@ async function refreshWalletModalStatus() {
 function renderSettingsSurface() {
   fields.settingsView.classList.toggle('hidden', !state.settingsOpen)
   fields.actionView.classList.toggle('hidden', state.settingsOpen)
-  fields.sellerSurfaceTabs.classList.toggle('hidden', state.settingsOpen)
+  syncV3SellerTabsVisibility()
   fields.appShell.classList.toggle('settings-mode', state.settingsOpen)
   fields.settingsButton.classList.toggle('active', state.settingsOpen)
   fields.settingsButton.setAttribute('aria-pressed', String(state.settingsOpen))
@@ -14383,11 +15016,28 @@ function returnFromSettings() {
 }
 
 function renderPINSettingsModal() {
+  const setup = state.pinSettingsMode === 'setup'
   fields.pinSettingsModal.classList.toggle('hidden', !state.pinSettingsModalOpen)
   fields.pinSettingsModal.setAttribute('aria-hidden', String(!state.pinSettingsModalOpen))
+  fields.pinSettingsEyebrow.textContent = setup ? 'One last security step' : 'Account security'
+  fields.pinSettingsTitle.textContent = setup ? 'Create your payment PIN' : 'Change payment PIN'
+  fields.pinSettingsDetail.textContent = setup
+    ? 'Choose and confirm a six-digit PIN for payments and other sensitive actions.'
+    : 'Enter your current PIN, then choose a new six-digit PIN.'
+  fields.pinSettingsCurrent.classList.toggle('hidden', setup)
+  const currentPIN = fields.pinSettingsForm.elements.namedItem('currentPIN') as HTMLInputElement
+  currentPIN.required = !setup
+  currentPIN.disabled = setup || state.pinSettingsBusy
+  fields.pinSettingsPINLabel.textContent = setup ? 'Payment PIN' : 'New PIN'
+  fields.pinSettingsConfirmLabel.textContent = setup ? 'Confirm payment PIN' : 'Confirm new PIN'
+  fields.pinSettingsSubmit.textContent = setup ? 'Create PIN' : 'Change PIN'
+  fields.pinSettingsCancel.classList.toggle('hidden', setup)
+  fields.pinSettingsModal.querySelectorAll<HTMLElement>('.app-modal-close, .app-modal-scrim').forEach((control) => control.classList.toggle('hidden', setup))
+  fields.pinSettingsFooter.textContent = setup ? 'Your PIN is stored only as a protected Cloud credential.' : 'PIN changes apply to sensitive account actions.'
+  fields.pinSettingsEscape.classList.toggle('hidden', setup)
   fields.pinSettingsSubmit.disabled = state.pinSettingsBusy
   fields.pinSettingsForm.querySelectorAll<HTMLInputElement>('input').forEach((input) => {
-    input.disabled = state.pinSettingsBusy
+    if (input.name !== 'currentPIN') input.disabled = state.pinSettingsBusy
   })
 }
 
@@ -14399,15 +15049,35 @@ function openPINSettingsModal() {
   fields.pinSettingsForm.reset()
   fields.pinSettingsMessage.textContent = ''
   fields.pinSettingsMessage.dataset.tone = ''
+  state.pinSettingsMode = 'change'
   state.pinSettingsModalOpen = true
   renderPINSettingsModal()
   window.setTimeout(() => fields.pinSettingsForm.elements.namedItem('currentPIN') instanceof HTMLInputElement
     && (fields.pinSettingsForm.elements.namedItem('currentPIN') as HTMLInputElement).focus(), 0)
 }
 
+function openPINSetupModal() {
+  closeProfileMenu()
+  closeMCPInfoModal()
+  closeWalletModal()
+  closeOrderSearch()
+  fields.pinSettingsForm.reset()
+  fields.pinSettingsMessage.textContent = ''
+  fields.pinSettingsMessage.dataset.tone = ''
+  state.pinSettingsMode = 'setup'
+  state.pinSettingsModalOpen = true
+  renderPINSettingsModal()
+  window.setTimeout(() => (fields.pinSettingsForm.elements.namedItem('newPIN') as HTMLInputElement | null)?.focus(), 0)
+}
+
 function closePINSettingsModal() {
-  if (!state.pinSettingsModalOpen || state.pinSettingsBusy) return
+  if (!state.pinSettingsModalOpen || state.pinSettingsBusy || state.pinSettingsMode === 'setup') return
+  dismissPINSettingsModal()
+}
+
+function dismissPINSettingsModal() {
   state.pinSettingsModalOpen = false
+  state.pinSettingsMode = 'change'
   fields.pinSettingsForm.reset()
   fields.pinSettingsMessage.textContent = ''
   fields.pinSettingsMessage.dataset.tone = ''
@@ -14417,7 +15087,8 @@ function closePINSettingsModal() {
 async function submitPINSettings() {
   if (state.pinSettingsBusy) return
   const data = Object.fromEntries(new FormData(fields.pinSettingsForm).entries()) as Record<string, string>
-  if (!/^\d{6}$/.test(data.currentPIN || '') || !/^\d{6}$/.test(data.newPIN || '')) {
+  const setup = state.pinSettingsMode === 'setup'
+  if ((!setup && !/^\d{6}$/.test(data.currentPIN || '')) || !/^\d{6}$/.test(data.newPIN || '')) {
     fields.pinSettingsMessage.textContent = 'PINs must contain exactly six digits.'
     fields.pinSettingsMessage.dataset.tone = 'error'
     return
@@ -14432,11 +15103,13 @@ async function submitPINSettings() {
   fields.pinSettingsMessage.dataset.tone = 'info'
   renderPINSettingsModal()
   try {
-    await invoke<CloudAuthState>('auth_pin_change', { input: data })
-    state.pinSettingsModalOpen = false
-    fields.pinSettingsForm.reset()
-    fields.pinSettingsMessage.textContent = ''
-    showToast(t('toast.paymentPinChanged'))
+    if (setup) {
+      await invoke<CloudAuthState>('auth_pin_set', { input: { pin: data.newPIN, pinConfirm: data.pinConfirm } })
+    } else {
+      await invoke<CloudAuthState>('auth_pin_change', { input: data })
+    }
+    dismissPINSettingsModal()
+    showToast(setup ? 'Payment PIN created.' : t('toast.paymentPinChanged'))
   } catch (error) {
     fields.pinSettingsMessage.textContent = humanizeError(error)
     fields.pinSettingsMessage.dataset.tone = 'error'
@@ -14797,9 +15470,31 @@ app.querySelector<HTMLButtonElement>('[data-action="wallet-refresh"]')!.addEvent
   run(() => refreshWalletModalStatus())
 })
 
-fields.walletPinInput.addEventListener('input', renderWalletPINInput)
-fields.walletPinInput.addEventListener('focus', renderWalletPINInput)
-fields.walletPinInput.addEventListener('blur', renderWalletPINInput)
+fields.walletCodeControls.forEach((control) => {
+  const input = control.querySelector<HTMLInputElement>('input')
+  if (!input) return
+  input.addEventListener('input', renderWalletCodeInputs)
+  input.addEventListener('focus', renderWalletCodeInputs)
+  input.addEventListener('blur', renderWalletCodeInputs)
+})
+
+fields.walletWithdrawStatus.addEventListener('click', (event) => {
+	if (!(event.target as HTMLElement).closest('[data-wallet-resend-code]')) return
+	void run(resendWalletWithdrawalCode)
+})
+
+let lastWalletFundsPoll = 0
+window.setInterval(() => {
+	if (!state.walletModalOpen) return
+	if (state.walletWithdrawalChallenge) renderWalletWithdrawalStatus()
+	const terminalWithdrawals = new Set(['finalized', 'rejected', 'failed'])
+	const terminalDeposits = new Set(['credited', 'swept', 'failed'])
+	const hasPendingFunds = (state.walletStatus?.withdrawals || []).some((item) => !terminalWithdrawals.has(String(item.status || '')))
+		|| (state.walletStatus?.deposits || []).some((item) => !terminalDeposits.has(String(item.status || '')))
+	if (!hasPendingFunds || state.walletWithdrawalBusy || Date.now() - lastWalletFundsPoll < 5_000) return
+	lastWalletFundsPoll = Date.now()
+	void refreshWalletStatus()
+}, 1_000)
 
 app.querySelector<HTMLButtonElement>('[data-action="wallet-withdraw-max"]')!.addEventListener('click', () => {
   const balance = walletUSDCBalance()
@@ -14813,28 +15508,25 @@ fields.walletWithdrawForm.addEventListener('submit', (event) => {
   void run(() => submitWalletWithdrawal(fields.walletWithdrawForm))
 })
 
-app.querySelector<HTMLButtonElement>('[data-account-key-save]')?.addEventListener('click', () => {
-  void run(async () => {
-    const response = await invoke<V3AccountKeyStatus & { balance?: V3ConsumerBalance }>('account_key_save')
-    state.v3AccountKeyStatus = response
-    state.v3AccountKeyLoaded = true
-    state.v3ConsumerBalance = response.balance
-    state.v3ConsumerError = undefined
-    renderWalletModal()
-  }, t('toast.accountKeyValidated'))
+fields.walletLimitEnabled.addEventListener('change', () => {
+  state.walletSpendError = undefined
+  syncWalletSpendFormDisabled()
+  renderWalletCodeInputs()
 })
 
-app.querySelector<HTMLButtonElement>('[data-account-key-delete]')?.addEventListener('click', () => {
-  void run(async () => {
-    state.v3AccountKeyStatus = await invoke<V3AccountKeyStatus>('account_key_delete')
-    state.v3AccountKeyLoaded = true
-    state.v3ConsumerBalance = undefined
-    state.v3ConsumerResponse = undefined
-    state.v3ConsumerGrant = undefined
-    state.v3ConsumerPurchase = undefined
-    state.v3ConsumerLease = undefined
-    renderWalletModal()
-  }, t('toast.accountKeyDeleted'))
+fields.walletLimitForm.addEventListener('submit', (event) => {
+  event.preventDefault()
+  void submitWalletSpendPolicy().catch((error) => {
+    state.walletSpendError = humanizeError(error)
+    renderWalletSpendPolicy()
+  })
+})
+
+fields.walletHistoryFilters.forEach((button) => {
+  button.addEventListener('click', () => {
+    state.walletHistoryFilter = button.dataset.walletHistoryFilter as WalletHistoryFilter
+    renderWalletHistory()
+  })
 })
 
 app.querySelector<HTMLButtonElement>('[data-action="wallet-copy-address"]')!.addEventListener('click', () => {
@@ -14899,6 +15591,7 @@ async function openWorkspace(authState?: CloudAuthState) {
   renderAll()
   await requestWindowMode('workspace')
   await waitForWorkspacePaint()
+  if (authState?.phase === 'needs_pin') openPINSetupModal()
 }
 
 const authGate = createAuthGate(app, {
@@ -14906,6 +15599,7 @@ const authGate = createAuthGate(app, {
   language: () => state.language,
   setLanguage,
   onAuthenticated: async (authState) => {
+    setLocalActivityFixturesEnabled(false)
     await openWorkspace(authState)
   },
   onSignedOut: () => {
@@ -14913,9 +15607,11 @@ const authGate = createAuthGate(app, {
     state.authAccount = undefined
     state.signedOut = true
     state.profileMenuOpen = false
+    dismissPINSettingsModal()
     renderProfileSummary()
   },
   onTestWorkspace: async () => {
+    setLocalActivityFixturesEnabled(true)
     await openWorkspace()
   },
 })

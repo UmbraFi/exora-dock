@@ -20,6 +20,7 @@ const RETIRED_DESKTOP_STATE_KEYS = Object.freeze([
   'activeProjectFolderPath',
   'workMcpUids',
   'workMcpLeases',
+  'accountKey',
 ])
 
 async function cleanupLegacyFrontendData(options = {}) {
