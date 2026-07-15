@@ -226,8 +226,12 @@ function createCloudAuth(options = {}) {
     }
 
     let pinStatus = { configured: false }
-    try { pinStatus = normalizePINStatus(await options.getPINStatus?.()) } catch {}
-    if (!pinStatus.configured || !pinStatus.boundAccountId || pinStatus.boundAccountId !== account.accountId) {
+    try {
+      pinStatus = normalizePINStatus(await request(cloudURL, 'GET', '/v1/auth/payment-pin', undefined, token))
+    } catch (error) {
+      if (error.status === 401) throw error
+    }
+    if (!pinStatus.configured) {
       return publicState({
         phase: 'needs_pin', authenticated: true, account, cloudURL, providers: providerResult,
         pinStatus, storageAvailable: encryptionAvailable(),
@@ -269,14 +273,12 @@ function createCloudAuth(options = {}) {
     const email = String(input.email || '').trim().toLowerCase()
     const password = String(input.password || '')
     const passwordConfirm = String(input.passwordConfirm || '')
-    const pin = String(input.pin || '').trim()
-    const pinConfirm = String(input.pinConfirm || '').trim()
-    validateRegistrationInput(email, password, passwordConfirm, pin, pinConfirm)
+    validateRegistrationInput(email, password, passwordConfirm)
     const { paths, state } = await pathsAndState()
     const cloudURL = await resolveCloudURL(paths, state)
     const result = await request(cloudURL, 'POST', '/v1/auth/registrations', { email, locale: normalizeLocale(input.locale) })
     pendingRegistration = {
-      challengeId: String(result.challengeId || ''), email, password, pin, cloudURL,
+	  challengeId: String(result.challengeId || ''), email, password, cloudURL,
       createdAt: now().getTime(),
     }
     return sanitizeChallenge(result, !options.isPackaged)
@@ -298,15 +300,7 @@ function createCloudAuth(options = {}) {
       clientKind: 'electron', deviceId: installID, deviceName: String(options.deviceName?.() || 'Exora Dock'),
     })
     const session = await persistSession(paths, state, pendingRegistration.cloudURL, result)
-    const pin = pendingRegistration.pin
     pendingRegistration = undefined
-    try {
-      await options.setPIN?.(pin, session.account.accountId)
-    } catch (error) {
-      const resultState = publicState({ phase: 'needs_pin', authenticated: true, account: session.account, cloudURL: session.record.cloudURL, error })
-      options.broadcast?.(resultState)
-      return resultState
-    }
     const resultState = await snapshot()
     options.broadcast?.(resultState)
     return resultState
@@ -365,10 +359,13 @@ function createCloudAuth(options = {}) {
     const confirmation = String(input.pinConfirm || '').trim()
     if (!/^\d{6}$/.test(pin)) throw new CloudAuthError('PIN must be exactly 6 digits.', { code: 'invalid_pin' })
     if (pin !== confirmation) throw new CloudAuthError('PINs do not match.', { code: 'pin_mismatch' })
-    const { state } = await pathsAndState()
+	const { paths, state } = await pathsAndState()
     const account = sanitizeAccount(state.cloudAuth?.account)
-    if (!account || !await loadSession(state)) throw new CloudAuthError('Sign in before setting a PIN.', { code: 'session_required' })
-    await options.setPIN?.(pin, account.accountId)
+	const token = await loadSession(state)
+	if (!account || !token) throw new CloudAuthError('Sign in before setting a PIN.', { code: 'session_required' })
+	const cloudURL = await resolveCloudURL(paths, state)
+	await request(cloudURL, 'PUT', '/v1/auth/payment-pin', { pin }, token)
+	await options.clearLocalPIN?.(paths)
     const resultState = await snapshot()
     options.broadcast?.(resultState)
     return resultState
@@ -376,11 +373,19 @@ function createCloudAuth(options = {}) {
 
   async function changePIN(payload = {}) {
     const input = payload.input || payload
-    const { state } = await pathsAndState()
-    const account = sanitizeAccount(state.cloudAuth?.account)
-    if (!account) throw new CloudAuthError('Sign in before changing a PIN.', { code: 'session_required' })
-    await options.verifyPIN?.(String(input.currentPIN || '').trim(), account.accountId)
-    return setPIN({ input: { pin: input.newPIN, pinConfirm: input.pinConfirm } })
+	const { paths, state } = await pathsAndState()
+	const account = sanitizeAccount(state.cloudAuth?.account)
+	const token = await loadSession(state)
+	if (!account || !token) throw new CloudAuthError('Sign in before changing a PIN.', { code: 'session_required' })
+	const pin = String(input.newPIN || '').trim()
+	if (!/^\d{6}$/.test(pin)) throw new CloudAuthError('PIN must be exactly 6 digits.', { code: 'invalid_pin' })
+	if (pin !== String(input.pinConfirm || '').trim()) throw new CloudAuthError('PINs do not match.', { code: 'pin_mismatch' })
+	const cloudURL = await resolveCloudURL(paths, state)
+	await request(cloudURL, 'PUT', '/v1/auth/payment-pin', { currentPin: String(input.currentPIN || '').trim(), pin }, token)
+	await options.clearLocalPIN?.(paths)
+	const resultState = await snapshot()
+	options.broadcast?.(resultState)
+	return resultState
   }
 
   async function resetPIN(payload = {}) {
@@ -389,9 +394,23 @@ function createCloudAuth(options = {}) {
     const token = await loadSession(state)
     const account = sanitizeAccount(state.cloudAuth?.account)
     if (!token || !account) throw new CloudAuthError('Sign in before resetting a PIN.', { code: 'session_required' })
-    const cloudURL = await resolveCloudURL(paths, state)
-    await request(cloudURL, 'POST', '/v1/auth/reauth/password', { password: String(input.password || '') }, token)
-    return setPIN({ input: { pin: input.newPIN, pinConfirm: input.pinConfirm } })
+	const cloudURL = await resolveCloudURL(paths, state)
+	const challengeID = String(input.challengeId || '').trim()
+	if (!challengeID) {
+	  return sanitizeChallenge(await request(cloudURL, 'POST', '/v1/auth/payment-pin/reset-challenges', {
+		password: String(input.password || ''), locale: normalizeLocale(input.locale),
+	  }, token), !options.isPackaged)
+	}
+	const pin = String(input.newPIN || '').trim()
+	if (!/^\d{6}$/.test(pin)) throw new CloudAuthError('PIN must be exactly 6 digits.', { code: 'invalid_pin' })
+	if (pin !== String(input.pinConfirm || '').trim()) throw new CloudAuthError('PINs do not match.', { code: 'pin_mismatch' })
+	await request(cloudURL, 'POST', `/v1/auth/payment-pin/reset-challenges/${encodeURIComponent(challengeID)}/complete`, {
+	  code: String(input.code || '').trim(), pin,
+	}, token)
+	await options.clearLocalPIN?.(paths)
+	const resultState = await snapshot()
+	options.broadcast?.(resultState)
+	return resultState
   }
 
   async function logout() {
@@ -493,8 +512,7 @@ function normalizePINStatus(value) {
   const status = value?.paymentPin || value || {}
   return {
     configured: status.configured === true,
-    boundAccountId: String(status.boundAccountId || ''),
-    updatedAt: String(status.updatedAt || ''),
+	lockedUntil: String(status.lockedUntil || ''),
   }
 }
 
@@ -534,12 +552,10 @@ function sanitizeChallenge(value, includeDevCode = true) {
   }
 }
 
-function validateRegistrationInput(email, password, confirmation, pin, pinConfirmation) {
+function validateRegistrationInput(email, password, confirmation) {
   if (!/^\S+@\S+\.\S+$/.test(email)) throw new CloudAuthError('Enter a valid email address.', { code: 'invalid_email' })
   validatePassword(password)
   if (password !== confirmation) throw new CloudAuthError('Passwords do not match.', { code: 'password_mismatch' })
-  if (!/^\d{6}$/.test(pin)) throw new CloudAuthError('PIN must be exactly 6 digits.', { code: 'invalid_pin' })
-  if (pin !== pinConfirmation) throw new CloudAuthError('PINs do not match.', { code: 'pin_mismatch' })
 }
 
 function validatePassword(password) {

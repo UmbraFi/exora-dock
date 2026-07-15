@@ -12,8 +12,8 @@ function jsonResponse(status, value) {
 function harness(routes, settings = {}) {
   let state = {}
   const requests = []
-  const pinSets = []
   const broadcasts = []
+	let localPINClears = 0
   const safeStorage = settings.safeStorage || {
     isEncryptionAvailable: () => true,
     encryptString: (value) => Buffer.from(`encrypted:${value}`),
@@ -34,20 +34,20 @@ function harness(routes, settings = {}) {
       requests.push(request)
       const key = `${request.method} ${new URL(url).pathname}`
       const handler = routes[key]
+	  if (!handler && key === 'GET /v1/auth/payment-pin') return jsonResponse(200, { configured: true })
       if (!handler) throw new Error(`unexpected request ${key}`)
       return typeof handler === 'function' ? handler(request) : handler
     },
-    getPINStatus: settings.getPINStatus || (async () => ({ paymentPin: { configured: true, boundAccountId: 'acct_1' } })),
-    setPIN: settings.setPIN || (async (pin, accountId) => { pinSets.push({ pin, accountId }) }),
-    verifyPIN: async () => ({ verified: true }),
+	clearLocalPIN: async () => { localPINClears += 1 },
     ensureDockLink: async ({ token, account }) => ({ linked: true, tokenSeen: Boolean(token), accountId: account.accountId }),
     clearDockLink: async () => undefined,
     broadcast: (value) => broadcasts.push(value),
   })
-  return { auth, get state() { return state }, requests, pinSets, broadcasts }
+	return { auth, get state() { return state }, requests, get localPINClears() { return localPINClears }, broadcasts }
 }
 
-test('registration keeps PIN out of Cloud and persists only an encrypted session', async () => {
+test('registration does not retain a PIN while email verification is pending', async () => {
+	let pinConfigured = false
   const routes = {
     'POST /v1/auth/registrations': jsonResponse(202, {
       challengeId: 'emc_1', email: 'user@example.com', expiresAt: '2026-07-14T12:10:00Z', resendAfter: '2026-07-14T12:01:00Z', devCode: '123456',
@@ -57,24 +57,32 @@ test('registration keeps PIN out of Cloud and persists only an encrypted session
       session: { sessionId: 'sess_1', expiresAt: '2026-08-13T12:00:00Z' },
       sessionToken: 'exora_sess_secret',
     }),
-    'GET /v1/auth/providers': jsonResponse(200, { password: true, social: [] }),
-    'GET /v1/me': jsonResponse(200, {
+	'GET /v1/auth/providers': () => jsonResponse(200, { password: true, social: [] }),
+	'GET /v1/me': () => jsonResponse(200, {
       account: { accountId: 'acct_1', email: 'user@example.com', emailVerifiedAt: '2026-07-14T12:00:00Z' },
       session: { sessionId: 'sess_1', expiresAt: '2026-08-13T12:00:00Z' },
     }),
+	'GET /v1/auth/payment-pin': () => jsonResponse(200, { configured: pinConfigured }),
+	'PUT /v1/auth/payment-pin': () => {
+	  pinConfigured = true
+	  return jsonResponse(200, { configured: true })
+	},
   }
   const h = harness(routes)
   const challenge = await h.auth.registrationStart({ input: {
     email: 'user@example.com', password: 'long secure password', passwordConfirm: 'long secure password',
-    pin: '123456', pinConfirm: '123456', locale: 'en',
+	locale: 'en',
   } })
   const result = await h.auth.registrationComplete({ input: { challengeId: challenge.challengeId, code: challenge.devCode } })
-  assert.equal(result.phase, 'authenticated')
+	assert.equal(result.phase, 'needs_pin')
   assert.equal(result.sessionToken, undefined)
-  assert.deepEqual(h.pinSets, [{ pin: '123456', accountId: 'acct_1' }])
   const completeRequest = h.requests.find((request) => request.url.includes('/complete'))
   assert.equal(completeRequest.body.pin, undefined)
   assert.equal(completeRequest.body.password, 'long secure password')
+	assert.equal(JSON.stringify(h.requests).includes('123456'), true, 'the email dev code is expected in the completion request')
+	const afterPIN = await h.auth.setPIN({ input: { pin: '654321', pinConfirm: '654321' } })
+	assert.equal(afterPIN.phase, 'authenticated')
+	assert.equal(h.localPINClears, 1)
   assert.equal(h.state.cloudAuth.storageMode, 'safeStorage')
   assert.ok(h.state.cloudAuth.encryptedSession)
   assert.equal(JSON.stringify(h.state).includes('exora_sess_secret'), false)
@@ -99,7 +107,7 @@ test('safeStorage unavailability uses a process-only session', async () => {
   assert.equal(JSON.stringify(h.state).includes('memory_only_token'), false)
 })
 
-test('a local PIN write failure preserves the Cloud account and enters needs_pin', async () => {
+test('a Cloud PIN write failure preserves the verified Cloud account', async () => {
   let registrationCompletions = 0
   const routes = {
     'POST /v1/auth/registrations': jsonResponse(202, { challengeId: 'emc_2', email: 'pin@example.com', devCode: '123456' }),
@@ -108,17 +116,23 @@ test('a local PIN write failure preserves the Cloud account and enters needs_pin
       return jsonResponse(201, {
         account: { accountId: 'acct_1', email: 'pin@example.com' }, session: { sessionId: 'sess_pin' }, sessionToken: 'pin_session_token',
       })
-    },
+	},
+	'GET /v1/auth/providers': jsonResponse(200, { password: true, social: [] }),
+	'GET /v1/me': jsonResponse(200, { account: { accountId: 'acct_1', email: 'pin@example.com' }, session: { sessionId: 'sess_pin' } }),
+	'GET /v1/auth/payment-pin': jsonResponse(200, { configured: false }),
+	'PUT /v1/auth/payment-pin': jsonResponse(500, { code: 'pin_write_failed', error: 'Cloud PIN unavailable' }),
   }
-  const h = harness(routes, { setPIN: async () => { throw new Error('disk unavailable') } })
+	const h = harness(routes)
   const challenge = await h.auth.registrationStart({ input: {
-    email: 'pin@example.com', password: 'long secure password', passwordConfirm: 'long secure password', pin: '123456', pinConfirm: '123456',
+	  email: 'pin@example.com', password: 'long secure password', passwordConfirm: 'long secure password',
   } })
   const result = await h.auth.registrationComplete({ input: { challengeId: challenge.challengeId, code: challenge.devCode } })
   assert.equal(result.phase, 'needs_pin')
   assert.equal(result.authenticated, true)
   assert.equal(h.state.cloudAuth.account.accountId, 'acct_1')
   assert.equal(registrationCompletions, 1)
+	await assert.rejects(() => h.auth.setPIN({ input: { pin: '123456', pinConfirm: '123456' } }), /Cloud PIN unavailable/)
+	assert.equal(h.state.cloudAuth.account.accountId, 'acct_1')
 })
 
 test('a 401 clears the encrypted session and broadcasts expiry', async () => {
@@ -149,7 +163,7 @@ test('packaged builds default to the official API and never expose devCode', asy
   }
   const h = harness(routes, { isPackaged: true, envCloudURL: '' })
   const challenge = await h.auth.registrationStart({ input: {
-    email: 'prod@example.com', password: 'long secure password', passwordConfirm: 'long secure password', pin: '123456', pinConfirm: '123456',
+	  email: 'prod@example.com', password: 'long secure password', passwordConfirm: 'long secure password',
   } })
   assert.equal(new URL(h.requests[0].url).origin, 'https://api.exoradock.com')
   assert.equal(challenge.devCode, undefined)

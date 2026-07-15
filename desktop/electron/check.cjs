@@ -12,6 +12,7 @@ for (const file of electronScripts(__dirname)) {
 }
 
 const renderer = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.ts'), 'utf8')
+const activityFixtures = fs.readFileSync(path.join(__dirname, '..', 'src', 'activity-fixtures.ts'), 'utf8')
 const viteConfig = fs.readFileSync(path.join(__dirname, '..', 'vite.config.ts'), 'utf8')
 if (!/base:\s*['"]\.\/['"]/.test(viteConfig)) throw new Error('Packaged renderer assets must use file-relative URLs')
 const rendererStyles = [
@@ -100,6 +101,24 @@ if (!listingStyles || listingStyles.includes('linear-gradient')) throw new Error
 for (const marker of ['function renderV3HistoryRow', 'function renderV3ActivityDetail', 'data-v3-history-session', 'data-v3-activity-detail']) {
   if (!renderer.includes(marker)) throw new Error(`V3 history surface missing: ${marker}`)
 }
+for (const marker of ['localActivitySessionsForRole', 'localActivityDetailForSession', 'setLocalActivityFixturesEnabled(true)', 'setLocalActivityFixturesEnabled(false)']) {
+  if (!renderer.includes(marker)) throw new Error(`Local activity test mode missing: ${marker}`)
+}
+if ((activityFixtures.match(/role: 'buyer'/g) || []).length < 3 || (activityFixtures.match(/role: 'seller'/g) || []).length < 3) {
+  throw new Error('Local activity test mode must include at least three buyer and three seller orders')
+}
+for (const marker of ["productKind: 'compute'", "productKind: 'download'", "productKind: 'api_operation'", "status: 'active'", "status: 'completed'", "status: 'needs_attention'"]) {
+  if (!activityFixtures.includes(marker)) throw new Error(`Local activity fixture coverage missing: ${marker}`)
+}
+for (const marker of ['function syncV3SellerTabsVisibility()', 'state.settingsOpen || Boolean(state.selectedV3ActivitySessionId)']) {
+  if (!renderer.includes(marker)) throw new Error(`V3 activity detail tab visibility missing: ${marker}`)
+}
+const decisionPanel = renderer.slice(renderer.indexOf('function renderDecisionPanel()'), renderer.indexOf('function renderOrderPlanDecision('))
+if (!decisionPanel.includes('syncV3SellerTabsVisibility()') || decisionPanel.includes("fields.sellerSurfaceTabs.classList.remove('hidden')")) {
+  throw new Error('Activity detail rendering must hide the main workspace tabs')
+}
+const settingsSurface = renderer.slice(renderer.indexOf('function renderSettingsSurface()'), renderer.indexOf('function openSettings('))
+if (!settingsSurface.includes('syncV3SellerTabsVisibility()')) throw new Error('Returning from settings must preserve activity detail tab visibility')
 const electronMain = fs.readFileSync(path.join(__dirname, 'main.cjs'), 'utf8')
 if (!/auth:\s*Object\.freeze\(\{\s*width:\s*1440,\s*height:\s*900,\s*minWidth:\s*560,\s*minHeight:\s*600\s*\}\)/.test(electronMain)) {
   throw new Error('Authentication must open at the normal 1440x900 desktop size')
@@ -110,7 +129,7 @@ const authUI = fs.readFileSync(path.join(__dirname, '..', 'src', 'auth-ui.ts'), 
 const workspaceTemplate = renderer.slice(renderer.indexOf('app.innerHTML ='), renderer.indexOf('const fields ='))
 if (!workspaceTemplate.includes('class="top-window-drag-strip"')) throw new Error('The native top titlebar drag region is missing')
 if (!authUI.includes('class="top-window-drag-strip auth-top-window-drag-strip"')) throw new Error('The auth gate must reuse the single native top titlebar drag region')
-if (!/\.top-window-drag-strip\s*\{[^}]*background:\s*transparent;[^}]*height:\s*36px;[^}]*top:\s*0;[^}]*app-region:\s*drag;/s.test(rendererStyles)) throw new Error('The top titlebar must remain transparent and natively draggable')
+if (!/\.top-window-drag-strip\s*\{[^}]*background:\s*transparent;[^}]*height:\s*48px;[^}]*top:\s*0;[^}]*app-region:\s*drag;/s.test(rendererStyles)) throw new Error('The top titlebar must keep the expanded transparent native drag region')
 if (/\.auth-feature-scroll\s*\{[^}]*app-region:\s*no-drag;/s.test(rendererStyles)) throw new Error('The full-height authentication showcase must not cancel the top-left drag strip')
 const nativeDragDeclarations = rendererStyles.match(/(?:^|\s)(?:-webkit-)?app-region:\s*drag;/g) || []
 if (nativeDragDeclarations.length !== 2) throw new Error('Only the unprefixed and prefixed declarations on the single top titlebar may be draggable')
@@ -119,6 +138,9 @@ if (!/\.app-modal\s*\{[^}]*app-region:\s*no-drag;/s.test(rendererStyles)) throw 
 for (const retiredDragImplementation of ['auth-drag-strip', 'sidebar-drag-strip', 'main-window-drag-strip', 'chat-top-drag-layer', 'drag-region', 'window_begin_manual_drag', 'window_manual_drag_move', 'window_end_manual_drag', 'manualWindowDragActive']) {
   if (renderer.includes(retiredDragImplementation) || rendererStyles.includes(retiredDragImplementation)) throw new Error(`retired drag implementation returned: ${retiredDragImplementation}`)
 }
+const windowModeTransition = electronMain.slice(electronMain.indexOf('async function window_set_mode'), electronMain.indexOf('async function auth_status'))
+if (!windowModeTransition.includes('mainWindow.setSize(size.width, size.height, true)')) throw new Error('Window mode changes must resize in place without moving the login window')
+if (windowModeTransition.includes('display.workArea.x') || windowModeTransition.includes('display.workArea.y')) throw new Error('Window mode changes must not recenter the window')
 for (const retired of ['Transaction Agent', 'Ask Exora Dock', 'Select order activity', 'data-agent-chat-form', 'data-agent-query', 'data-cart-modal', 'data-market-project-picker', 'data-transaction-detail-sidebar']) {
   if (workspaceTemplate.includes(retired)) throw new Error(`retired workspace DOM returned: ${retired}`)
 }
@@ -167,6 +189,12 @@ for (const marker of ['auth-gate', 'data-auth-form="login"', 'data-auth-form="re
 }
 if (!cloudAuthMain.includes("storageMode: encryptionAvailable() ? 'safeStorage' : 'session'")) throw new Error('Cloud sessions must use safeStorage or process-only memory')
 if (/pin\s*:\s*pendingRegistration\.pin/.test(cloudAuthMain)) throw new Error('Local PIN must never be included in a Cloud registration request')
+if (!cloudAuthMain.includes('validateRegistrationInput(email, password, passwordConfirm)')) throw new Error('Registration must validate only email and the two password entries before email verification')
+if (/data-auth-form="register"[\s\S]{0,1400}field\('pin'/.test(authUI)) throw new Error('Registration UI must not request a payment PIN')
+if (!authUI.includes("next.phase === 'authenticated' || next.phase === 'needs_pin'")) throw new Error('PIN setup must open after entering the workspace')
+for (const marker of ["authState?.phase === 'needs_pin'", 'openPINSetupModal()', "state.pinSettingsMode === 'setup'", "invoke<CloudAuthState>('auth_pin_set'"]) {
+  if (!renderer.includes(marker)) throw new Error(`Required post-registration PIN modal flow missing: ${marker}`)
+}
 for (const marker of ['activity_sessions', 'activity_session', '/v3/activity-sessions']) {
   if (!electronMain.includes(marker)) throw new Error(`V3 history IPC missing: ${marker}`)
 }
@@ -186,11 +214,21 @@ for (const removedSettingsPage of ['data-settings-page="api"', 'data-settings-pa
 for (const marker of ['provider_environment_catalog', 'provider_environment_download', 'managed_wsl2_shared_host', 'v3-environment-cloud-launcher', 'v3-cloud-image-card']) {
   if (!renderer.includes(marker) && !fs.readFileSync(path.join(__dirname, 'main.cjs'), 'utf8').includes(marker)) throw new Error(`Windows WSL provider surface missing: ${marker}`)
 }
-for (const marker of ['safeStorage.encryptString', 'safeStorage.decryptString', 'clipboard.clear()', 'account_key_status', 'account_key_save', 'account_key_delete']) {
-  if (!electronMain.includes(marker)) throw new Error(`secure account key support missing: ${marker}`)
+for (const marker of ['safeStorage.encryptString', 'safeStorage.decryptString']) {
+	if (!electronMain.includes(marker)) throw new Error(`secure Cloud session support missing: ${marker}`)
 }
-if (electronMain.includes('payload?.input?.key')) throw new Error('Account keys must never be accepted from the renderer process')
-if (!electronMain.includes("const key = String(clipboardValue || '').trim()")) throw new Error('Account keys must be read directly by the Electron main process')
+for (const marker of ['account_key_status', 'account_key_save', 'account_key_delete', 'payload?.input?.key']) {
+	if (electronMain.includes(marker)) throw new Error(`retired account-wide key support remains: ${marker}`)
+}
+for (const marker of ['order_access_key_status', 'order_access_key_create', 'order_access_key_rotate', 'order_access_key_revoke', 'consumer_approval_decide', 'wallet_spend_policy_save']) {
+	if (!electronMain.includes(marker)) throw new Error(`order-scoped access or spend policy IPC missing: ${marker}`)
+}
+for (const marker of ['data-wallet-tab="agent-limit"', 'data-wallet-tab="history"', 'data-v3-order-key-action', 'data-v3-approval-form']) {
+	if (!renderer.includes(marker)) throw new Error(`wallet or order security surface missing: ${marker}`)
+}
+for (const marker of ['data-account-key-section', 'data-account-key-save', 'data-account-key-delete']) {
+	if (renderer.includes(marker)) throw new Error(`retired account-wide key UI remains: ${marker}`)
+}
 if (!electronMain.includes('provider_api_probe')) throw new Error('API bridge connection probe is missing')
 if (!electronMain.includes('provider_endpoint_test_route')) throw new Error('Local Endpoint route smoke test is missing')
 for (const marker of ['provider_asset_clear_selection', 'asset_packaging', 'application/zip', 'MAX_RESOURCE_ARCHIVE_BYTES']) {

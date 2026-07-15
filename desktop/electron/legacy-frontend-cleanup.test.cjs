@@ -26,7 +26,7 @@ test('permanently removes only retired frontend data and preserves account and V
   })
   const desktop = await readJson(fixture.paths.desktopStatePath, {})
   assert.equal(desktop.cloudAuth.account.email, 'user@example.com')
-  assert.equal(desktop.accountKey.storageMode, 'safeStorage')
+	assert.equal(desktop.accountKey, undefined)
   assert.equal(desktop.providerEnvironmentRoot, 'D:/ExoraVMs')
   assert.ok(desktop.migrations[LEGACY_FRONTEND_CLEANUP_MARKER])
   for (const key of ['projectFolders', 'activeProjectFolderPath', 'workMcpUids', 'workMcpLeases']) {
