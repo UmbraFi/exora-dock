@@ -1,0 +1,12 @@
+{
+  "schema": "exora.wsl_runtime_lock.v1",
+  "version": "2.7.8.0",
+  "architecture": "x64",
+  "fileName": "wsl.2.7.8.0.x64.msi",
+  "url": "https://github.com/microsoft/WSL/releases/download/2.7.8/wsl.2.7.8.0.x64.msi",
+  "sizeBytes": 258678784,
+  "sha256": "928506b99d6caad14e5a8938e3e3fd9d1c839df3ed4f40639bdb095fbf24cbf8",
+  "publisherPattern": "Microsoft Corporation",
+  "license": "MIT",
+  "noticeSource": "https://github.com/microsoft/WSL/blob/master/NOTICE.txt"
+}

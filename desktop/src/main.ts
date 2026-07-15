@@ -277,7 +277,7 @@ type V3APIRoute = { id: string; routeId: string; operationId: string; method: st
 type V3APIMaterial = { id: string; name: string; extension: string; sizeBytes: number; localPath: string; sha256?: string }
 type V3APIBridgeDraft = { draftId: string; version: number; status: string; bridgeMode?: 'transparent' | 'dock_tunnel'; title: string; description: string; protocol: V3APIBridgeProtocol; baseUrl: string; healthPath: string; routes: Array<{ routeId: string; operationId: string; method: string; path: string; displayName: string; pricing: V3APIPricingComponent[]; maxChargePerInvocationAtomic: number }>; agentNotes?: string; unresolvedFields?: string[] }
 type V3APIProbe = { ok: boolean; status?: number; latencyMs?: number; contentType?: string; checkedURL?: string; checkedAt?: string; error?: string }
-type SettingsView = 'general' | 'security' | 'account-security' | 'agent-permissions' | 'notifications' | 'data-storage' | 'system-about'
+type SettingsView = 'general' | 'account-security' | 'agent-permissions' | 'notifications' | 'data-storage' | 'system-about'
 type WalletPanel = 'receive' | 'withdraw' | 'agent-limit' | 'history'
 type WalletHistoryFilter = 'all' | 'deposit' | 'withdrawal'
 type AppTheme = 'system' | 'light' | 'dark'
@@ -299,7 +299,7 @@ type DesktopSystemStatus = {
   storage?: { dataBytes?: number; logsBytes?: number; cacheBytes?: number; tempBytes?: number }
   runtime?: AppStatus
   cloudURL?: string
-  update?: { supported?: boolean; channel?: string; automatic?: boolean; state?: string; checkedAt?: string; message?: string }
+  update?: { supported?: boolean; channel?: string; automatic?: boolean; state?: string; version?: string; progress?: number; checkedAt?: string; message?: string }
 }
 type LLMTestStatus = 'passed' | 'failed'
 type ProfileSubmenu = 'language' | 'theme'
@@ -1064,7 +1064,6 @@ const walletSurfaceIcon = icon(WalletCards)
 
 const settingsNavIcons: Record<SettingsView, string> = {
   general: icon(Settings2),
-  security: icon(KeyRound),
   'account-security': icon(KeyRound),
   'agent-permissions': icon(Network),
   notifications: icon(Bell),
@@ -14827,15 +14826,6 @@ function showToast(message: string) {
   }, TOAST_DURATION_MS)
 }
 
-function settingsTitles(): Partial<Record<SettingsView, { kicker: string; title: string }>> {
-  return {
-    security: {
-      kicker: state.language === 'zh' ? '设置' : 'Settings',
-      title: state.language === 'zh' ? '安全' : 'Security',
-    },
-  }
-}
-
 function settingsViewForCardRole(role: AgentCardRole): SettingsView {
   void role
   return 'agent-permissions'
@@ -14852,9 +14842,9 @@ function renderSettingsAgentCardPages() {
 
 function renderSettingsPanel() {
   const meta = settingsPageMeta()[state.activeSettingsView]
-  fields.mainKicker.textContent = sx('Settings', '设置')
-  fields.decisionTitle.textContent = meta.title
-  fields.decisionStep.textContent = 'settings'
+  if (fields.mainKicker) fields.mainKicker.textContent = sx('Settings', '设置')
+  if (fields.decisionTitle) fields.decisionTitle.textContent = meta.title
+  if (fields.decisionStep) fields.decisionStep.textContent = 'settings'
   fields.settingsView.innerHTML = `
     <header class="app-settings-head">
       <div><span>${escapeHTML(meta.kicker)}</span><h1 id="app-settings-title">${escapeHTML(meta.title)}</h1><p>${escapeHTML(meta.description)}</p></div>
@@ -14871,7 +14861,6 @@ function sx(english: string, chinese: string) {
 
 function settingsPageMeta(): Record<SettingsView, { kicker: string; title: string; description: string }> {
   return {
-    security: { kicker: sx('SECURITY', '安全'), title: sx('Security', '安全'), description: sx('Review account protection, runtime health, version, logs, and Technical Preview update status.', '查看账户保护、运行状态、版本、日志与技术预览更新状态。') },
     general: { kicker: sx('PREFERENCES', '偏好'), title: sx('General', '通用'), description: sx('Choose how Exora Dock looks, starts, and behaves as a desktop application.', '设置 Exora Dock 的语言、外观、启动方式与桌面行为。') },
     'account-security': { kicker: sx('ACCOUNT', '账户'), title: sx('Account & Security', '账户与安全'), description: sx('Review your Cloud identity and protect sensitive account actions.', '查看 Cloud 账户状态并保护涉及资金与身份的敏感操作。') },
     'agent-permissions': { kicker: sx('AGENT ACCESS', 'AGENT 访问'), title: sx('Agent Connections & Permissions', 'Agent 连接与权限'), description: sx('Connect local Agent clients to Dock and keep spending behind explicit boundaries.', '将本地 Agent 客户端连接到 Dock，并为消费与外部副作用保留明确边界。') },
@@ -14955,7 +14944,7 @@ function renderAgentSettings() {
     ? sx(`Enabled · ${formatWalletAtomic(Number(policy.periodLimitAtomic || 0), walletUSDCDecimals())} USDC / 24h`, `已启用 · ${formatWalletAtomic(Number(policy.periodLimitAtomic || 0), walletUSDCDecimals())} USDC / 24 小时`)
     : sx('Disabled · every purchase requires human approval', '未启用 · 每笔消费均需人工批准')
   const connectionRows = [
-    settingRow(icon(Activity), sx('Dock MCP runtime', 'Dock MCP 运行时'), runtime?.message || sx('Local MCP and REST endpoints are supervised by Exora Dock.', '本地 MCP 与 REST 端点由 Exora Dock 监管。'), `<div class="app-setting-actions">${settingStatus(healthy ? sx('Running', '运行中') : sx('Offline', '离线'), healthy ? 'running' : 'danger')}${settingButton('test-connection', sx('Test', '测试'), 'soft')}</div>`),
+    settingRow(icon(Activity), sx('Dock MCP runtime', 'Dock MCP 运行时'), settingsRuntimeMessage(runtime), `<div class="app-setting-actions">${settingStatus(healthy ? sx('Running', '运行中') : sx('Offline', '离线'), healthy ? 'running' : 'danger')}${settingButton('test-connection', sx('Test', '测试'), 'soft')}</div>`),
     settingRow(icon(Copy), sx('Client configurations', '客户端配置'), sx('Copy a ready-to-use configuration without exposing tokens or account credentials.', '复制可直接使用的配置，不暴露 Token 或账户凭据。'), `<div class="app-setting-actions compact">${settingButton('copy-config', 'Codex', 'outline', 'data-settings-command="copy_mcp_command"')}${settingButton('copy-config', 'Claude', 'outline', 'data-settings-command="copy_mcp_command"')}${settingButton('copy-config', 'OpenCode', 'outline', 'data-settings-command="copy_opencode_config"')}${settingButton('copy-config', sx('Generic', '通用'), 'outline', 'data-settings-command="copy_mcp_command"')}</div>`),
     settingRow(icon(FolderOpen), 'Manifest', sx('Open the read-only discovery document used by local Agent clients.', '打开本地 Agent 客户端使用的只读发现文档。'), settingButton('open-manifest', sx('Open manifest', '打开 Manifest'), 'outline')),
   ].join('')
@@ -14981,7 +14970,10 @@ function renderNotificationSettings() {
     ['sellerListings', 'Listing health', 'Listing 状态', 'Listing pauses, validation failures, and availability changes.', 'Listing 暂停、验证失败与可用性变化。'],
     ['runtime', 'Runtime & settlement', '运行时与结算', 'Dock, Worker, provider runtime, and settlement failures.', 'Dock、Worker、Provider 运行时与结算异常。'],
   ]
-  const categoryRows = definitions.map(([key, en, zh, enDetail, zhDetail]) => settingRow(icon(key === 'security' ? ShieldCheck : key === 'runtime' ? Activity : Bell), sx(en, zh), sx(enDetail, zhDetail), settingSwitch(`notification.${key}`, state.notifications[key], sx(en, zh)))).join('')
+  const visibleDefinitions = definitions.filter(([key]) => state.workOrderSide === 'seller'
+    ? !['purchases', 'downloads', 'leases'].includes(key)
+    : !['sellerOrders', 'sellerListings'].includes(key))
+  const categoryRows = visibleDefinitions.map(([key, en, zh, enDetail, zhDetail]) => settingRow(icon(key === 'security' ? ShieldCheck : key === 'runtime' ? Activity : Bell), sx(en, zh), sx(enDetail, zhDetail), settingSwitch(`notification.${key}`, state.notifications[key], sx(en, zh)))).join('')
   return settingsSection(sx('PERMISSION', '权限'), sx('Delivery', '通知能力'), sx('If system permission is denied, critical events remain visible inside the app.', '如果系统权限被拒绝，关键事件仍会保留在应用内。'), permissionRows)
     + settingsSection(sx('CATEGORIES', '分类'), sx('Events to notify', '需要通知的事件'), sx('Changes save immediately on this device.', '更改会立即保存在此设备上。'), categoryRows)
 }
@@ -15005,18 +14997,24 @@ function renderSystemSettings() {
   const healthy = runtime?.daemon === 'healthy'
   const cloudURL = system?.cloudURL || state.cloudAuthState?.cloudURL || sx('Not configured', '未配置')
   const update = system?.update
+  const workerAttention = state.workRuns.some((run) => run.status === 'waiting_worker')
+  const workerBusy = state.workRuns.some((run) => ['queued', 'running', 'stop_requested'].includes(run.status || ''))
+  const workerRow = state.workOrderSide === 'seller'
+    ? settingRow(icon(BrainCircuit), 'Worker', workerAttention ? sx('A provider task is waiting for a Worker heartbeat.', 'Provider 任务正在等待 Worker 心跳。') : workerBusy ? sx('Provider work is currently being executed.', '当前正在执行 Provider 任务。') : sx('No provider task is using the Worker.', '当前没有 Provider 任务占用 Worker。'), settingStatus(workerAttention ? sx('Attention', '需要处理') : workerBusy ? sx('Running', '运行中') : sx('Idle', '空闲'), workerAttention ? 'warning' : workerBusy ? 'running' : 'neutral'))
+    : ''
   const statusRows = [
-    settingRow(icon(Activity), 'Dock', runtime?.message || sx('Local MCP and REST runtime.', '本地 MCP 与 REST 运行时。'), `<div class="app-setting-actions">${settingStatus(healthy ? sx('Running', '运行中') : sx('Offline', '离线'), healthy ? 'running' : 'danger')}${healthy ? settingButton('stop-dock', sx('Stop', '停止'), 'outline') : settingButton('start-dock', sx('Start', '启动'), 'soft')}${settingButton('restart-dock', sx('Restart', '重启'), 'outline')}</div>`),
+    settingRow(icon(Activity), 'Dock', settingsRuntimeMessage(runtime), `<div class="app-setting-actions">${settingStatus(healthy ? sx('Running', '运行中') : sx('Offline', '离线'), healthy ? 'running' : 'danger')}${healthy ? settingButton('stop-dock', sx('Stop', '停止'), 'outline') : settingButton('start-dock', sx('Start', '启动'), 'soft')}${settingButton('restart-dock', sx('Restart', '重启'), 'outline')}</div>`),
+    workerRow,
     settingRow(icon(Network), 'Cloud', cloudURL, settingStatus(state.cloudAuthState?.offline ? sx('Offline', '离线') : sx('Connected', '已连接'), state.cloudAuthState?.offline ? 'danger' : 'running')),
     settingRow(icon(Info), sx('Components', '组件版本'), `Exora Dock ${system?.appVersion || '—'} · Electron ${system?.electronVersion || '—'} · ${system?.platform || '—'} ${system?.arch || ''}`, settingStatus(system?.packaged === false ? sx('Development', '开发构建') : sx('Stable', '稳定版'), 'neutral')),
   ].join('')
-  const updateRows = settingRow(icon(RefreshCw), sx('Automatic updates', '自动更新'), update?.message || sx('Stable channel updates install only when no active task would be interrupted.', '稳定通道更新只会在不打断活动任务时安装。'), `<div class="app-setting-actions">${settingSwitch('autoUpdate', state.autoUpdate, sx('Automatic updates', '自动更新'))}${settingButton('check-update', sx('Check now', '立即检查'), 'soft')}</div>`)
+  const updateRows = settingRow(icon(RefreshCw), sx('Update notifications', '更新提醒'), settingsUpdateMessage(update), `<div class="app-setting-actions">${update?.state === 'available' ? settingStatus(sx('Verified update', '已验证更新'), 'success') : ''}${settingSwitch('autoUpdate', state.autoUpdate, sx('Check signed manifest on startup', '启动时检查签名清单'))}${settingButton('check-update', sx('Check now', '立即检查'), 'soft')}${update?.state === 'available' ? settingButton('install-update', sx('Open download', '打开下载页'), 'primary') : ''}</div>`)
   const supportRows = [
     settingRow(icon(Archive), sx('Redacted diagnostics', '脱敏诊断包'), sx('Exports versions, runtime state, and storage metrics. PINs, tokens, keys, authorization headers, and account details are excluded.', '导出版本、运行状态与存储指标；排除 PIN、Token、密钥、Authorization Header 与账户详情。'), settingButton('export-diagnostics', sx('Export', '导出'), 'soft')),
     settingRow(icon(ShieldCheck), sx('Legal & privacy', '许可证与隐私'), sx('Review the software license and Exora privacy architecture.', '查看软件许可证与 Exora 隐私架构说明。'), `<div class="app-setting-actions">${settingButton('open-license', sx('License', '许可证'), 'outline')}${settingButton('open-privacy', sx('Privacy', '隐私'), 'outline')}</div>`),
   ].join('')
   return settingsSection(sx('HEALTH', '健康状态'), sx('Services & versions', '服务与版本'), sx('Cloud URL is read-only in production builds.', '生产环境中的 Cloud URL 仅可读。'), statusRows)
-    + settingsSection(sx('UPDATES', '更新'), sx('Stable channel', '稳定通道'), sx('Update availability depends on the configured release distribution.', '更新可用性取决于当前发行版所配置的发布源。'), updateRows)
+    + settingsSection(sx('UPDATES', '更新'), sx('Signed Technical Preview channel', '签名技术预览通道'), sx('The app verifies the Ed25519 release manifest and shows the expected installer SHA-256. Downloads open in your browser and are never installed silently.', '应用会验证 Ed25519 发布清单并显示安装包的预期 SHA-256；下载将在浏览器中打开，绝不会静默安装。'), updateRows)
     + settingsSection(sx('SUPPORT', '支持'), sx('Diagnostics & policy', '诊断与政策'), sx('Advanced details are disclosed only when you ask for them.', '仅在你主动请求时展示高级信息。'), supportRows)
 }
 
@@ -15027,6 +15025,27 @@ function formatByteSize(value: unknown) {
   const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)))
   const amount = bytes / (1024 ** index)
   return `${amount >= 10 || index === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[index]}`
+}
+
+function settingsRuntimeMessage(runtime?: AppStatus) {
+  if (state.language !== 'zh') return runtime?.message || 'Local MCP and REST runtime.'
+  if (runtime?.daemon === 'healthy') return 'Dock 已准备好接受本地 Agent 连接。'
+  if (runtime?.daemon === 'starting') return 'Dock 正在启动本地 MCP 与 REST 运行时。'
+  if (runtime?.image === 'missing') return '未找到 Dock 运行组件，请重新安装或修复应用。'
+  return 'Dock 当前离线，可在此页启动或重试连接。'
+}
+
+function settingsUpdateMessage(update?: DesktopSystemStatus['update']) {
+  if (state.language !== 'zh') return update?.message || 'Stable channel updates install only when no active task would be interrupted.'
+  if (update?.state === 'checking') return '正在检查稳定通道更新…'
+  if (update?.state === 'available') return '发现可用更新。'
+  if (update?.state === 'downloading') return `正在下载更新${Number(update.progress || 0) > 0 ? ` · ${Math.round(Number(update.progress))}%` : '…'}`
+  if (update?.state === 'downloaded') return '更新已下载；请在活动任务结束后重启安装。'
+  if (update?.state === 'current') return 'Exora Dock 已是最新版本。'
+  if (update?.state === 'error') return '更新检查失败，请稍后重试。'
+  if (update?.state === 'unavailable') return '当前发行版尚未配置更新源。'
+  if (update?.state === 'development') return '开发构建不启用自动更新。'
+  return '稳定通道更新只会在不打断活动任务时安装。'
 }
 
 function renderArchiveRecords() {
@@ -15586,7 +15605,7 @@ function previewSystemSettingsStatus(): DesktopSystemStatus {
     paths: { data: 'ExoraDock/data', logs: 'ExoraDock/logs', downloads: state.downloadDirectory || sx('System Downloads folder', '系统下载目录') },
     storage: { dataBytes: 18_874_368, logsBytes: 786_432, cacheBytes: 5_242_880, tempBytes: 262_144 },
     runtime: state.appStatus || { docker: 'native', container: 'running', daemon: 'healthy', image: 'available', containerName: 'exora-dockd', imageTag: 'preview', baseUrl: 'http://127.0.0.1:8080', dataDir: '', configPath: '', discoveryPath: '', mcpCommand: '', agentPrompt: '', opencodeConfig: '', message: sx('Dock is ready for local Agent connections.', 'Dock 已准备好接受本地 Agent 连接。') },
-    cloudURL: state.cloudAuthState?.cloudURL || 'https://cloud.exora.network',
+    cloudURL: state.cloudAuthState?.cloudURL || 'https://api.exoradock.com',
     update: { supported: false, channel: 'stable', automatic: state.autoUpdate, state: 'development', message: sx('Updates are disabled in the browser preview.', '浏览器预览中不启用更新。') },
   }
 }
@@ -16083,7 +16102,7 @@ async function handleSettingsAction(action: string, button: HTMLButtonElement) {
       const runtime = await invokeAction<AppStatus>('app_status')
       state.appStatus = runtime
       if (state.settingsSystemStatus) state.settingsSystemStatus.runtime = runtime
-      showToast(runtime.daemon === 'healthy' ? sx('Dock connection is healthy.', 'Dock 连接正常。') : runtime.message || sx('Dock is not ready.', 'Dock 尚未就绪。'))
+      showToast(runtime.daemon === 'healthy' ? sx('Dock connection is healthy.', 'Dock 连接正常。') : settingsRuntimeMessage(runtime))
       renderSettingsPanel()
       return
     }
@@ -16119,8 +16138,18 @@ async function handleSettingsAction(action: string, button: HTMLButtonElement) {
     if (action === 'check-update') {
       const update = await invokeAction<NonNullable<DesktopSystemStatus['update']>>('system_update_check')
       if (state.settingsSystemStatus) state.settingsSystemStatus.update = update
-      showToast(update.message || sx('Update check complete.', '更新检查完成。'))
+      showToast(settingsUpdateMessage(update))
       renderSettingsPanel()
+      return
+    }
+    if (action === 'install-update') {
+      const activeWork = hasActiveSettingsWork()
+      if (activeWork) {
+        showToast(sx('Finish active purchases, downloads, leases, and provider tasks before installing.', '请先完成正在进行的购买、下载、租约与卖家任务，再安装更新。'))
+        return
+      }
+      if (!window.confirm(sx('Restart Exora Dock and install the downloaded update now?', '现在重启 Exora Dock 并安装已下载的更新吗？'))) return
+      await invokeAction('system_update_install', { input: { activeWork } })
       return
     }
     if (action === 'open-license' || action === 'open-privacy') {
@@ -16139,6 +16168,12 @@ async function handleSettingsAction(action: string, button: HTMLButtonElement) {
   } catch (error) {
     showToast(humanizeError(error))
   }
+}
+
+function hasActiveSettingsWork() {
+  const activeActivity = [...state.v3ActivitySessions.buyer, ...state.v3ActivitySessions.seller]
+    .some((session) => session.status === 'active' || Number(session.inFlightCount || 0) > 0)
+  return activeActivity || state.v3ConsumerBusy || state.v3ListingsLoading || state.v3ResourceSubmitting || state.v3APISavingListing || state.v3EndpointSubmitting || state.walletWithdrawalBusy
 }
 
 fields.pinSettingsModal.addEventListener('click', (event) => {

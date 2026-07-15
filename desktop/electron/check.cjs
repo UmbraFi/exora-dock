@@ -176,8 +176,11 @@ for (const retired of ['Transaction Agent', 'Ask Exora Dock', 'Select order acti
 for (const marker of ['class="global-modal-layer"', 'class="app-modal wallet-modal', 'class="app-modal order-search-modal', 'class="app-modal pin-settings-modal', 'class="app-modal mcp-info-modal', 'function renderMCPInfoModal', 'listings.guide.agentStep3', 'listings.guide.manualStep3', 'listings.guide.reality4', 'data-action="open-settings"', 'data-view-panel="app-settings"', 'data-settings-action="change-pin"', "'auth_pin_change'"]) {
   if (!renderer.includes(marker)) throw new Error(`global modal or security settings surface missing: ${marker}`)
 }
-for (const marker of ['class="settings-return-cell"', 'function renderSettingsSidebar()', "view: 'security'", "if (state.settingsOpen) renderSettingsSidebar()"] ) {
+for (const marker of ['class="settings-return-cell"', 'function renderSettingsSidebar()', "view: 'general'", "view: 'account-security'", "view: 'agent-permissions'", "view: 'notifications'", "view: 'data-storage'", "view: 'system-about'", "if (state.settingsOpen) renderSettingsSidebar()"] ) {
   if (!renderer.includes(marker)) throw new Error(`settings sidebar navigation missing: ${marker}`)
+}
+for (const marker of ['system_settings_status', 'system_notification_test', 'system_clear_storage', 'system_export_diagnostics', 'normalizeAppSettingsV3', 'version: SETTINGS_VERSION']) {
+  if (!electronMain.includes(marker)) throw new Error(`AppSettingsV3 main-process support missing: ${marker}`)
 }
 for (const nestedSettingsContainer of ['class="app-settings-layout"', 'class="app-settings-nav"']) {
   if (workspaceTemplate.includes(nestedSettingsContainer)) throw new Error(`settings surface must stay flat: ${nestedSettingsContainer}`)

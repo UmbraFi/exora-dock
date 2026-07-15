@@ -32,7 +32,7 @@ function Resolve-Go {
   if ($cmd) { return $cmd.Source }
   $default = "C:\Program Files\Go\bin\go.exe"
   if (Test-Path $default) { return $default }
-  throw "Go 1.22+ was not found on PATH or at $default"
+  throw "Go 1.25 was not found on PATH or at $default"
 }
 
 function Resolve-Npm {
@@ -44,7 +44,11 @@ function Resolve-Npm {
 function Invoke-Step([string]$Name, [scriptblock]$Body) {
   Write-Host ""
   Write-Host "==> $Name" -ForegroundColor Cyan
+  $global:LASTEXITCODE = 0
   & $Body
+  if ($LASTEXITCODE -ne 0) {
+    throw "$Name failed with exit code $LASTEXITCODE"
+  }
 }
 
 $Go = Resolve-Go
@@ -125,10 +129,10 @@ Invoke-Step "Building Windows WSL broker" {
   }
 }
 
-Invoke-Step "Installing desktop dependencies" {
+Invoke-Step "Installing locked desktop dependencies" {
   Push-Location $DesktopDir
   try {
-    & $Npm install
+    & $Npm ci
   } finally {
     Pop-Location
   }

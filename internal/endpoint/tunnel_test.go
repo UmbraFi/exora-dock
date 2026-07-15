@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -143,3 +144,27 @@ func TestTunnelClientForwardsBodyAndStreamsSSE(t *testing.T) {
 type tunnelTestError struct{ message string }
 
 func (e *tunnelTestError) Error() string { return e.message }
+
+func TestTunnelStreamChunkLimitAndDisconnectCleanup(t *testing.T) {
+	max := base64.StdEncoding.EncodeToString(make([]byte, 64<<10))
+	if _, err := decodeChunk(max); err != nil {
+		t.Fatalf("64 KiB stream frame rejected: %v", err)
+	}
+	over := base64.StdEncoding.EncodeToString(make([]byte, (64<<10)+1))
+	if _, err := decodeChunk(over); err == nil {
+		t.Fatal("oversized stream frame was accepted")
+	}
+	client := NewTunnelClient("", "", nil)
+	local, remote := net.Pipe()
+	defer remote.Close()
+	state := &streamState{conn: local}
+	client.streams["stream-1"] = state
+	client.closeAllStreams()
+	if len(client.streams) != 0 {
+		t.Fatal("stream registry was not cleared")
+	}
+	_ = remote.SetWriteDeadline(time.Now().Add(time.Second))
+	if _, err := remote.Write([]byte("closed")); err == nil {
+		t.Fatal("guest connection remained open after tunnel disconnect")
+	}
+}

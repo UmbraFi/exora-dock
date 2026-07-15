@@ -154,7 +154,10 @@ func (c *TunnelClient) runConnection(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() {
+		c.closeAllStreams()
+		_ = conn.Close()
+	}()
 	conn.SetPongHandler(func(string) error {
 		_ = conn.SetReadDeadline(time.Now().Add(45 * time.Second))
 		return nil
@@ -231,7 +234,7 @@ func (c *TunnelClient) handleFrame(ctx context.Context, conn *websocket.Conn, fr
 		return c.writeStream(frame)
 	case "stream_eof":
 		c.halfCloseStream(frame.StreamID)
-	case "stream_close":
+	case "stream_close", "stream_error":
 		c.finishStream(frame.StreamID, false, conn, "")
 	case "control_command":
 		return c.handleControl(ctx, conn, frame)
@@ -364,6 +367,16 @@ func (c *TunnelClient) finishStream(id string, notify bool, ws *websocket.Conn, 
 			_ = c.send(ws, Frame{Type: kind, StreamID: id, Error: message})
 		}
 	})
+}
+
+func (c *TunnelClient) closeAllStreams() {
+	c.stateMu.Lock()
+	streams := c.streams
+	c.streams = map[string]*streamState{}
+	c.stateMu.Unlock()
+	for _, state := range streams {
+		state.once.Do(func() { _ = state.conn.Close() })
+	}
 }
 
 func intFromAny(value any) int {

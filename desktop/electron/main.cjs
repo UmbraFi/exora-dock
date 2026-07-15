@@ -6,6 +6,7 @@ const fsp = require('node:fs/promises')
 const net = require('node:net')
 const path = require('node:path')
 const YAML = require('yaml')
+const { autoUpdater } = require('electron-updater')
 const { registerIpcHandlers } = require('./ipc.cjs')
 const { createCloudAuth } = require('./cloud-auth.cjs')
 const {
@@ -14,7 +15,7 @@ const {
   isTrustedIpcSender,
 } = require('./security.cjs')
 const { cleanupLegacyFrontendData } = require('./legacy-frontend-cleanup.cjs')
-const { SETTINGS_VERSION, normalizeAppSettingsV3 } = require('./app-settings.cjs')
+const { SETTINGS_VERSION, normalizeAppSettingsV3, redactDiagnostics } = require('./app-settings.cjs')
 const {
   MAX_RESOURCE_ARCHIVE_BYTES,
   cleanupResourceArchive,
@@ -56,6 +57,8 @@ let activeWindowMode = 'auth'
 let tray
 let appIsQuitting = false
 let currentAppSettings = STARTUP_SETTINGS
+let updaterConfigured = false
+const updaterState = { state: 'unavailable', version: '', progress: 0, checkedAt: '', message: '', downloadURL: '', sha256: '', warning: '' }
 const cloudAuth = createCloudAuth({
   safeStorage,
   isPackaged: app.isPackaged,
@@ -140,6 +143,7 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
   registerIpc()
   applyDesktopSettings(currentAppSettings)
+  initializeUpdater()
   await migrateLegacyFrontendData().catch((error) => {
     console.error('Failed to remove retired frontend data; cleanup will retry next launch:', error)
   })
@@ -649,12 +653,30 @@ function applyDesktopSettings(settings) {
   updateTrayMenu()
 }
 
+function initializeUpdater() {
+  updaterConfigured = Boolean(releaseVerificationKey())
+  updaterState.state = updaterConfigured ? 'idle' : app.isPackaged ? 'unavailable' : 'development'
+  updaterState.message = updaterConfigured
+    ? 'Signed Technical Preview release checks are ready.'
+    : app.isPackaged ? 'The release verification key is not configured.' : 'Signed release checks are available after packaging.'
+  if (!updaterConfigured) return
+  if (currentAppSettings.autoUpdate) setTimeout(() => system_update_check().catch((error) => updateUpdaterState('error', errorMessage(error))), 12_000)
+}
+
+function updateUpdaterState(state, message) {
+  updaterState.state = state
+  updaterState.message = message
+  updaterState.checkedAt = new Date().toISOString()
+}
+
 async function system_settings_status() {
   const paths = await dockPaths()
-  const [runtime, storage] = await Promise.all([
+  const [runtime, storage, desktopState] = await Promise.all([
     app_status().catch((error) => ({ container: 'unknown', daemon: 'offline', message: errorMessage(error) })),
     storageSnapshot(paths),
+    readDesktopState(paths),
   ])
+  const cloudURL = await configuredCloudURL(paths, desktopState)
   const login = app.getLoginItemSettings()
   const downloadDirectory = currentAppSettings.downloadDirectory || app.getPath('downloads')
   return {
@@ -677,7 +699,7 @@ async function system_settings_status() {
     },
     storage,
     runtime,
-    cloudURL: configuredCloudURL() || process.env.EXORA_CLOUD_URL || '',
+    cloudURL: cloudURL || process.env.EXORA_CLOUD_URL || '',
     update: updateStatus(),
   }
 }
@@ -744,9 +766,21 @@ async function system_export_diagnostics() {
     schema: 'exora-diagnostics-v1',
     createdAt: new Date().toISOString(),
     application: { version: app.getVersion(), electron: process.versions.electron, platform: process.platform, arch: process.arch, packaged: app.isPackaged },
-    runtime: redactDiagnostics(runtime),
+    runtime: redactDiagnostics({
+      docker: runtime.docker, container: runtime.container, daemon: runtime.daemon, image: runtime.image,
+      containerName: runtime.containerName,
+    }),
     storage,
-    preferences: redactDiagnostics(normalizeAppSettingsV3(currentAppSettings)),
+    preferences: redactDiagnostics({
+      language: currentAppSettings.language,
+      theme: currentAppSettings.theme,
+      launchAtLogin: currentAppSettings.launchAtLogin,
+      startMinimized: currentAppSettings.startMinimized,
+      closeBehavior: currentAppSettings.closeBehavior,
+      startDockOnLaunch: currentAppSettings.startDockOnLaunch,
+      autoUpdate: currentAppSettings.autoUpdate,
+      notifications: currentAppSettings.notifications,
+    }),
   }
   const result = await dialog.showSaveDialog(mainWindow, {
     title: currentAppSettings.language === 'zh' ? '导出脱敏诊断包' : 'Export redacted diagnostics',
@@ -759,18 +793,35 @@ async function system_export_diagnostics() {
 }
 
 async function system_update_check() {
+  if (!updaterConfigured) return updateStatus(true)
+  updateUpdaterState('checking', 'Verifying the signed Technical Preview release manifest…')
+  const release = await release_status()
+  updaterState.version = release.latestVersion
+  updaterState.downloadURL = release.downloadURL
+  updaterState.sha256 = release.sha256
+  updaterState.warning = release.warning
+  updateUpdaterState(release.updateAvailable ? 'available' : 'current', release.updateAvailable ? 'A verified Technical Preview update is available. Download it in your browser and verify the displayed SHA-256.' : 'Exora Dock is up to date.')
   return updateStatus(true)
 }
 
-async function system_update_install() {
-  throw new Error('No downloaded update is ready to install.')
+async function system_update_install(payload = {}) {
+  const input = objectOr(payload.input || payload)
+  let activeRuntimeWork = false
+  try {
+    const response = await activity_sessions({ input: { status: 'active', limit: 1 } })
+    activeRuntimeWork = Array.isArray(response?.sessions) && response.sessions.length > 0
+  } catch { /* Dock may be offline, in which case it has no active local work to interrupt. */ }
+  if (input.activeWork === true || activeRuntimeWork) throw new Error('Finish active purchases, downloads, leases, and provider tasks before installing the update.')
+  if (!updaterConfigured || updaterState.state !== 'available' || !updaterState.downloadURL) throw new Error('No verified Technical Preview download is available.')
+  await shell.openExternal(updaterState.downloadURL)
+  return { opened: true, sha256: updaterState.sha256, warning: updaterState.warning }
 }
 
 async function system_open_legal(payload = {}) {
   const input = objectOr(payload.input || payload)
-  const root = path.join(__dirname, '..', '..')
+  const root = app.isPackaged ? path.join(process.resourcesPath, 'legal') : path.join(__dirname, '..', '..')
   const target = input.kind === 'privacy'
-    ? path.join(root, 'docs', currentAppSettings.language === 'zh' ? 'WHITEPAPER.zh-CN.md' : 'WHITEPAPER.en.md')
+    ? path.join(root, app.isPackaged ? (currentAppSettings.language === 'zh' ? 'WHITEPAPER.md' : 'WHITEPAPER.en.md') : path.join('docs', currentAppSettings.language === 'zh' ? 'WHITEPAPER.md' : 'WHITEPAPER.en.md'))
     : path.join(root, 'LICENSE')
   await openPath(target)
   return { opened: true }
@@ -778,20 +829,26 @@ async function system_open_legal(payload = {}) {
 
 function updateStatus(checked = false) {
   return {
-    supported: app.isPackaged,
-    channel: 'stable',
-    automatic: currentAppSettings.autoUpdate,
-    state: app.isPackaged ? 'manual' : 'development',
-    checkedAt: checked ? new Date().toISOString() : '',
-    message: app.isPackaged
-      ? 'Update metadata is not configured for this distribution.'
-      : 'Updates are disabled in development builds.',
+    supported: updaterConfigured,
+    channel: 'technical-preview',
+    automatic: false,
+    state: updaterState.state,
+    version: updaterState.version,
+    progress: updaterState.progress,
+    checkedAt: checked ? updaterState.checkedAt || new Date().toISOString() : updaterState.checkedAt,
+    message: updaterState.message,
+    downloadURL: updaterState.downloadURL,
+    sha256: updaterState.sha256,
+    warning: updaterState.warning,
   }
 }
 
 async function storageSnapshot(paths) {
   const [dataBytes, logsBytes, cacheBytes, tempBytes] = await Promise.all([
-    directorySize(paths.dataDir), directorySize(paths.logsDir), directorySize(app.getPath('cache')), directorySize(resourceArchiveTempRoot()),
+    directorySize(paths.dataDir),
+    directorySize(paths.logsDir),
+    app.isReady() ? session.defaultSession.getCacheSize().catch(() => 0) : Promise.resolve(0),
+    directorySize(resourceArchiveTempRoot()),
   ])
   return { dataBytes, logsBytes, cacheBytes, tempBytes }
 }
@@ -818,13 +875,6 @@ async function emptyDirectory(root) {
   await fsp.mkdir(root, { recursive: true })
   const entries = await fsp.readdir(root)
   await Promise.all(entries.map((entry) => fsp.rm(path.join(root, entry), { recursive: true, force: true })))
-}
-
-function redactDiagnostics(value) {
-  if (Array.isArray(value)) return value.map(redactDiagnostics)
-  if (!value || typeof value !== 'object') return value
-  const secret = /(pin|token|secret|password|authorization|api.?key|access.?key|credential)/i
-  return Object.fromEntries(Object.entries(value).flatMap(([key, item]) => secret.test(key) ? [] : [[key, redactDiagnostics(item)]]))
 }
 
 async function wallet_spend_policy_save(payload = {}) {
