@@ -5,20 +5,25 @@
 .app-settings-view {
   align-content: start;
   background: var(--color-surface);
-  grid-template-rows: auto auto;
+  grid-template-rows: auto;
   justify-items: start;
   overflow: auto;
-  padding: 46px clamp(32px, 5vw, 72px) 40px;
+  padding: 46px clamp(32px, 5vw, 72px) 44px;
 }
 
 .app-settings-head,
-.app-settings-content {
+.app-settings-content,
+.app-settings-banner {
   max-width: 820px;
   width: 100%;
 }
 
 .app-settings-head {
+  align-items: flex-start;
   border-bottom: 1px solid var(--color-border);
+  display: flex;
+  justify-content: space-between;
+  min-height: 98px;
   padding: 0 0 24px;
 }
 
@@ -34,37 +39,55 @@
   color: var(--color-text-primary);
   font-size: 25px;
   letter-spacing: -.03em;
-  margin: 5px 0 4px;
+  margin: 5px 0 5px;
 }
 
 .app-settings-head p,
 .app-settings-section-head p,
 .app-setting-row p {
   color: var(--color-text-tertiary);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.55;
   margin: 0;
+}
+
+.app-settings-head p {
+  max-width: 650px;
 }
 
 .app-settings-content {
   padding: 28px 0 0;
 }
 
+.app-settings-section + .app-settings-section {
+  margin-top: 36px;
+}
+
 .app-settings-section-head h2 {
   color: var(--color-text-primary);
   font-size: 18px;
+  letter-spacing: -.015em;
   margin: 6px 0 5px;
+}
+
+.app-setting-list {
+  border-bottom: 1px solid var(--color-border);
+  margin-top: 20px;
 }
 
 .app-setting-row {
   align-items: center;
-  border-bottom: 1px solid var(--color-border);
   border-top: 1px solid var(--color-border);
   display: grid;
   gap: 14px;
   grid-template-columns: 36px minmax(0, 1fr) auto;
-  margin-top: 20px;
-  padding: 17px 0;
+  min-height: 70px;
+  padding: 14px 0;
+}
+
+.app-setting-row.danger .app-setting-icon {
+  background: color-mix(in srgb, var(--color-danger) 11%, transparent);
+  color: var(--color-danger);
 }
 
 .app-setting-icon {
@@ -83,33 +106,260 @@
   width: 15px;
 }
 
+.app-setting-copy {
+  min-width: 0;
+}
+
 .app-setting-row strong {
   color: var(--color-text-primary);
   display: block;
-  font-size: 12px;
+  font-size: 12.5px;
   margin-bottom: 4px;
 }
 
-.app-setting-row > button {
-  background: var(--color-primary);
-  border: 1px solid var(--color-primary);
-  border-radius: 9px;
-  color: #fff;
-  min-height: 36px;
-  padding: 0 14px;
+.app-setting-row p {
+  overflow-wrap: anywhere;
 }
 
-@media (max-width: 720px) {
-  .app-settings-view {
-    padding-inline: 24px;
-  }
+.app-setting-control,
+.app-setting-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
 
+.app-setting-actions.compact {
+  max-width: 320px;
+}
+
+.app-setting-button {
+  align-items: center;
+  border-radius: 8px;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 720;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 11px;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease;
+  white-space: nowrap;
+}
+
+.app-setting-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.app-setting-button.primary {
+  background: var(--color-primary);
+  border: 1px solid var(--color-primary);
+  color: #fff;
+}
+
+.app-setting-button.soft {
+  background: var(--color-primary-soft);
+  border: 1px solid transparent;
+  color: var(--color-primary);
+}
+
+.app-setting-button.outline {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+}
+
+.app-setting-button.danger {
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 35%, var(--color-border));
+  color: var(--color-danger);
+}
+
+.app-setting-button:disabled {
+  cursor: default;
+  opacity: .48;
+}
+
+.app-setting-segment {
+  align-items: center;
+  background: var(--color-surface-soft);
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  display: flex;
+  padding: 2px;
+}
+
+.app-setting-segment button {
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--color-text-tertiary);
+  font-size: 10.5px;
+  font-weight: 700;
+  min-height: 27px;
+  padding: 0 9px;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.app-setting-segment button.active {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+}
+
+.app-setting-switch {
+  align-items: center;
+  cursor: pointer;
+  display: inline-flex;
+  gap: 8px;
+}
+
+.app-setting-switch input {
+  height: 1px;
+  opacity: 0;
+  position: absolute;
+  width: 1px;
+}
+
+.app-setting-switch > span {
+  background: var(--color-border-strong, var(--color-border));
+  border-radius: 999px;
+  display: block;
+  height: 20px;
+  position: relative;
+  transition: background-color 160ms ease;
+  width: 36px;
+}
+
+.app-setting-switch > span::after {
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgb(23 24 43 / 20%);
+  content: '';
+  height: 16px;
+  left: 2px;
+  position: absolute;
+  top: 2px;
+  transition: transform 160ms ease;
+  width: 16px;
+}
+
+.app-setting-switch input:checked + span {
+  background: var(--color-primary);
+}
+
+.app-setting-switch input:checked + span::after {
+  transform: translateX(16px);
+}
+
+.app-setting-switch input:focus-visible + span {
+  outline: 2px solid color-mix(in srgb, var(--color-primary) 42%, transparent);
+  outline-offset: 2px;
+}
+
+.app-setting-switch em {
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.app-setting-status {
+  align-items: center;
+  color: var(--color-text-secondary);
+  display: inline-flex;
+  font-size: 10.5px;
+  font-weight: 720;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.app-setting-status i {
+  background: var(--color-text-tertiary);
+  border-radius: 50%;
+  height: 6px;
+  width: 6px;
+}
+
+.app-setting-status.running i { background: #21c7d9; }
+.app-setting-status.success i { background: var(--color-success); }
+.app-setting-status.warning i { background: var(--color-warning); }
+.app-setting-status.danger i { background: var(--color-danger); }
+
+.app-settings-banner {
+  align-items: center;
+  background: color-mix(in srgb, var(--color-warning) 9%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-warning) 30%, var(--color-border));
+  color: var(--color-text-secondary);
+  display: grid;
+  font-size: 11px;
+  gap: 3px 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-top: 14px;
+  padding: 11px 0;
+}
+
+.app-settings-banner strong { color: var(--color-text-primary); }
+.app-settings-banner span { grid-column: 1; }
+.app-settings-banner button { color: var(--color-primary); grid-column: 2; grid-row: 1 / span 2; }
+
+.app-settings-refreshing,
+.app-settings-refreshing i {
+  height: 16px;
+  width: 16px;
+}
+
+.app-settings-refreshing i {
+  border: 2px solid var(--color-primary-soft);
+  border-radius: 50%;
+  border-top-color: var(--color-primary);
+  display: block;
+  animation: settings-spin .8s linear infinite;
+}
+
+.app-settings-loading {
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+}
+
+.settings-sidebar-group {
+  display: grid;
+  gap: 2px;
+  margin-top: 18px;
+}
+
+.settings-sidebar-group > span {
+  color: var(--color-text-tertiary);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .12em;
+  padding: 0 12px 6px;
+  text-transform: uppercase;
+}
+
+@keyframes settings-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 1180px) {
   .app-setting-row {
+    align-items: start;
     grid-template-columns: 36px minmax(0, 1fr);
   }
 
-  .app-setting-row > button {
+  .app-setting-control {
     grid-column: 2;
-    justify-self: start;
+    justify-content: flex-start;
   }
+
+  .app-setting-actions { justify-content: flex-start; }
+}
+
+@media (max-width: 720px) {
+  .app-settings-view { padding-inline: 24px; }
+  .app-setting-segment { flex-wrap: wrap; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-setting-button,
+  .app-setting-segment button,
+  .app-setting-switch > span,
+  .app-setting-switch > span::after { transition: none; }
+  .app-settings-refreshing i { animation: none; }
 }

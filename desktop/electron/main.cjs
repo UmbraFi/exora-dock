@@ -1,8 +1,9 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage, screen, shell, Tray } = require('electron')
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, Notification, safeStorage, screen, session, shell, Tray } = require('electron')
 const { spawn, execFile } = require('node:child_process')
 const crypto = require('node:crypto')
 const fs = require('node:fs')
 const fsp = require('node:fs/promises')
+const net = require('node:net')
 const path = require('node:path')
 const YAML = require('yaml')
 const { registerIpcHandlers } = require('./ipc.cjs')
@@ -13,6 +14,7 @@ const {
   isTrustedIpcSender,
 } = require('./security.cjs')
 const { cleanupLegacyFrontendData } = require('./legacy-frontend-cleanup.cjs')
+const { SETTINGS_VERSION, normalizeAppSettingsV3 } = require('./app-settings.cjs')
 const {
   MAX_RESOURCE_ARCHIVE_BYTES,
   cleanupResourceArchive,
@@ -39,8 +41,10 @@ const APP_URL_POLICY = createAppURLPolicy({
   devUrl: DEV_URL,
   distDir: path.join(__dirname, '..', 'dist'),
 })
-const STARTUP_LANGUAGE = readStartupLanguageSync()
+const STARTUP_SETTINGS = readStartupAppSettingsSync()
+const STARTUP_LANGUAGE = STARTUP_SETTINGS.language
 const MASKED_API_KEY_VALUE = '************'
+let wslBrokerChild
 const WINDOW_PROFILES = Object.freeze({
   auth: Object.freeze({ width: 1440, height: 900, minWidth: 560, minHeight: 600 }),
   workspace: Object.freeze({ width: 1440, height: 900, minWidth: 1080, minHeight: 720 }),
@@ -51,6 +55,7 @@ let mainWindow
 let activeWindowMode = 'auth'
 let tray
 let appIsQuitting = false
+let currentAppSettings = STARTUP_SETTINGS
 const cloudAuth = createCloudAuth({
   safeStorage,
   isPackaged: app.isPackaged,
@@ -105,7 +110,7 @@ function createWindow() {
       ],
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
       webSecurity: true,
     },
   })
@@ -113,10 +118,16 @@ function createWindow() {
   installNavigationGuards(mainWindow, { policy: APP_URL_POLICY, shell })
   mainWindow.on('close', (event) => {
     if (appIsQuitting) return
+    if (currentAppSettings.closeBehavior === 'quit') {
+      appIsQuitting = true
+      return
+    }
     event.preventDefault()
     mainWindow.hide()
   })
-  mainWindow.once('ready-to-show', () => mainWindow.show())
+  mainWindow.once('ready-to-show', () => {
+    if (!currentAppSettings.startMinimized && !process.argv.includes('--hidden')) mainWindow.show()
+  })
   if (app.isPackaged) {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
   } else {
@@ -125,7 +136,10 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  session.defaultSession.setPermissionCheckHandler(() => false)
+  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
   registerIpc()
+  applyDesktopSettings(currentAppSettings)
   await migrateLegacyFrontendData().catch((error) => {
     console.error('Failed to remove retired frontend data; cleanup will retry next launch:', error)
   })
@@ -152,18 +166,24 @@ app.on('before-quit', () => {
     try { cleanupResourceArchiveSync(archive) } catch (error) { console.error('Failed to remove a temporary resource archive:', error) }
   }
   v3SelectedArchives.clear()
+  if (wslBrokerChild && !wslBrokerChild.killed) wslBrokerChild.kill()
 })
 
 function createTray() {
-  if (tray) return
-  tray = new Tray(WINDOW_ICON)
-  tray.setToolTip('Exora Dock')
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Open Exora Dock', click: () => { mainWindow?.show(); mainWindow?.focus() } },
-    { type: 'separator' },
-    { label: 'Quit', click: () => { appIsQuitting = true; app.quit() } },
-  ]))
+  if (!tray) tray = new Tray(WINDOW_ICON)
+  updateTrayMenu()
+  tray.removeAllListeners('double-click')
   tray.on('double-click', () => { mainWindow?.show(); mainWindow?.focus() })
+}
+
+function updateTrayMenu() {
+  if (!tray) return
+  const chinese = currentAppSettings.language === 'zh'
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: chinese ? '打开 Exora Dock' : 'Open Exora Dock', click: () => { mainWindow?.show(); mainWindow?.focus() } },
+    { type: 'separator' },
+    { label: chinese ? '退出' : 'Quit', click: () => { appIsQuitting = true; app.quit() } },
+  ]))
 }
 
 function registerIpc() {
@@ -196,6 +216,7 @@ function createIpcHandlerGroups() {
     },
     dockRuntime: {
       app_status,
+      release_status,
       start_dock,
       stop_dock,
       restart_dock,
@@ -216,6 +237,15 @@ function createIpcHandlerGroups() {
       save_app_settings,
       locale_status,
       set_locale,
+      system_settings_status,
+      system_notification_test,
+      system_choose_download_directory,
+      system_open_path,
+      system_clear_storage,
+      system_export_diagnostics,
+      system_update_check,
+      system_update_install,
+      system_open_legal,
     },
     v3Market: {
       catalog_products,
@@ -303,7 +333,12 @@ async function window_toggle_maximize() {
 }
 
 async function window_close() {
-  mainWindow?.hide()
+  if (currentAppSettings.closeBehavior === 'quit') {
+    appIsQuitting = true
+    app.quit()
+  } else {
+    mainWindow?.hide()
+  }
 }
 
 async function window_set_mode(payload = {}) {
@@ -361,6 +396,10 @@ async function app_status() {
     imageTag: paths.helperPath,
     baseUrl: BASE_URL,
     dataDir: paths.dataDir,
+    logsDir: paths.logsDir,
+    version: String(app.getVersion() || ''),
+    releaseChannel: 'technical-preview',
+    authentiCodeSigned: false,
     configPath: paths.configPath,
     discoveryPath: paths.discoveryPath,
     mcpCommand: mcpCommandString(paths.helperPath, paths.configPath),
@@ -462,9 +501,41 @@ async function app_settings_load() {
   const paths = await dockPaths()
   await ensurePersistenceLayout(paths)
   const settingsDoc = await readJsonOr(paths.appSettingsPath, {})
+  currentAppSettings = normalizeAppSettingsV3(settingsDoc.settings || settingsDoc)
   return {
-    version: 2,
-    settings: normalizeAppSettingsV2(settingsDoc.settings || settingsDoc),
+    version: SETTINGS_VERSION,
+    settings: currentAppSettings,
+  }
+}
+
+function releaseVerificationKey() {
+  const candidate = app.isPackaged ? path.join(process.resourcesPath, 'release-signing-public-key.txt') : path.join(__dirname, '..', 'resources', 'release-signing-public-key.txt')
+  return fs.existsSync(candidate) ? fs.readFileSync(candidate, 'utf8').trim() : ''
+}
+
+async function release_status() {
+  const manifestURL = String(process.env.EXORA_RELEASE_MANIFEST_URL || 'https://github.com/UmbraFi/exora-dock/releases/download/v0.1.0-preview.1/release-manifest.json').trim()
+  const signatureURL = manifestURL.replace(/release-manifest\.json(?:\?.*)?$/, 'release-manifest.sig')
+  const [manifestResponse, signatureResponse] = await Promise.all([fetch(manifestURL), fetch(signatureURL)])
+  if (!manifestResponse.ok || !signatureResponse.ok) throw new Error('The signed Technical Preview release manifest is unavailable.')
+  const encoded = Buffer.from(await manifestResponse.arrayBuffer())
+  const signature = Buffer.from((await signatureResponse.text()).trim(), 'base64')
+  const raw = Buffer.from(releaseVerificationKey(), 'base64')
+  if (raw.length !== 32) throw new Error('Release verification key is not configured.')
+  const spki = Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), raw])
+  const key = crypto.createPublicKey({ key: spki, format: 'der', type: 'spki' })
+  if (!crypto.verify(null, encoded, key, signature)) throw new Error('Release manifest signature verification failed.')
+  const manifest = JSON.parse(encoded.toString('utf8'))
+  if (manifest.schema !== 'exora.release-manifest.v1' || manifest.platform !== 'windows' || !/^[a-f0-9]{64}$/.test(String(manifest.sha256 || ''))) throw new Error('Release manifest contract is invalid.')
+  return {
+    currentVersion: String(app.getVersion() || ''),
+    latestVersion: String(manifest.version || ''),
+    updateAvailable: String(manifest.version || '').replace(/^v/, '') !== String(app.getVersion() || ''),
+    artifact: manifest.artifact,
+    sha256: manifest.sha256,
+    authentiCodeSigned: false,
+    warning: 'Unsigned Technical Preview: Windows may show Unknown publisher or SmartScreen warnings.',
+    downloadURL: new URL(String(manifest.artifact), manifestURL).toString(),
   }
 }
 
@@ -472,28 +543,15 @@ async function save_app_settings(payload = {}) {
   const paths = await dockPaths()
   await ensurePersistenceLayout(paths)
   const input = objectOr(payload.input || payload)
-  const settings = normalizeAppSettingsV2(input.settings || input)
+  const settings = normalizeAppSettingsV3(input.settings || input)
   await writeJsonAtomic(paths.appSettingsPath, {
-    version: 2,
+    version: SETTINGS_VERSION,
     savedAt: new Date().toISOString(),
     settings,
   })
+  currentAppSettings = settings
+  applyDesktopSettings(settings)
   return { saved: true, path: paths.appSettingsPath }
-}
-
-function normalizeAppSettingsV2(value) {
-  const input = objectOr(value)
-  const language = input.language === 'zh' ? 'zh' : 'en'
-  const theme = input.theme === 'dark' ? 'dark' : 'light'
-  const workOrderSide = input.workOrderSide === 'seller' ? 'seller' : 'buyer'
-  const sidebarWidth = Math.max(224, Math.min(440, Number.parseInt(String(input.sidebarWidth || 280), 10) || 280))
-  return {
-    language,
-    theme,
-    workOrderSide,
-    sidebarCollapsed: Boolean(input.sidebarCollapsed),
-    sidebarWidth,
-  }
 }
 
 async function locale_status() {
@@ -516,14 +574,15 @@ async function set_locale(payload = {}) {
   const input = objectOr(payload.input || payload)
   const language = normalizeAppLanguage(input.language || input.locale || input.lang)
   const current = objectOr(await readJsonOr(paths.appSettingsPath, {}))
-  const settings = objectOr(current.settings || current)
-  settings.language = language
+  const settings = normalizeAppSettingsV3({ ...objectOr(current.settings || current), language })
   await writeJsonAtomic(paths.appSettingsPath, {
     ...current,
-    version: current.version || 1,
+    version: SETTINGS_VERSION,
     savedAt: new Date().toISOString(),
     settings,
   })
+  currentAppSettings = settings
+  applyDesktopSettings(settings)
   return {
     saved: true,
     language,
@@ -575,6 +634,197 @@ async function wallet_status() {
 			agentSpendPolicy: objectOr(spendPolicyResult.spendPolicy || spendPolicyResult),
     },
   }
+}
+
+function applyDesktopSettings(settings) {
+  currentAppSettings = normalizeAppSettingsV3(settings)
+  nativeTheme.themeSource = currentAppSettings.theme
+  if (app.isReady()) {
+    app.setLoginItemSettings({
+      openAtLogin: currentAppSettings.launchAtLogin,
+      openAsHidden: currentAppSettings.startMinimized,
+      args: currentAppSettings.startMinimized ? ['--hidden'] : [],
+    })
+  }
+  updateTrayMenu()
+}
+
+async function system_settings_status() {
+  const paths = await dockPaths()
+  const [runtime, storage] = await Promise.all([
+    app_status().catch((error) => ({ container: 'unknown', daemon: 'offline', message: errorMessage(error) })),
+    storageSnapshot(paths),
+  ])
+  const login = app.getLoginItemSettings()
+  const downloadDirectory = currentAppSettings.downloadDirectory || app.getPath('downloads')
+  return {
+    appVersion: app.getVersion(),
+    electronVersion: process.versions.electron,
+    chromiumVersion: process.versions.chrome,
+    platform: process.platform,
+    arch: process.arch,
+    packaged: app.isPackaged,
+    secureStorageAvailable: safeStorage.isEncryptionAvailable(),
+    notificationsSupported: Notification.isSupported(),
+    notificationPermission: Notification.isSupported() ? 'available' : 'unsupported',
+    loginItem: { openAtLogin: login.openAtLogin, openAsHidden: login.openAsHidden },
+    paths: {
+      data: paths.dataDir,
+      logs: paths.logsDir,
+      settings: paths.appSettingsPath,
+      manifest: paths.discoveryPath,
+      downloads: downloadDirectory,
+    },
+    storage,
+    runtime,
+    cloudURL: configuredCloudURL() || process.env.EXORA_CLOUD_URL || '',
+    update: updateStatus(),
+  }
+}
+
+async function system_notification_test(payload = {}) {
+  if (!Notification.isSupported()) throw new Error('System notifications are not supported on this device.')
+  const input = objectOr(payload.input || payload)
+  const chinese = normalizeAppLanguage(input.language || currentAppSettings.language) === 'zh'
+  const notification = new Notification({
+    title: chinese ? 'Exora Dock 通知已就绪' : 'Exora Dock notifications are ready',
+    body: chinese ? '审批、安全和运行时事件可在此设备上提醒你。' : 'Approvals, security events, and runtime issues can alert you on this device.',
+    icon: WINDOW_ICON,
+  })
+  notification.show()
+  return { delivered: true }
+}
+
+async function system_choose_download_directory() {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: currentAppSettings.language === 'zh' ? '选择默认下载目录' : 'Choose default download directory',
+    defaultPath: currentAppSettings.downloadDirectory || app.getPath('downloads'),
+    properties: ['openDirectory', 'createDirectory'],
+  })
+  return { canceled: result.canceled, path: result.filePaths[0] || '' }
+}
+
+async function system_open_path(payload = {}) {
+  const paths = await dockPaths()
+  const input = objectOr(payload.input || payload)
+  const allowed = {
+    data: paths.dataDir,
+    logs: paths.logsDir,
+    settings: paths.appSettingsPath,
+    manifest: paths.discoveryPath,
+    downloads: currentAppSettings.downloadDirectory || app.getPath('downloads'),
+  }
+  const target = allowed[String(input.kind || '')]
+  if (!target) throw new Error('Unsupported app path.')
+  await fsp.mkdir(path.extname(target) ? path.dirname(target) : target, { recursive: true })
+  await openPath(target)
+  return { opened: true }
+}
+
+async function system_clear_storage(payload = {}) {
+  const paths = await dockPaths()
+  const input = objectOr(payload.input || payload)
+  const kind = String(input.kind || '')
+  if (kind === 'cache') {
+    await session.defaultSession.clearCache()
+  } else if (kind === 'logs') {
+    await emptyDirectory(paths.logsDir)
+  } else if (kind === 'temporary') {
+    await emptyDirectory(resourceArchiveTempRoot())
+  } else {
+    throw new Error('Unsupported storage category.')
+  }
+  return { cleared: true, storage: await storageSnapshot(paths) }
+}
+
+async function system_export_diagnostics() {
+  const paths = await dockPaths()
+  const [runtime, storage] = await Promise.all([app_status().catch((error) => ({ error: errorMessage(error) })), storageSnapshot(paths)])
+  const report = {
+    schema: 'exora-diagnostics-v1',
+    createdAt: new Date().toISOString(),
+    application: { version: app.getVersion(), electron: process.versions.electron, platform: process.platform, arch: process.arch, packaged: app.isPackaged },
+    runtime: redactDiagnostics(runtime),
+    storage,
+    preferences: redactDiagnostics(normalizeAppSettingsV3(currentAppSettings)),
+  }
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: currentAppSettings.language === 'zh' ? '导出脱敏诊断包' : 'Export redacted diagnostics',
+    defaultPath: path.join(app.getPath('downloads'), `exora-diagnostics-${new Date().toISOString().slice(0, 10)}.json`),
+    filters: [{ name: 'JSON', extensions: ['json'] }],
+  })
+  if (result.canceled || !result.filePath) return { canceled: true }
+  await writeJsonAtomic(result.filePath, report)
+  return { canceled: false, path: result.filePath }
+}
+
+async function system_update_check() {
+  return updateStatus(true)
+}
+
+async function system_update_install() {
+  throw new Error('No downloaded update is ready to install.')
+}
+
+async function system_open_legal(payload = {}) {
+  const input = objectOr(payload.input || payload)
+  const root = path.join(__dirname, '..', '..')
+  const target = input.kind === 'privacy'
+    ? path.join(root, 'docs', currentAppSettings.language === 'zh' ? 'WHITEPAPER.zh-CN.md' : 'WHITEPAPER.en.md')
+    : path.join(root, 'LICENSE')
+  await openPath(target)
+  return { opened: true }
+}
+
+function updateStatus(checked = false) {
+  return {
+    supported: app.isPackaged,
+    channel: 'stable',
+    automatic: currentAppSettings.autoUpdate,
+    state: app.isPackaged ? 'manual' : 'development',
+    checkedAt: checked ? new Date().toISOString() : '',
+    message: app.isPackaged
+      ? 'Update metadata is not configured for this distribution.'
+      : 'Updates are disabled in development builds.',
+  }
+}
+
+async function storageSnapshot(paths) {
+  const [dataBytes, logsBytes, cacheBytes, tempBytes] = await Promise.all([
+    directorySize(paths.dataDir), directorySize(paths.logsDir), directorySize(app.getPath('cache')), directorySize(resourceArchiveTempRoot()),
+  ])
+  return { dataBytes, logsBytes, cacheBytes, tempBytes }
+}
+
+async function directorySize(root) {
+  let total = 0
+  const queue = [root]
+  while (queue.length) {
+    const current = queue.pop()
+    let entries
+    try { entries = await fsp.readdir(current, { withFileTypes: true }) } catch { continue }
+    for (const entry of entries) {
+      const target = path.join(current, entry.name)
+      if (entry.isDirectory()) queue.push(target)
+      else if (entry.isFile()) {
+        try { total += (await fsp.stat(target)).size } catch { /* file changed while measuring */ }
+      }
+    }
+  }
+  return total
+}
+
+async function emptyDirectory(root) {
+  await fsp.mkdir(root, { recursive: true })
+  const entries = await fsp.readdir(root)
+  await Promise.all(entries.map((entry) => fsp.rm(path.join(root, entry), { recursive: true, force: true })))
+}
+
+function redactDiagnostics(value) {
+  if (Array.isArray(value)) return value.map(redactDiagnostics)
+  if (!value || typeof value !== 'object') return value
+  const secret = /(pin|token|secret|password|authorization|api.?key|access.?key|credential)/i
+  return Object.fromEntries(Object.entries(value).flatMap(([key, item]) => secret.test(key) ? [] : [[key, redactDiagnostics(item)]]))
 }
 
 async function wallet_spend_policy_save(payload = {}) {
@@ -743,6 +993,7 @@ function resolveBundledBinary(baseName) {
 
 async function ensureWindowsWSLBroker() {
   if (process.platform !== 'win32') return
+  if (await windowsPipeAvailable('\\\\.\\pipe\\exora-wsl-broker')) return
   const paths = await dockPaths()
   if (!fs.existsSync(paths.wslBrokerPath)) throw new Error(`Bundled WSL broker not found: ${paths.wslBrokerPath}`)
   const providerDir = path.join(paths.rootDir, 'provider')
@@ -753,14 +1004,35 @@ async function ensureWindowsWSLBroker() {
   try {
     const child = spawn(paths.wslBrokerPath, ['--data-dir', providerDir], {
       cwd: paths.rootDir,
-      detached: true,
+      detached: false,
       windowsHide: true,
       stdio: ['ignore', out, out],
     })
-    child.unref()
+    wslBrokerChild = child
+    child.once('exit', () => {
+      if (wslBrokerChild === child) wslBrokerChild = undefined
+      if (!appIsQuitting) setTimeout(() => ensureWindowsWSLBroker().catch((error) => console.error('Failed to restart Windows WSL broker:', error)), 1500)
+    })
   } finally {
     fs.closeSync(out)
   }
+}
+
+function windowsPipeAvailable(pipePath) {
+  return new Promise((resolve) => {
+    const socket = net.createConnection(pipePath)
+    let settled = false
+    const finish = (available) => {
+      if (settled) return
+      settled = true
+      socket.removeAllListeners()
+      socket.destroy()
+      resolve(available)
+    }
+    socket.setTimeout(500, () => finish(false))
+    socket.once('connect', () => finish(true))
+    socket.once('error', () => finish(false))
+  })
 }
 
 async function ensureLocalLayout(paths) {
@@ -832,16 +1104,18 @@ function appDataRoot() {
   throw new Error('Cannot resolve local app data directory')
 }
 
-function readStartupLanguageSync() {
+function readStartupAppSettingsSync() {
   const envLanguage = process.env.EXORA_DOCK_LANGUAGE || process.env.EXORA_LANGUAGE
-  if (envLanguage) return normalizeAppLanguage(envLanguage)
   try {
     const settingsPath = path.join(app.getPath('userData'), PERSISTENCE_DIR_NAME, 'settings', 'settings.json')
     const raw = fs.readFileSync(settingsPath, 'utf8')
     const value = JSON.parse(raw)
-    return normalizeAppLanguage(value?.settings?.language || value?.language)
+    return normalizeAppSettingsV3({
+      ...objectOr(value?.settings || value),
+      ...(envLanguage ? { language: normalizeAppLanguage(envLanguage) } : {}),
+    })
   } catch {
-    return 'en'
+    return normalizeAppSettingsV3(envLanguage ? { language: normalizeAppLanguage(envLanguage) } : {})
   }
 }
 
@@ -1947,11 +2221,56 @@ async function downloadConsumerTransfer(response) {
   mainWindow?.webContents.send('exora:v3-progress', { kind: 'marketplace_download', phase: 'complete', bytesDownloaded: downloaded, sizeBytes: expectedSize })
   return { status: 'complete', fileName: path.basename(destination), sizeBytes: downloaded, sha256: actualSHA256, resumedFromBytes: offset }
 }
-async function consumer_purchase_compute(payload = {}) { return cloudConsumerJson('POST', '/v3/compute-purchases', payload.input || {}) }
+function uint32Buffer(value) {
+  const out = Buffer.alloc(4)
+  out.writeUInt32BE(value, 0)
+  return out
+}
+
+function ed25519OpenSSHPublicKey(publicKey) {
+  const raw = publicKey.export({ format: 'der', type: 'spki' }).subarray(-32)
+  const type = Buffer.from('ssh-ed25519')
+  const blob = Buffer.concat([uint32Buffer(type.length), type, uint32Buffer(raw.length), raw])
+  return `ssh-ed25519 ${blob.toString('base64')} exora-dock`
+}
+
+async function consumer_purchase_compute(payload = {}) {
+  const input = { ...(payload.input || {}) }
+  let temporaryKeyPath = ''
+  if (!String(input.sshPublicKey || '').trim()) {
+    const paths = await dockPaths()
+    const keyDirectory = path.join(paths.persistenceDir, 'lease-keys')
+    await fsp.mkdir(keyDirectory, { recursive: true, mode: 0o700 })
+    const keyID = crypto.randomUUID()
+    temporaryKeyPath = path.join(keyDirectory, `${keyID}.key`)
+    const pair = crypto.generateKeyPairSync('ed25519')
+    input.sshPublicKey = ed25519OpenSSHPublicKey(pair.publicKey)
+    await fsp.writeFile(temporaryKeyPath, pair.privateKey.export({ format: 'pem', type: 'pkcs8' }), { mode: 0o600, flag: 'wx' })
+  }
+  try {
+    const response = await cloudConsumerJson('POST', '/v3/compute-purchases', input)
+    const leaseID = String(response?.lease?.leaseId || '').trim()
+    if (temporaryKeyPath && leaseID) {
+      const finalPath = path.join(path.dirname(temporaryKeyPath), `${leaseID}.key`)
+      await fsp.rename(temporaryKeyPath, finalPath)
+      response.lease = { ...response.lease, localSSHPrivateKeyPath: finalPath }
+    }
+    return response
+  } catch (error) {
+    if (temporaryKeyPath) await fsp.rm(temporaryKeyPath, { force: true })
+    throw error
+  }
+}
 async function consumer_compute_purchase(payload = {}) { return cloudConsumerJson('GET', `/v3/compute-purchases/${encodeURIComponent(String(payload?.input?.purchaseId || ''))}`) }
 async function consumer_extend_compute(payload = {}) { const input = { ...(payload.input || {}) }; const purchaseId = String(input.purchaseId || ''); delete input.purchaseId; return cloudConsumerJson('POST', `/v3/compute-purchases/${encodeURIComponent(purchaseId)}/extend`, input) }
 async function consumer_get_lease(payload = {}) { return cloudConsumerJson('GET', `/v3/leases/${encodeURIComponent(String(payload?.input?.leaseId || ''))}`) }
-async function consumer_release_lease(payload = {}) { return cloudConsumerJson('POST', `/v3/leases/${encodeURIComponent(String(payload?.input?.leaseId || ''))}/release`, {}) }
+async function consumer_release_lease(payload = {}) {
+  const leaseID = String(payload?.input?.leaseId || '')
+  const response = await cloudConsumerJson('POST', `/v3/leases/${encodeURIComponent(leaseID)}/release`, {})
+  const paths = await dockPaths()
+  await fsp.rm(path.join(paths.persistenceDir, 'lease-keys', `${leaseID}.key`), { force: true })
+  return response
+}
 
 async function activity_sessions(payload = {}) {
   const input = payload?.input || {}
@@ -2272,7 +2591,7 @@ async function provider_environment_reserve(payload = {}) {
     environmentImageBytes: imageSizeBytes,
     environmentRoot: storage.rootPath,
   })
-  return { capacity: capacity.result, reservation: reservation.result }
+  return { capacity: capacity.result, reservation: reservation.result, environmentRoot: storage.rootPath }
 }
 async function provider_environment_release(payload = {}) {
   const environmentId = String(payload?.input?.environmentId || '')
@@ -2328,21 +2647,35 @@ async function provider_environment_download(payload = {}) {
     const partialPath = `${finalPath}.partial`
     let offset = fs.existsSync(partialPath) ? (await fsp.stat(partialPath)).size : 0
     let url = started.url
+    let interruptedAttempts = 0
     while (offset < Number(artifact.sizeBytes || 0)) {
-      const response = await fetch(url, { headers: offset ? { Range: `bytes=${offset}-` } : {}, signal: controller.signal })
-      if (!response.ok && response.status !== 206) {
+      try {
+        const response = await fetch(url, { headers: offset ? { Range: `bytes=${offset}-` } : {}, signal: controller.signal })
+        if (!response.ok && response.status !== 206) throw new Error(`Environment image download failed with HTTP ${response.status}`)
+        if (offset && response.status !== 206) {
+          offset = 0
+          await fsp.rm(partialPath, { force: true })
+        }
+        const handle = await fsp.open(partialPath, offset ? 'a' : 'w')
+        try {
+          for await (const chunk of response.body) {
+            await handle.write(chunk)
+            offset += chunk.length
+            mainWindow?.webContents.send('exora:v3-progress', { kind: 'environment_image', imageId, phase: 'downloading', bytesDownloaded: offset, sizeBytes: Number(artifact.sizeBytes || 0) })
+          }
+        } finally { await handle.close() }
+        interruptedAttempts = 0
+      } catch (error) {
+        if (controller.signal.aborted) throw error
+        interruptedAttempts += 1
+        if (interruptedAttempts > 8) throw new Error(`Environment image download could not resume: ${errorMessage(error)}`)
         const refreshed = await httpJson('POST', `/v3/provider/environment-image-downloads/${encodeURIComponent(started.download.downloadId)}/refresh`, { bytesDownloaded: offset }, token)
         url = refreshed.url
+        if (interruptedAttempts > 1) {
+          await new Promise((resolve) => setTimeout(resolve, Math.min(5000, interruptedAttempts * 500)))
+        }
         continue
       }
-      const handle = await fsp.open(partialPath, offset ? 'a' : 'w')
-      try {
-        for await (const chunk of response.body) {
-          await handle.write(chunk)
-          offset += chunk.length
-          mainWindow?.webContents.send('exora:v3-progress', { kind: 'environment_image', imageId, phase: 'downloading', bytesDownloaded: offset, sizeBytes: Number(artifact.sizeBytes || 0) })
-        }
-      } finally { await handle.close() }
     }
     mainWindow?.webContents.send('exora:v3-progress', { kind: 'environment_image', imageId, phase: 'verifying' })
     const digest = await sha256File(partialPath)

@@ -1,6 +1,6 @@
 {
   "name": "exora-dock-desktop",
-  "version": "0.1.0",
+  "version": "0.1.0-preview.1",
   "description": "Desktop agent workstation for Exora Dock",
   "author": "Exora",
   "private": true,
@@ -11,7 +11,7 @@
     "preview:desktop": "npm run dev",
     "dev:frontend": "vite --host 127.0.0.1 --port 1420",
     "build:frontend": "tsc && vite build",
-    "build:electron": "node --test electron/cloud-auth.test.cjs electron/resource-archive.test.cjs electron/legacy-frontend-cleanup.test.cjs && node electron/check.cjs",
+    "build:electron": "node --test electron/app-settings.test.cjs electron/cloud-auth.test.cjs electron/resource-archive.test.cjs electron/legacy-frontend-cleanup.test.cjs && node electron/check.cjs",
     "build": "npm run build:frontend && npm run build:electron && electron-builder",
     "build:dmg": "npm run build:frontend && npm run build:electron && electron-builder --mac dmg",
     "build:exe": "npm run build:frontend && npm run build:electron && electron-builder --win nsis",
@@ -61,6 +61,14 @@
           "*.msi",
           "wsl-runtime.lock.json"
         ]
+      },
+      {
+        "from": "resources/image-signing-public-key.txt",
+        "to": "image-signing-public-key.txt"
+      },
+      {
+        "from": "resources/release-signing-public-key.txt",
+        "to": "release-signing-public-key.txt"
       }
     ],
     "mac": {
@@ -73,7 +81,8 @@
       "target": [
         "nsis"
       ],
-      "icon": "build/icon.ico"
+      "icon": "build/icon.ico",
+      "artifactName": "Exora-Dock-${version}-Windows-x64-Unsigned-Technical-Preview.${ext}"
     },
     "linux": {
       "category": "Development",

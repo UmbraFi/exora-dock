@@ -20,9 +20,11 @@ test('permanently removes only retired frontend data and preserves account and V
   await fs.access(fixture.paths.providerEnvironmentSettingsPath)
 
   const settings = await readJson(fixture.paths.appSettingsPath, {})
-  assert.equal(settings.version, 2)
+  assert.equal(settings.version, 3)
   assert.deepEqual(settings.settings, {
     language: 'zh', theme: 'dark', workOrderSide: 'seller', sidebarCollapsed: true, sidebarWidth: 312,
+    launchAtLogin: true, closeBehavior: 'quit', startDockOnLaunch: false,
+    notifications: { approvals: false, runtime: true },
   })
   const desktop = await readJson(fixture.paths.desktopStatePath, {})
   assert.equal(desktop.cloudAuth.account.email, 'user@example.com')
@@ -88,6 +90,8 @@ async function createFixture(t) {
       permissionMode: 'full', buyerAgentSettings: { enabled: true }, activeSettingsView: 'archives',
       marketOrderSide: 'buyer', transactionDetailWidth: 400, projectFolderCollapsed: true,
       expandedProjectFolderPaths: ['old'], seenProjectFolderPaths: ['old'], workTaskState: { pinnedIds: ['chat'] },
+      launchAtLogin: true, closeBehavior: 'quit', startDockOnLaunch: false,
+      notifications: { approvals: false, runtime: true },
       gpuDemo: { active: true }, abandonedExperiment: true,
     },
   })

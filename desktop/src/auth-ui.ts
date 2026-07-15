@@ -46,6 +46,7 @@ const authFeatureImages = [
 ] as const
 
 const authFeaturePlacements = ['bottom-right', 'top-right', 'bottom-right', 'bottom-right', 'top-left'] as const
+const authFeatureAutoAdvanceMs = 6_000
 // Kept available in packaged builds while the authentication/workspace lifecycle is under test.
 const authUITestControlsEnabled = true
 
@@ -68,6 +69,7 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
   let languageMenuOpen = false
   let activeFeatureIndex = 0
   let featureObserver: IntersectionObserver | undefined
+  let featureAutoScrollTimer: number | undefined
   let resendRemaining = 0
   let resendInterval: number | undefined
   let workspaceOpening = false
@@ -76,6 +78,8 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
   let workspaceTransitionGeneration = 0
 
   const copy = () => options.language() === 'zh' ? zhCopy : enCopy
+
+  element.addEventListener('invalid', (event) => event.preventDefault(), true)
 
   element.addEventListener('pointerdown', (event) => {
     if (!languageMenuOpen) return
@@ -88,6 +92,7 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
     const c = copy()
     featureObserver?.disconnect()
     featureObserver = undefined
+    clearFeatureAutoScroll()
     const workspaceSession = status.phase === 'authenticated' || status.phase === 'needs_pin'
     element.classList.toggle('hidden', testWorkspacePreview || (workspaceSession && !forceOpen && !workspaceOpening && !workspaceError))
     if (workspaceOpening) {
@@ -407,10 +412,24 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
       button.innerHTML = eyeIcon(reveal)
       button.setAttribute('aria-label', reveal ? copy().hidePassword : copy().showPassword)
     }))
-    element.querySelectorAll<HTMLFormElement>('[data-auth-form]').forEach((form) => form.addEventListener('submit', (event) => {
-      event.preventDefault()
-      void handleSubmit(form)
-    }))
+    element.querySelectorAll<HTMLFormElement>('[data-auth-form]').forEach((form) => {
+      form.noValidate = true
+      form.addEventListener('input', (event) => {
+        const input = event.target
+        if (!(input instanceof HTMLInputElement) || !input.validity.valid) return
+        input.removeAttribute('aria-invalid')
+      })
+      form.addEventListener('submit', (event) => {
+        event.preventDefault()
+        const invalidControl = form.querySelector<HTMLInputElement>('input:invalid')
+        if (invalidControl) {
+          invalidControl.setAttribute('aria-invalid', 'true')
+          invalidControl.focus({ preventScroll: true })
+          return
+        }
+        void handleSubmit(form)
+      })
+    })
     setupFeatureShowcase()
     updateResendButton()
   }
@@ -418,6 +437,7 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
   function setupFeatureShowcase() {
     const scroller = element.querySelector<HTMLElement>('.auth-feature-scroll')
     if (!scroller) return
+    const showcase = scroller.closest<HTMLElement>('.auth-showcase')
     const slides = Array.from(scroller.querySelectorAll<HTMLElement>('[data-auth-feature-index]'))
     const buttons = Array.from(element.querySelectorAll<HTMLButtonElement>('[data-auth-feature-target]'))
     const current = element.querySelector<HTMLElement>('[data-auth-feature-current]')
@@ -439,7 +459,21 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
       scroller.scrollTo({ top: slide.offsetTop, behavior: smooth && !reduceMotion ? 'smooth' : 'auto' })
     }
 
-    buttons.forEach((button) => button.addEventListener('click', () => scrollToFeature(Number(button.dataset.authFeatureTarget))))
+    const scheduleAutoScroll = () => {
+      clearFeatureAutoScroll()
+      if (reduceMotion || slides.length < 2 || element.classList.contains('hidden')) return
+      if (showcase?.matches(':hover') || showcase?.contains(document.activeElement)) return
+      featureAutoScrollTimer = window.setTimeout(() => {
+        featureAutoScrollTimer = undefined
+        if (!document.hidden) scrollToFeature((activeFeatureIndex + 1) % slides.length)
+        scheduleAutoScroll()
+      }, authFeatureAutoAdvanceMs)
+    }
+
+    buttons.forEach((button) => button.addEventListener('click', () => {
+      scrollToFeature(Number(button.dataset.authFeatureTarget))
+      scheduleAutoScroll()
+    }))
     scroller.addEventListener('keydown', (event) => {
       let nextIndex = activeFeatureIndex
       if (event.key === 'ArrowDown' || event.key === 'PageDown') nextIndex += 1
@@ -449,7 +483,12 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
       else return
       event.preventDefault()
       scrollToFeature(Math.max(0, Math.min(slides.length - 1, nextIndex)))
+      scheduleAutoScroll()
     })
+    showcase?.addEventListener('pointerenter', clearFeatureAutoScroll)
+    showcase?.addEventListener('pointerleave', scheduleAutoScroll)
+    showcase?.addEventListener('focusin', clearFeatureAutoScroll)
+    showcase?.addEventListener('focusout', () => window.requestAnimationFrame(scheduleAutoScroll))
 
     if ('IntersectionObserver' in window) {
       featureObserver = new IntersectionObserver((entries) => {
@@ -472,7 +511,14 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
       const savedSlide = slides[Math.max(0, Math.min(slides.length - 1, activeFeatureIndex))]
       if (savedSlide) scroller.scrollTop = savedSlide.offsetTop
       setActiveFeature(activeFeatureIndex)
+      scheduleAutoScroll()
     })
+  }
+
+  function clearFeatureAutoScroll() {
+    if (featureAutoScrollTimer === undefined) return
+    window.clearTimeout(featureAutoScrollTimer)
+    featureAutoScrollTimer = undefined
   }
 
   async function handleAction(action: string) {
@@ -683,6 +729,23 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
     render()
   }
 
+  function openPINReset() {
+    if (!status.authenticated) return
+    forceOpen = true
+    view = 'pin-reset'
+    message = ''
+    render()
+  }
+
+  function openPasswordReset() {
+    if (!status.authenticated) return
+    forceOpen = true
+    resetEmail = status.account?.email || ''
+    view = 'forgot'
+    message = ''
+    render()
+  }
+
   function openTestSignIn() {
     if (!authUITestControlsEnabled) return
     testWorkspacePreview = false
@@ -722,6 +785,7 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
       workspaceError = ''
       testWorkspacePreview = preview
       element.classList.add('hidden')
+      clearFeatureAutoScroll()
     }).catch((error) => {
       if (generation !== workspaceTransitionGeneration) return
       workspaceOpening = false
@@ -742,7 +806,7 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
     workspaceError = ''
   }
 
-  return Object.freeze({ initialize, applyState, refreshLanguage, openPINSettings, openTestSignIn, get state() { return status } })
+  return Object.freeze({ initialize, applyState, refreshLanguage, openPINSettings, openPINReset, openPasswordReset, openTestSignIn, get state() { return status } })
 }
 
 function mailIcon() {

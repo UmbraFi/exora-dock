@@ -163,7 +163,9 @@
   height: 3px;
   border-radius: 999px;
   background: var(--color-primary);
-  box-shadow: none;
+  box-shadow:
+    0 0 13px rgb(102 92 255 / 0.34),
+    0 7px 16px rgb(102 92 255 / 0.14);
   transform: translateX(var(--v3-seller-active-offset, 0));
   transition: transform 240ms cubic-bezier(0.22, 0.61, 0.36, 1);
   pointer-events: none;
@@ -217,7 +219,7 @@
   border-color: rgb(102 92 255 / 0.6);
   color: var(--color-primary);
   background: var(--color-surface-tint);
-  box-shadow: none;
+  box-shadow: 0 4px 14px rgb(102 92 255 / 0.06);
 }
 .v3-seller-grid { display: grid; grid-template-columns: minmax(280px, .78fr) minmax(430px, 1.22fr); gap: 14px; align-items: start; }
 

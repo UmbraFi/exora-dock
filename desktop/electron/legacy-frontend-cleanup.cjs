@@ -1,4 +1,5 @@
 const fs = require('node:fs/promises')
+const { SETTINGS_VERSION, pickAppSettingsV3 } = require('./app-settings.cjs')
 
 const LEGACY_FRONTEND_CLEANUP_MARKER = 'legacyFrontendCleanupV2'
 
@@ -49,9 +50,9 @@ async function cleanupLegacyFrontendData(options = {}) {
 
   const settingsDocument = objectOr(await readJson(paths.appSettingsPath, {}))
   const storedSettings = objectOr(settingsDocument.settings || settingsDocument)
-  const nextSettings = pickSettingsV2(omitKeys(storedSettings, RETIRED_SETTINGS_KEYS))
+  const nextSettings = pickAppSettingsV3(omitKeys(storedSettings, RETIRED_SETTINGS_KEYS))
   await writeJson(paths.appSettingsPath, {
-    version: 2,
+    version: SETTINGS_VERSION,
     savedAt: now().toISOString(),
     settings: nextSettings,
   })
@@ -68,15 +69,6 @@ async function cleanupLegacyFrontendData(options = {}) {
 function omitKeys(value, keys) {
   const next = { ...objectOr(value) }
   for (const key of keys) delete next[key]
-  return next
-}
-
-function pickSettingsV2(value) {
-  const input = objectOr(value)
-  const next = {}
-  for (const key of ['language', 'theme', 'workOrderSide', 'sidebarCollapsed', 'sidebarWidth']) {
-    if (Object.hasOwn(input, key)) next[key] = input[key]
-  }
   return next
 }
 
