@@ -2,14 +2,22 @@ const crypto = require('node:crypto')
 const fs = require('node:fs')
 const path = require('node:path')
 
-const [artifactPath, outputDirectory, version, commit] = process.argv.slice(2)
+const [artifactPath, outputDirectory, version, commit, ...componentPaths] = process.argv.slice(2)
 if (!artifactPath || !outputDirectory || !version || !commit) {
-  throw new Error('usage: node build-release-manifest.cjs <artifact> <output-dir> <version> <commit>')
+  throw new Error('usage: node build-release-manifest.cjs <artifact> <output-dir> <version> <commit> [component ...]')
 }
 const privateKeyBase64 = String(process.env.EXORA_RELEASE_SIGNING_PRIVATE_KEY_BASE64 || '').trim()
 if (!privateKeyBase64) throw new Error('EXORA_RELEASE_SIGNING_PRIVATE_KEY_BASE64 is required')
 
 const artifact = fs.readFileSync(artifactPath)
+const components = componentPaths.map((componentPath) => {
+  const bytes = fs.readFileSync(componentPath)
+  return {
+    name: path.basename(componentPath),
+    sizeBytes: bytes.length,
+    sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+  }
+})
 const manifest = {
   schema: 'exora.release-manifest.v1',
   version,
@@ -20,6 +28,7 @@ const manifest = {
   artifact: path.basename(artifactPath),
   sizeBytes: artifact.length,
   sha256: crypto.createHash('sha256').update(artifact).digest('hex'),
+  components,
   commit,
   publishedAt: new Date().toISOString(),
 }

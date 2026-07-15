@@ -22,6 +22,8 @@ jobs:
       - name: Install desktop dependencies
         run: npm ci
         working-directory: desktop
+      - name: Test signed release manifest
+        run: node --test scripts/build-release-manifest.test.cjs
       - name: Build daemon sidecar
         shell: pwsh
         run: |
@@ -43,7 +45,7 @@ jobs:
           EXORA_RELEASE_SIGNING_PRIVATE_KEY_BASE64: ${{ secrets.EXORA_RELEASE_SIGNING_PRIVATE_KEY_BASE64 }}
         run: |
           $artifact = Get-ChildItem desktop/release/*Unsigned-Technical-Preview.exe | Select-Object -First 1
-          node scripts/build-release-manifest.cjs $artifact.FullName desktop/release "${{ github.ref_name }}" "${{ github.sha }}"
+          node scripts/build-release-manifest.cjs $artifact.FullName desktop/release "${{ github.ref_name }}" "${{ github.sha }}" desktop/binaries/exora-dockd.exe desktop/binaries/exora-wsl-broker.exe
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:
