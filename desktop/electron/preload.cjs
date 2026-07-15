@@ -7,6 +7,7 @@ function argValue(name) {
 }
 
 const exoraBridge = Object.freeze({
+  isPackaged: !process.defaultApp,
   initialLocale: Object.freeze({
     language: argValue('exora-language') || 'en',
     chromiumLocale: argValue('exora-chromium-locale') || 'en-US',
@@ -16,12 +17,6 @@ const exoraBridge = Object.freeze({
       return Promise.reject(new Error('Desktop command must be a non-empty string.'))
     }
     return ipcRenderer.invoke('exora:invoke', command, payload ?? {})
-  },
-  onLocalAgentEvent(callback) {
-    if (typeof callback !== 'function') return () => undefined
-    const listener = (_event, payload) => callback(payload)
-    ipcRenderer.on('exora:local-agent-event', listener)
-    return () => ipcRenderer.removeListener('exora:local-agent-event', listener)
   },
   onV3Progress(callback) {
     if (typeof callback !== 'function') return () => undefined

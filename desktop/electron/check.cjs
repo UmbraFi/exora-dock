@@ -12,7 +12,65 @@ for (const file of electronScripts(__dirname)) {
 }
 
 const renderer = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.ts'), 'utf8')
-const rendererStyles = fs.readFileSync(path.join(__dirname, '..', 'src', 'styles.css'), 'utf8')
+const viteConfig = fs.readFileSync(path.join(__dirname, '..', 'vite.config.ts'), 'utf8')
+if (!/base:\s*['"]\.\/['"]/.test(viteConfig)) throw new Error('Packaged renderer assets must use file-relative URLs')
+const rendererStyles = [
+  'styles.css',
+  'styles/v3-shell.css',
+  'styles/v3-api.css',
+  'styles/v3-environment.css',
+  'styles/v3-listings.css',
+  'styles/v3-history.css',
+  'styles/v3-buyer.css',
+  'styles/wallet.css',
+  'styles/auth.css',
+  'styles/settings.css',
+  'styles/modal.css',
+  'styles/policy.css',
+].map((file) => fs.readFileSync(path.join(__dirname, '..', 'src', file), 'utf8')).join('\n')
+const rendererI18n = fs.readFileSync(path.join(__dirname, '..', 'src', 'i18n.ts'), 'utf8')
+const toastStyles = rendererStyles.slice(rendererStyles.indexOf('.toast {'), rendererStyles.indexOf('.toast.show {'))
+for (const marker of ['bottom: max(16px', 'left: auto', 'overflow-wrap: anywhere', 'right: max(16px', 'top: auto', 'white-space: normal', 'z-index: var(--layer-toast)']) {
+  if (!toastStyles.includes(marker)) throw new Error(`Bottom-right toast styling missing: ${marker}`)
+}
+if (toastStyles.includes('left: 50%') || /top:\s*16px/.test(toastStyles)) throw new Error('Toast must not return to the top-center position')
+if (!/\.toast\.show\s*\{[^}]*transform:\s*translateY\(0\);/s.test(rendererStyles)) throw new Error('Toast entrance must finish at the bottom-right anchor')
+if (!/@media \(max-width: 720px\)\s*\{\s*\.toast\s*\{[^}]*bottom:\s*max\(12px[^}]*right:\s*max\(12px/s.test(rendererStyles)) throw new Error('Narrow windows must keep a 12px toast inset')
+if (!/@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.toast,/s.test(rendererStyles)) throw new Error('Toast motion must respect reduced-motion preferences')
+const modalLayer = Number(rendererStyles.match(/--layer-modal:\s*(\d+);/)?.[1] || 0)
+const toastLayer = Number(rendererStyles.match(/--layer-toast:\s*(\d+);/)?.[1] || 0)
+if (!modalLayer || toastLayer <= modalLayer) throw new Error('Toast layer must stay above modal surfaces')
+if (/showToast\(\s*['"`]/.test(renderer)) throw new Error('Toast copy must use localized messages instead of hardcoded strings')
+for (const key of new Set(Array.from(renderer.matchAll(/['"`](toast\.[A-Za-z0-9_.]+)['"`]/g), (match) => match[1]))) {
+  const definitions = rendererI18n.match(new RegExp(`['"]${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"]\\s*:`, 'g')) || []
+  if (definitions.length !== 2) throw new Error(`Toast message must have English and Chinese definitions: ${key}`)
+}
+for (const retired of [
+  "'toast.signedOut':",
+  "'toast.language.en':",
+  "'toast.language.zh':",
+  "'toast.theme.dark':",
+  "'toast.theme.light':",
+  "'toast.permissionEnabled':",
+  "'toast.projectFolder':",
+  "'toast.projectRenamed':",
+  "'toast.taskUnpinned':",
+  "'toast.taskPinned':",
+  "'toast.taskRead':",
+  "'toast.taskUnread':",
+  "'toast.taskRenamed':",
+  'Endpoint Agent Prompt refreshed.',
+  'Agent Prompt refreshed with the current files and draft version.',
+  "showToast('Submitted to Listings",
+  "showToast('Verification code sent by email.",
+  'showToast(response.nextAction',
+]) {
+  if (renderer.includes(retired) || rendererI18n.includes(retired)) throw new Error(`Low-value or duplicate toast returned: ${retired}`)
+}
+const flatButtonPolicy = rendererStyles.slice(rendererStyles.lastIndexOf('/* Product invariant: every Electron button is flat'))
+for (const marker of ['button::before', 'button::after', 'button *', 'background-image: none !important', 'box-shadow: none !important', 'text-shadow: none !important']) {
+  if (!flatButtonPolicy.includes(marker)) throw new Error(`Flat Electron button policy missing: ${marker}`)
+}
 for (const marker of ['function renderV3SellerSurface', "['listings', 'Listings',", "['vm', 'VM',", "['resources', 'Resources',", "['endpoint', 'Endpoint',", "['api_bridge', 'API Bridge',", 'function renderV3EndpointAgentPage', 'class="v3-seller-active-bar"', 'class="v3-market-surface v3-seller-surface"']) {
   if (!renderer.includes(marker)) throw new Error(`V3 Electron surface missing: ${marker}`)
 }
@@ -21,7 +79,7 @@ if (tabOrder.some((index) => index < 0) || tabOrder.some((index, position) => po
 if (!renderer.includes("v3SellerTab: 'listings'")) throw new Error('Listings must be the default main workspace tab')
 const sideSwitch = renderer.slice(renderer.indexOf('function selectOrderSide('), renderer.indexOf('function sellerMonitorActive('))
 if (!sideSwitch || sideSwitch.includes('v3SellerTab =')) throw new Error('Buyer/Seller history switching must not change the main workspace tab')
-for (const marker of ['function renderV3UnifiedListingsPageV2', "v3ListingMode: 'buyer'", 'data-v3-listing-mode="buyer"', 'data-v3-listing-mode="seller"', 'v3-listing-search-switch', 'data-listing-owner=', 'data-v3-consumer-form="api"', 'data-v3-consumer-form="compute"', 'data-v3-consumer-action="purchase-download"']) {
+for (const marker of ['function renderV3UnifiedListingsPageV2', "v3ListingMode: 'buyer'", 'data-v3-listing-mode="buyer"', 'data-v3-listing-mode="seller"', 'v3-listing-search-switch', 'v3-listing-agent-hint', 'data-v3-listing-agent-copy', 'v3-listing-agent-details', 'listings.agentPrompt', 'data-listing-owner=', 'data-v3-consumer-form="api"', 'data-v3-consumer-form="compute"', 'data-v3-consumer-action="purchase-download"']) {
   if (!renderer.includes(marker)) throw new Error(`Unified marketplace surface missing: ${marker}`)
 }
 const listingsSurface = renderer.slice(renderer.indexOf('function renderV3UnifiedListingsPageV2'), renderer.indexOf('function renderV3SellerSurface'))
@@ -33,6 +91,9 @@ for (const nestedListingContainer of ['v3-listing-search-switch v3-console-panel
 }
 if (!/\.v3-application-flow,\s*\.v3-vm-onboarding,\s*\.v3-listings-page\s*\{[^}]*width:\s*100%;[^}]*margin:\s*0;/s.test(rendererStyles)) throw new Error('Listings must share the seller stack width and offset')
 if (!/\.app-shell\.seller-surface-mode \.action-view\s*\{[^}]*overflow-y:\s*scroll;[^}]*scrollbar-gutter:\s*stable both-edges;/s.test(rendererStyles)) throw new Error('Seller tabs must keep one symmetric scroll lane')
+if (!/\.app-shell\.seller-surface-mode \.v3-market-surface\s*\{[^}]*padding-top:\s*50px;/s.test(rendererStyles)) throw new Error('All five workspace pages must keep breathing room below the top tabs')
+if (!rendererStyles.includes('.main-workspace:has(.v3-seller-surface)::after')) throw new Error('The five-page workspace must keep its shared top fade')
+if (!/\.main-workspace:has\(\.v3-seller-surface\)::after\s*\{[^}]*height:\s*64px;[^}]*top:\s*0;/s.test(rendererStyles)) throw new Error('The shared workspace fade must begin at the very top without a layered seam')
 if (!/state\.v3SellerTab = nextTab\s*renderDecisionPanel\(\)\s*fields\.actionView\.scrollTop = 0/.test(renderer)) throw new Error('Seller tab switches must reset the shared scroll position')
 const listingStyles = rendererStyles.slice(rendererStyles.indexOf('.v3-listing-overview,'), rendererStyles.indexOf('.v3-endpoint-review-list'))
 if (!listingStyles || listingStyles.includes('linear-gradient')) throw new Error('Listings containers must use solid backgrounds')
@@ -40,8 +101,64 @@ for (const marker of ['function renderV3HistoryRow', 'function renderV3ActivityD
   if (!renderer.includes(marker)) throw new Error(`V3 history surface missing: ${marker}`)
 }
 const electronMain = fs.readFileSync(path.join(__dirname, 'main.cjs'), 'utf8')
+if (!/auth:\s*Object\.freeze\(\{\s*width:\s*1440,\s*height:\s*900,\s*minWidth:\s*560,\s*minHeight:\s*600\s*\}\)/.test(electronMain)) {
+  throw new Error('Authentication must open at the normal 1440x900 desktop size')
+}
+const preload = fs.readFileSync(path.join(__dirname, 'preload.cjs'), 'utf8')
 const cloudAuthMain = fs.readFileSync(path.join(__dirname, 'cloud-auth.cjs'), 'utf8')
 const authUI = fs.readFileSync(path.join(__dirname, '..', 'src', 'auth-ui.ts'), 'utf8')
+const workspaceTemplate = renderer.slice(renderer.indexOf('app.innerHTML ='), renderer.indexOf('const fields ='))
+if (!workspaceTemplate.includes('class="top-window-drag-strip"')) throw new Error('The native top titlebar drag region is missing')
+if (!authUI.includes('class="top-window-drag-strip auth-top-window-drag-strip"')) throw new Error('The auth gate must reuse the single native top titlebar drag region')
+if (!/\.top-window-drag-strip\s*\{[^}]*background:\s*transparent;[^}]*height:\s*36px;[^}]*top:\s*0;[^}]*app-region:\s*drag;/s.test(rendererStyles)) throw new Error('The top titlebar must remain transparent and natively draggable')
+if (/\.auth-feature-scroll\s*\{[^}]*app-region:\s*no-drag;/s.test(rendererStyles)) throw new Error('The full-height authentication showcase must not cancel the top-left drag strip')
+const nativeDragDeclarations = rendererStyles.match(/(?:^|\s)(?:-webkit-)?app-region:\s*drag;/g) || []
+if (nativeDragDeclarations.length !== 2) throw new Error('Only the unprefixed and prefixed declarations on the single top titlebar may be draggable')
+if (/\.global-modal-layer\s*\{[^}]*app-region:/s.test(rendererStyles)) throw new Error('The always-mounted global modal layer must not cancel the native titlebar drag region')
+if (!/\.app-modal\s*\{[^}]*app-region:\s*no-drag;/s.test(rendererStyles)) throw new Error('Visible modal surfaces must remain excluded from native window dragging')
+for (const retiredDragImplementation of ['auth-drag-strip', 'sidebar-drag-strip', 'main-window-drag-strip', 'chat-top-drag-layer', 'drag-region', 'window_begin_manual_drag', 'window_manual_drag_move', 'window_end_manual_drag', 'manualWindowDragActive']) {
+  if (renderer.includes(retiredDragImplementation) || rendererStyles.includes(retiredDragImplementation)) throw new Error(`retired drag implementation returned: ${retiredDragImplementation}`)
+}
+for (const retired of ['Transaction Agent', 'Ask Exora Dock', 'Select order activity', 'data-agent-chat-form', 'data-agent-query', 'data-cart-modal', 'data-market-project-picker', 'data-transaction-detail-sidebar']) {
+  if (workspaceTemplate.includes(retired)) throw new Error(`retired workspace DOM returned: ${retired}`)
+}
+for (const marker of ['class="global-modal-layer"', 'class="app-modal wallet-modal', 'class="app-modal order-search-modal', 'class="app-modal pin-settings-modal', 'class="app-modal mcp-info-modal', 'function renderMCPInfoModal', 'listings.guide.agentStep3', 'listings.guide.manualStep3', 'listings.guide.reality4', 'data-action="open-settings"', 'data-view-panel="app-settings"', 'data-settings-action="change-pin"', "'auth_pin_change'"]) {
+  if (!renderer.includes(marker)) throw new Error(`global modal or security settings surface missing: ${marker}`)
+}
+for (const marker of ['class="settings-return-cell"', 'function renderSettingsSidebar()', "view: 'security'", "if (state.settingsOpen) renderSettingsSidebar()"] ) {
+  if (!renderer.includes(marker)) throw new Error(`settings sidebar navigation missing: ${marker}`)
+}
+for (const nestedSettingsContainer of ['class="app-settings-layout"', 'class="app-settings-nav"']) {
+  if (workspaceTemplate.includes(nestedSettingsContainer)) throw new Error(`settings surface must stay flat: ${nestedSettingsContainer}`)
+}
+for (const marker of ['.global-modal-layer', '.app-modal-scrim', 'position: fixed', '.app-settings-view', '.pin-settings-panel']) {
+  if (!rendererStyles.includes(marker)) throw new Error(`global modal or settings styling missing: ${marker}`)
+}
+for (const retired of ['showingChat = false', 'gpu-demo', 'GPU Job Demo']) {
+  if (renderer.includes(retired) || rendererStyles.includes(retired)) throw new Error(`retired renderer design returned: ${retired}`)
+}
+if (!/onAuthenticated:\s*\(state: CloudAuthState\)\s*=>\s*Promise<void>/.test(authUI)) throw new Error('Authentication completion must await the workspace lifecycle')
+for (const marker of ['openingWorkspace', 'workspaceUnavailable', 'workspaceTransition', 'workspace-retry']) {
+  if (!authUI.includes(marker)) throw new Error(`atomic workspace transition support missing: ${marker}`)
+}
+if (!authUI.includes('const authUITestControlsEnabled = true') || !renderer.includes('const authUITestControlsEnabled = true')) {
+  throw new Error('Authentication test controls must remain available in current builds')
+}
+const retiredDesktopCapabilities = ['local_agent_', 'bind_local_agent', 'workspace_snapshot', 'buyer_flow_action', 'save_chat_thread', 'archive_chat_threads', 'save_transactions', 'agent_card_', 'market_rail_cards', 'seller_market_status', 'project_folder_status', 'choose_project_folder', 'open_project_folder', 'archive_project_chats', 'stop_work_run', 'release_work_mcp_lease', 'llm_profiles']
+const builtRenderer = fs.existsSync(path.join(__dirname, '..', 'dist', 'assets'))
+  ? fs.readdirSync(path.join(__dirname, '..', 'dist', 'assets'))
+    .filter((file) => file.endsWith('.js'))
+    .map((file) => fs.readFileSync(path.join(__dirname, '..', 'dist', 'assets', file), 'utf8'))
+    .join('\n')
+  : ''
+for (const retired of retiredDesktopCapabilities) {
+  if (renderer.includes(retired) || electronMain.includes(retired) || preload.includes(retired) || builtRenderer.includes(retired)) {
+    throw new Error(`retired desktop capability returned: ${retired}`)
+  }
+}
+for (const retiredFile of ['local-agents.cjs', 'local-agents.test.cjs', 'workspace.cjs']) {
+  if (fs.existsSync(path.join(__dirname, retiredFile))) throw new Error(`retired Electron module returned: ${retiredFile}`)
+}
 for (const marker of ['auth_registration_start', 'auth_password_reset_complete', 'auth_pin_reset', 'exora:auth-state-changed', 'ensureDockLink']) {
   if (!electronMain.includes(marker) && !cloudAuthMain.includes(marker)) throw new Error(`Cloud identity flow missing: ${marker}`)
 }

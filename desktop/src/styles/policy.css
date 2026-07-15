@@ -1,0 +1,14 @@
+/* Product invariant: every Electron button is flat, including its decorative layers. */
+button,
+button::before,
+button::after,
+button * {
+  background-image: none !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--color-focus) !important;
+  outline-offset: 2px;
+}

@@ -1,4 +1,5 @@
 const DEFAULT_CLOUD_URL = 'http://127.0.0.1:8090'
+const PRODUCTION_CLOUD_URL = 'https://api.exoradock.com'
 
 class CloudAuthError extends Error {
   constructor(message, options = {}) {
@@ -16,6 +17,7 @@ function createCloudAuth(options = {}) {
   const now = options.now || (() => new Date())
   const randomUUID = options.randomUUID || (() => require('node:crypto').randomUUID())
   let memorySession = ''
+  let memoryPendingRevocations = []
   let pendingRegistration
 
   async function pathsAndState() {
@@ -36,7 +38,7 @@ function createCloudAuth(options = {}) {
   async function resolveCloudURL(paths, state) {
     const environmentURL = String(typeof options.envCloudURL === 'function' ? options.envCloudURL() : options.envCloudURL || '').trim()
     const configuredURL = String(await options.configuredCloudURL?.(paths, state) || '').trim()
-    const candidate = environmentURL || configuredURL || (options.isPackaged ? '' : DEFAULT_CLOUD_URL)
+    const candidate = environmentURL || configuredURL || (options.isPackaged ? PRODUCTION_CLOUD_URL : DEFAULT_CLOUD_URL)
     if (!candidate) throw new CloudAuthError('Exora Cloud HTTPS URL is not configured.', { code: 'cloud_not_configured' })
     let parsed
     try { parsed = new URL(candidate) } catch { throw new CloudAuthError('Exora Cloud URL is invalid.', { code: 'cloud_url_invalid' }) }
@@ -126,6 +128,52 @@ function createCloudAuth(options = {}) {
     await options.writeState(paths, state)
   }
 
+  async function queuePendingRevocation(paths, state, cloudURL, token) {
+    const pending = { cloudURL, createdAt: now().toISOString(), storageMode: encryptionAvailable() ? 'safeStorage' : 'session' }
+    if (pending.storageMode === 'safeStorage') {
+      pending.encryptedSession = options.safeStorage.encryptString(token).toString('base64')
+      const records = Array.isArray(state.pendingSessionRevocations) ? state.pendingSessionRevocations : []
+      state.pendingSessionRevocations = [...records.filter((item) => item?.encryptedSession !== pending.encryptedSession), pending].slice(-5)
+      await options.writeState(paths, state)
+    } else {
+      memoryPendingRevocations = [...memoryPendingRevocations, { cloudURL, token }].slice(-5)
+    }
+  }
+
+  async function retryPendingRevocations(paths, state) {
+    const persisted = Array.isArray(state.pendingSessionRevocations) ? state.pendingSessionRevocations : []
+    const pending = []
+    for (const item of persisted) {
+      if (item?.storageMode !== 'safeStorage' || !item.encryptedSession || !encryptionAvailable()) {
+        pending.push(item)
+        continue
+      }
+      let token = ''
+      try { token = options.safeStorage.decryptString(Buffer.from(String(item.encryptedSession), 'base64')) } catch {}
+      if (!token) continue
+      try {
+        await request(String(item.cloudURL || ''), 'DELETE', '/v1/auth/sessions/current', undefined, token)
+      } catch (error) {
+        if (error.status !== 401) pending.push(item)
+      }
+    }
+    const memoryPending = []
+    for (const item of memoryPendingRevocations) {
+      try {
+        await request(item.cloudURL, 'DELETE', '/v1/auth/sessions/current', undefined, item.token)
+      } catch (error) {
+        if (error.status !== 401) memoryPending.push(item)
+      }
+    }
+    memoryPendingRevocations = memoryPending
+    if (pending.length !== persisted.length) {
+      if (pending.length) state.pendingSessionRevocations = pending
+      else delete state.pendingSessionRevocations
+      await options.writeState(paths, state)
+    }
+    return pending.length + memoryPending.length
+  }
+
   async function providers(cloudURL) {
     try {
       const result = await request(cloudURL, 'GET', '/v1/auth/providers')
@@ -137,6 +185,7 @@ function createCloudAuth(options = {}) {
 
   async function snapshot(settings = {}) {
     const { paths, state } = await pathsAndState()
+    const pendingRevocations = await retryPendingRevocations(paths, state)
     let cloudURL
     try {
       cloudURL = await resolveCloudURL(paths, state)
@@ -147,7 +196,7 @@ function createCloudAuth(options = {}) {
     const token = await loadSession(state)
     const cachedAccount = sanitizeAccount(state.cloudAuth?.account)
     if (!token) {
-      return publicState({ phase: 'signed_out', cloudURL, providers: providerResult, storageAvailable: encryptionAvailable() })
+      return publicState({ phase: 'signed_out', cloudURL, providers: providerResult, pendingRevocation: pendingRevocations > 0, storageAvailable: encryptionAvailable() })
     }
     let account = cachedAccount
     try {
@@ -215,7 +264,7 @@ function createCloudAuth(options = {}) {
       })
       pendingRegistration.challengeId = String(result.challengeId || '')
       pendingRegistration.createdAt = now().getTime()
-      return sanitizeChallenge(result)
+      return sanitizeChallenge(result, !options.isPackaged)
     }
     const email = String(input.email || '').trim().toLowerCase()
     const password = String(input.password || '')
@@ -230,7 +279,7 @@ function createCloudAuth(options = {}) {
       challengeId: String(result.challengeId || ''), email, password, pin, cloudURL,
       createdAt: now().getTime(),
     }
-    return sanitizeChallenge(result)
+    return sanitizeChallenge(result, !options.isPackaged)
   }
 
   async function registrationComplete(payload = {}) {
@@ -286,7 +335,7 @@ function createCloudAuth(options = {}) {
     if (!email) throw new CloudAuthError('Email is required.', { code: 'email_required' })
     const { paths, state } = await pathsAndState()
     const cloudURL = await resolveCloudURL(paths, state)
-    return sanitizeChallenge(await request(cloudURL, 'POST', '/v1/auth/password-resets', { email, locale: normalizeLocale(input.locale) }))
+    return sanitizeChallenge(await request(cloudURL, 'POST', '/v1/auth/password-resets', { email, locale: normalizeLocale(input.locale) }), !options.isPackaged)
   }
 
   async function passwordResetComplete(payload = {}) {
@@ -350,13 +399,21 @@ function createCloudAuth(options = {}) {
     const token = await loadSession(state)
     let cloudURL = ''
     try { cloudURL = await resolveCloudURL(paths, state) } catch {}
+    let revocationError
     if (token && cloudURL) {
-      try { await request(cloudURL, 'DELETE', '/v1/auth/sessions/current', undefined, token) } catch {}
+      try {
+        await request(cloudURL, 'DELETE', '/v1/auth/sessions/current', undefined, token)
+      } catch (error) {
+        if (error.status !== 401) {
+          revocationError = error
+          await queuePendingRevocation(paths, state, cloudURL, token)
+        }
+      }
     }
     await clearLocalSession(paths, state)
     await options.clearDockLink?.(paths)
     pendingRegistration = undefined
-    const result = publicState({ phase: 'signed_out', cloudURL, storageAvailable: encryptionAvailable() })
+    const result = publicState({ phase: 'signed_out', cloudURL, pendingRevocation: Boolean(revocationError), ...(revocationError ? { error: new CloudAuthError('Signed out locally. Remote session revocation will retry automatically.', { code: 'revocation_pending', network: true }) } : {}), storageAvailable: encryptionAvailable() })
     options.broadcast?.(result)
     return result
   }
@@ -388,6 +445,16 @@ function createCloudAuth(options = {}) {
     return { cloudURL, token, account: sanitizeAccount(state.cloudAuth?.account) }
   }
 
+  async function apiRequest(method, route, body) {
+    const { cloudURL, token } = await connection()
+    try {
+      return await request(cloudURL, String(method || 'GET').toUpperCase(), String(route || '/'), body, token)
+    } catch (error) {
+      if (error.status === 401) await unauthorized()
+      throw error
+    }
+  }
+
   async function unauthorized() {
     const { paths, state } = await pathsAndState()
     await clearLocalSession(paths, state)
@@ -409,6 +476,7 @@ function createCloudAuth(options = {}) {
     socialStart,
     socialComplete,
     connection,
+    apiRequest,
     unauthorized,
   })
 }
@@ -441,6 +509,7 @@ function publicState(value = {}) {
     providers: value.providers || { password: true, social: [] },
     pinStatus: value.pinStatus,
     dock: value.dock,
+    pendingRevocation: value.pendingRevocation === true,
     storageAvailable: value.storageAvailable !== false,
     error,
   }
@@ -454,14 +523,14 @@ function safeError(error) {
   }
 }
 
-function sanitizeChallenge(value) {
+function sanitizeChallenge(value, includeDevCode = true) {
   return {
     challengeId: String(value?.challengeId || ''),
     email: String(value?.email || ''),
     expiresAt: String(value?.expiresAt || ''),
     resendAfter: String(value?.resendAfter || ''),
     delivery: String(value?.delivery || 'email'),
-    ...(value?.devCode ? { devCode: String(value.devCode) } : {}),
+    ...(includeDevCode && value?.devCode ? { devCode: String(value.devCode) } : {}),
   }
 }
 

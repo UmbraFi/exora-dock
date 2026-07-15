@@ -1,0 +1,115 @@
+.app-shell.settings-mode .main-workspace {
+  padding-top: 18px;
+}
+
+.app-settings-view {
+  align-content: start;
+  background: var(--color-surface);
+  grid-template-rows: auto auto;
+  justify-items: start;
+  overflow: auto;
+  padding: 46px clamp(32px, 5vw, 72px) 40px;
+}
+
+.app-settings-head,
+.app-settings-content {
+  max-width: 820px;
+  width: 100%;
+}
+
+.app-settings-head {
+  border-bottom: 1px solid var(--color-border);
+  padding: 0 0 24px;
+}
+
+.app-settings-head > div > span,
+.app-settings-section-head > span {
+  color: var(--color-primary);
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: .14em;
+}
+
+.app-settings-head h1 {
+  color: var(--color-text-primary);
+  font-size: 25px;
+  letter-spacing: -.03em;
+  margin: 5px 0 4px;
+}
+
+.app-settings-head p,
+.app-settings-section-head p,
+.app-setting-row p {
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.app-settings-content {
+  padding: 28px 0 0;
+}
+
+.app-settings-section-head h2 {
+  color: var(--color-text-primary);
+  font-size: 18px;
+  margin: 6px 0 5px;
+}
+
+.app-setting-row {
+  align-items: center;
+  border-bottom: 1px solid var(--color-border);
+  border-top: 1px solid var(--color-border);
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  margin-top: 20px;
+  padding: 17px 0;
+}
+
+.app-setting-icon {
+  align-items: center;
+  background: var(--color-primary-soft);
+  border-radius: 8px;
+  color: var(--color-primary);
+  display: flex;
+  height: 30px;
+  justify-content: center;
+  width: 30px;
+}
+
+.app-setting-icon svg {
+  height: 15px;
+  width: 15px;
+}
+
+.app-setting-row strong {
+  color: var(--color-text-primary);
+  display: block;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.app-setting-row > button {
+  background: var(--color-primary);
+  border: 1px solid var(--color-primary);
+  border-radius: 9px;
+  color: #fff;
+  min-height: 36px;
+  padding: 0 14px;
+}
+
+@media (max-width: 720px) {
+  .app-settings-view {
+    padding-inline: 24px;
+  }
+
+  .app-setting-row {
+    grid-template-columns: 36px minmax(0, 1fr);
+  }
+
+  .app-setting-row > button {
+    grid-column: 2;
+    justify-self: start;
+  }
+}
