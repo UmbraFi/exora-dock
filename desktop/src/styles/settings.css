@@ -335,6 +335,33 @@
   text-transform: uppercase;
 }
 
+:root[data-theme="dark"] .app-settings-view {
+  --color-surface: #111815;
+  --color-surface-soft: #18221e;
+  --color-text-primary: #eef3f0;
+  --color-text-secondary: #c2cbc6;
+  --color-text-tertiary: #929e98;
+  --color-border: #2b3933;
+  --color-border-strong: #43534c;
+  --color-primary: #8d83ff;
+  --color-primary-soft: #292641;
+  background: var(--color-surface);
+}
+
+:root[data-theme="dark"] .app-settings-view .app-setting-button.outline {
+  background: #141d19;
+}
+
+:root[data-theme="dark"] .app-settings-view .app-setting-switch > span::after {
+  background: #eef3f0;
+}
+
+:root[data-theme="dark"] .settings-record.active,
+:root[data-theme="dark"] .settings-record.active:hover {
+  background: transparent;
+  color: #8d83ff;
+}
+
 @keyframes settings-spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 1180px) {

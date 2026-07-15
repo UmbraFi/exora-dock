@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict')
 const test = require('node:test')
-const { DEFAULT_NOTIFICATIONS, normalizeAppSettingsV3, pickAppSettingsV3 } = require('./app-settings.cjs')
+const { DEFAULT_NOTIFICATIONS, normalizeAppSettingsV3, pickAppSettingsV3, redactDiagnostics } = require('./app-settings.cjs')
 
 test('migrates V2 preferences into safe V3 defaults without losing established choices', () => {
   const settings = normalizeAppSettingsV3({
@@ -35,4 +35,12 @@ test('normalizes V3 values and drops unapproved or secret-shaped fields', () => 
   assert.equal(settings.notifications.approvals, false)
   assert.equal(settings.notifications.runtime, false)
   assert.equal(Object.hasOwn(settings.notifications, 'invented'), false)
+})
+
+test('redacts secret fields recursively from diagnostics', () => {
+  const report = redactDiagnostics({
+    runtime: { daemon: 'healthy', authorizationHeader: 'Bearer hidden', nested: { accessKey: 'hidden', status: 'ready' } },
+    paymentPIN: '123456', token: 'hidden', language: 'zh',
+  })
+  assert.deepEqual(report, { runtime: { daemon: 'healthy', nested: { status: 'ready' } }, language: 'zh' })
 })

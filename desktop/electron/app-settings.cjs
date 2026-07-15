@@ -56,6 +56,13 @@ function pickAppSettingsV3(value) {
   return Object.fromEntries(SETTINGS_KEYS.filter((key) => Object.hasOwn(input, key)).map((key) => [key, input[key]]))
 }
 
+function redactDiagnostics(value) {
+  if (Array.isArray(value)) return value.map(redactDiagnostics)
+  if (!value || typeof value !== 'object') return value
+  const secret = /(pin|token|secret|password|authorization|api.?key|access.?key|credential)/i
+  return Object.fromEntries(Object.entries(value).flatMap(([key, item]) => secret.test(key) ? [] : [[key, redactDiagnostics(item)]]))
+}
+
 function clampInteger(value, fallback, min, max) {
   const parsed = Number(value)
   if (!Number.isFinite(parsed)) return fallback
@@ -72,4 +79,5 @@ module.exports = {
   SETTINGS_VERSION,
   normalizeAppSettingsV3,
   pickAppSettingsV3,
+  redactDiagnostics,
 }

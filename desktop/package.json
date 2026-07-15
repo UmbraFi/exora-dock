@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "archiver": "^7.0.1",
+    "electron-updater": "^6.8.9",
     "lucide": "^1.23.0",
     "qrcode": "^1.5.4",
     "yaml": "^2.8.1"
@@ -38,6 +39,14 @@
   "build": {
     "appId": "io.exora.dock",
     "productName": "Exora Dock",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "UmbraFi",
+        "repo": "exora-dock",
+        "releaseType": "release"
+      }
+    ],
     "directories": {
       "output": "release"
     },
@@ -69,12 +78,25 @@
       {
         "from": "resources/release-signing-public-key.txt",
         "to": "release-signing-public-key.txt"
+      },
+      {
+        "from": "../LICENSE",
+        "to": "legal/LICENSE"
+      },
+      {
+        "from": "../docs/WHITEPAPER.md",
+        "to": "legal/WHITEPAPER.md"
+      },
+      {
+        "from": "../docs/WHITEPAPER.en.md",
+        "to": "legal/WHITEPAPER.en.md"
       }
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": [
-        "dmg"
+        "dmg",
+        "zip"
       ]
     },
     "win": {
