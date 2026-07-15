@@ -1,6 +1,7 @@
 package endpoint
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -10,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -21,7 +23,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const frameVersion = 1
+const frameVersion = 2
 
 type Frame struct {
 	Version    int                 `json:"version"`
@@ -39,6 +41,10 @@ type Frame struct {
 	Endpoints  []TunnelStatus      `json:"endpoints,omitempty"`
 	Control    *ControlCommand     `json:"control,omitempty"`
 	Result     map[string]any      `json:"result,omitempty"`
+	Features   []string            `json:"features,omitempty"`
+	StreamID   string              `json:"streamId,omitempty"`
+	LeaseID    string              `json:"leaseId,omitempty"`
+	LeaseEpoch int64               `json:"leaseEpoch,omitempty"`
 }
 
 type ControlCommand struct {
@@ -64,6 +70,11 @@ type requestState struct {
 	pipe   *io.PipeWriter
 }
 
+type streamState struct {
+	conn net.Conn
+	once sync.Once
+}
+
 type TunnelClient struct {
 	CloudURL  string
 	TokenPath string
@@ -72,13 +83,14 @@ type TunnelClient struct {
 	writeMu    sync.Mutex
 	stateMu    sync.Mutex
 	requests   map[string]*requestState
+	streams    map[string]*streamState
 	semaphores map[string]chan struct{}
 	notify     chan struct{}
 	controlKey []byte
 }
 
 func NewTunnelClient(cloudURL, tokenPath string, store *Store) *TunnelClient {
-	return &TunnelClient{CloudURL: strings.TrimRight(strings.TrimSpace(cloudURL), "/"), TokenPath: strings.TrimSpace(tokenPath), Store: store, requests: map[string]*requestState{}, semaphores: map[string]chan struct{}{}, notify: make(chan struct{}, 1)}
+	return &TunnelClient{CloudURL: strings.TrimRight(strings.TrimSpace(cloudURL), "/"), TokenPath: strings.TrimSpace(tokenPath), Store: store, requests: map[string]*requestState{}, streams: map[string]*streamState{}, semaphores: map[string]chan struct{}{}, notify: make(chan struct{}, 1)}
 }
 
 func (c *TunnelClient) Notify() {
@@ -159,11 +171,17 @@ func (c *TunnelClient) runConnection(ctx context.Context) error {
 		if err := conn.ReadJSON(&frame); err != nil {
 			return err
 		}
-		if frame.Version != frameVersion {
+		if frame.Version != 1 && frame.Version != frameVersion {
 			return errors.New("unsupported tunnel frame version")
 		}
 		if err := c.handleFrame(connectionCtx, conn, frame); err != nil {
-			_ = c.send(conn, Frame{Version: frameVersion, Type: "response_error", RequestID: frame.RequestID, EndpointID: frame.EndpointID, Error: err.Error()})
+			responseType := "response_error"
+			if frame.Type == "control_command" {
+				responseType = "control_error"
+			} else if strings.HasPrefix(frame.Type, "stream_") {
+				responseType = "stream_error"
+			}
+			_ = c.send(conn, Frame{Version: frameVersion, Type: responseType, RequestID: frame.RequestID, EndpointID: frame.EndpointID, StreamID: frame.StreamID, Error: err.Error()})
 		}
 	}
 }
@@ -194,7 +212,7 @@ func (c *TunnelClient) sendRegister(ctx context.Context, conn *websocket.Conn) e
 		}
 		statuses = append(statuses, TunnelStatus{EndpointID: cfg.EndpointID, Healthy: status.Healthy, RouteFingerprint: cfg.RouteFingerprint, LastSeenAt: status.CheckedAt, Error: status.Error})
 	}
-	return c.send(conn, Frame{Version: frameVersion, Type: "register", Endpoints: statuses})
+	return c.send(conn, Frame{Version: frameVersion, Type: "register", Endpoints: statuses, Features: []string{"lease_tcp_v1"}})
 }
 
 func (c *TunnelClient) send(conn *websocket.Conn, frame Frame) error {
@@ -207,6 +225,14 @@ func (c *TunnelClient) send(conn *websocket.Conn, frame Frame) error {
 
 func (c *TunnelClient) handleFrame(ctx context.Context, conn *websocket.Conn, frame Frame) error {
 	switch frame.Type {
+	case "stream_open":
+		return c.openStream(ctx, conn, frame)
+	case "stream_data":
+		return c.writeStream(frame)
+	case "stream_eof":
+		c.halfCloseStream(frame.StreamID)
+	case "stream_close":
+		c.finishStream(frame.StreamID, false, conn, "")
 	case "control_command":
 		return c.handleControl(ctx, conn, frame)
 	case "request_start":
@@ -235,6 +261,125 @@ func (c *TunnelClient) handleFrame(ctx context.Context, conn *websocket.Conn, fr
 		c.finishRequest(frame.RequestID, true)
 	}
 	return nil
+}
+
+func (c *TunnelClient) openStream(ctx context.Context, ws *websocket.Conn, frame Frame) error {
+	if strings.TrimSpace(frame.StreamID) == "" || strings.TrimSpace(frame.LeaseID) == "" || frame.LeaseEpoch <= 0 {
+		return errors.New("invalid lease stream envelope")
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	target, err := (providerworker.Client{}).Call(lookupCtx, "lease_ssh_target", map[string]any{"leaseId": frame.LeaseID, "leaseEpoch": frame.LeaseEpoch})
+	if err != nil {
+		return err
+	}
+	host, _ := target["host"].(string)
+	port := intFromAny(target["port"])
+	if net.ParseIP(strings.TrimSpace(host)) == nil || port != 22 {
+		return errors.New("provider worker returned an invalid managed SSH target")
+	}
+	guest, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(lookupCtx, "tcp", net.JoinHostPort(host, "22"))
+	if err != nil {
+		return fmt.Errorf("connect managed guest SSH: %w", err)
+	}
+	state := &streamState{conn: guest}
+	c.stateMu.Lock()
+	if c.streams[frame.StreamID] != nil {
+		c.stateMu.Unlock()
+		_ = guest.Close()
+		return errors.New("duplicate streamId")
+	}
+	c.streams[frame.StreamID] = state
+	c.stateMu.Unlock()
+	if err := c.send(ws, Frame{Type: "stream_opened", StreamID: frame.StreamID, LeaseID: frame.LeaseID, LeaseEpoch: frame.LeaseEpoch}); err != nil {
+		c.finishStream(frame.StreamID, false, ws, "")
+		return err
+	}
+	go c.readStream(ws, frame.StreamID, state)
+	return nil
+}
+
+func (c *TunnelClient) readStream(ws *websocket.Conn, streamID string, state *streamState) {
+	buffer := make([]byte, 64<<10)
+	for {
+		n, err := state.conn.Read(buffer)
+		if n > 0 {
+			if sendErr := c.send(ws, Frame{Type: "stream_data", StreamID: streamID, DataBase64: base64.StdEncoding.EncodeToString(buffer[:n])}); sendErr != nil {
+				c.finishStream(streamID, false, ws, "")
+				return
+			}
+		}
+		if err != nil {
+			message := ""
+			if !errors.Is(err, io.EOF) {
+				message = err.Error()
+			}
+			c.finishStream(streamID, true, ws, message)
+			return
+		}
+	}
+}
+
+func (c *TunnelClient) writeStream(frame Frame) error {
+	data, err := decodeChunk(frame.DataBase64)
+	if err != nil {
+		return err
+	}
+	c.stateMu.Lock()
+	state := c.streams[frame.StreamID]
+	c.stateMu.Unlock()
+	if state == nil {
+		return errors.New("unknown lease stream")
+	}
+	_, err = state.conn.Write(data)
+	return err
+}
+
+func (c *TunnelClient) halfCloseStream(id string) {
+	c.stateMu.Lock()
+	state := c.streams[id]
+	c.stateMu.Unlock()
+	if state != nil {
+		if tcp, ok := state.conn.(*net.TCPConn); ok {
+			_ = tcp.CloseWrite()
+		}
+	}
+}
+
+func (c *TunnelClient) finishStream(id string, notify bool, ws *websocket.Conn, message string) {
+	c.stateMu.Lock()
+	state := c.streams[id]
+	delete(c.streams, id)
+	c.stateMu.Unlock()
+	if state == nil {
+		return
+	}
+	state.once.Do(func() {
+		_ = state.conn.Close()
+		if notify {
+			kind := "stream_close"
+			if message != "" {
+				kind = "stream_error"
+			}
+			_ = c.send(ws, Frame{Type: kind, StreamID: id, Error: message})
+		}
+	})
+}
+
+func intFromAny(value any) int {
+	switch x := value.(type) {
+	case int:
+		return x
+	case int64:
+		return int(x)
+	case float64:
+		return int(x)
+	case json.Number:
+		n, _ := x.Int64()
+		return int(n)
+	default:
+		return 0
+	}
 }
 
 func (c *TunnelClient) handleControl(ctx context.Context, conn *websocket.Conn, frame Frame) error {
@@ -282,13 +427,30 @@ func verifyControlCommandSignature(command ControlCommand, key []byte) error {
 	}
 	unsigned := command
 	unsigned.Signature = ""
-	raw, _ := json.Marshal(unsigned)
+	raw, err := canonicalControlCommandJSON(unsigned)
+	if err != nil {
+		return errors.New("invalid control command payload")
+	}
 	mac := hmac.New(sha256.New, key)
 	_, _ = mac.Write(raw)
 	if !hmac.Equal(want, mac.Sum(nil)) {
 		return errors.New("invalid control command signature")
 	}
 	return nil
+}
+
+func canonicalControlCommandJSON(command ControlCommand) ([]byte, error) {
+	raw, err := json.Marshal(command)
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var canonical any
+	if err := decoder.Decode(&canonical); err != nil {
+		return nil, err
+	}
+	return json.Marshal(canonical)
 }
 
 func (c *TunnelClient) startRequest(parent context.Context, conn *websocket.Conn, frame Frame) error {

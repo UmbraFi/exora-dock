@@ -8,10 +8,12 @@ export type LocalActivitySession = {
   productId: string
   listingId: string
   productTitle: string
+  counterpartyId?: string
   counterpartyLabel: string
   status: string
   outcome: string
   attentionRequired: boolean
+  inFlightCount?: number
   itemCount: number
   amountAtomic: number
   grossAmountAtomic: number
@@ -59,10 +61,12 @@ const localActivityFixtures: LocalActivityDetail[] = [
     productId: 'prd_test_h100_compute',
     listingId: 'lst_test_h100_compute',
     productTitle: '测试 · H100 模型评测环境',
+    counterpartyId: 'provider-shanghai-gpu-lab',
     counterpartyLabel: 'Shanghai GPU Lab',
     status: 'active',
     outcome: '独占计算租约正在运行，环境与计费心跳正常。',
     attentionRequired: false,
+    inFlightCount: 1,
     itemCount: 3,
     amountAtomic: 12_600_000,
     grossAmountAtomic: 12_600_000,
@@ -87,6 +91,7 @@ const localActivityFixtures: LocalActivityDetail[] = [
     productId: 'prd_test_lidar_bundle',
     listingId: 'lst_test_lidar_bundle',
     productTitle: '测试 · 华东道路 LiDAR 数据集',
+    counterpartyId: 'provider-geodata-studio',
     counterpartyLabel: 'GeoData Studio',
     status: 'completed',
     outcome: '授权文件已下载并通过 SHA-256 校验。',
@@ -116,27 +121,60 @@ const localActivityFixtures: LocalActivityDetail[] = [
     productId: 'prd_test_invoice_ocr',
     listingId: 'lst_test_invoice_ocr',
     productTitle: '测试 · 发票 OCR 批处理 API',
+    counterpartyId: 'provider-vision-tools-cn',
     counterpartyLabel: 'Vision Tools CN',
     status: 'needs_attention',
     outcome: '三次调用中有一次上游超时，需要检查失败记录。',
     attentionRequired: true,
+    inFlightCount: 0,
     itemCount: 3,
     amountAtomic: 2_340_000,
     grossAmountAtomic: 2_340_000,
     platformFeeAtomic: 140_400,
     asset: 'USDC',
-    startedAt: '2026-07-13T11:00:00.000Z',
-    updatedAt: '2026-07-13T11:08:30.000Z',
-    endedAt: '2026-07-13T11:08:30.000Z',
+    startedAt: '2026-07-15T02:00:00.000Z',
+    updatedAt: '2026-07-15T02:08:30.000Z',
+    endedAt: '2026-07-15T02:08:30.000Z',
     product: { version: 2, description: '将发票图片转换为结构化 JSON 的按次计费 API。' },
     operations: ['extract_invoice', 'validate_invoice'],
     usage: { request: 3, successful_request: 2, input_bytes: 18_772_992, output_bytes: 92_160 },
     invocations: [
-      { invocationId: 'inv_test_ocr_003', operationId: 'extract_invoice', status: 'upstream_error', chargedAtomic: 0, platformFeeAtomic: 0, usage: { request: 1 }, startedAt: '2026-07-13T11:08:00.000Z', completedAt: '2026-07-13T11:08:30.000Z' },
-      { invocationId: 'inv_test_ocr_002', operationId: 'validate_invoice', status: 'completed', chargedAtomic: 780_000, platformFeeAtomic: 46_800, usage: { request: 1, successful_request: 1 }, startedAt: '2026-07-13T11:04:00.000Z', completedAt: '2026-07-13T11:04:02.000Z' },
-      { invocationId: 'inv_test_ocr_001', operationId: 'extract_invoice', status: 'completed', chargedAtomic: 1_560_000, platformFeeAtomic: 93_600, usage: { request: 1, successful_request: 1 }, startedAt: '2026-07-13T11:00:00.000Z', completedAt: '2026-07-13T11:00:05.000Z' },
+      { invocationId: 'inv_test_ocr_003', operationId: 'extract_invoice', status: 'upstream_error', chargedAtomic: 0, platformFeeAtomic: 0, usage: { request: 1 }, startedAt: '2026-07-15T02:08:00.000Z', completedAt: '2026-07-15T02:08:30.000Z' },
+      { invocationId: 'inv_test_ocr_002', operationId: 'validate_invoice', status: 'completed', chargedAtomic: 780_000, platformFeeAtomic: 46_800, usage: { request: 1, successful_request: 1 }, startedAt: '2026-07-15T02:04:00.000Z', completedAt: '2026-07-15T02:04:02.000Z' },
+      { invocationId: 'inv_test_ocr_001', operationId: 'extract_invoice', status: 'completed', chargedAtomic: 1_560_000, platformFeeAtomic: 93_600, usage: { request: 1, successful_request: 1 }, startedAt: '2026-07-15T02:00:00.000Z', completedAt: '2026-07-15T02:00:05.000Z' },
     ],
     identifiers: { sessionId: 'local-test-buyer-api-attention', activitySessionId: 'test-task-buyer-ocr-003', productId: 'prd_test_invoice_ocr', listingId: 'lst_test_invoice_ocr' },
+  },
+  {
+    sessionId: 'local-test-buyer-api-recent',
+    activitySessionId: 'test-task-buyer-receipt-004',
+    role: 'buyer',
+    productKind: 'api_operation',
+    productId: 'prd_test_receipt_parser',
+    listingId: 'lst_test_receipt_parser',
+    productTitle: '测试 · 小票结构化 API',
+    counterpartyId: 'provider-vision-tools-cn',
+    counterpartyLabel: 'Vision Tools CN',
+    status: 'completed',
+    outcome: '同一卖家的后续 API 调用，用于验证按交易方聚合。',
+    attentionRequired: false,
+    inFlightCount: 0,
+    itemCount: 2,
+    amountAtomic: 960_000,
+    grossAmountAtomic: 960_000,
+    platformFeeAtomic: 57_600,
+    asset: 'USDC',
+    startedAt: '2026-07-15T03:40:00.000Z',
+    updatedAt: '2026-07-15T03:42:05.000Z',
+    endedAt: '2026-07-15T03:42:05.000Z',
+    product: { version: 1, description: '把零售小票转换为包含商品、税额与总计的结构化 JSON。' },
+    operations: ['parse_receipt'],
+    usage: { request: 2, successful_request: 2, input_bytes: 4_194_304, output_bytes: 24_576 },
+    invocations: [
+      { invocationId: 'inv_test_receipt_002', operationId: 'parse_receipt', status: 'completed', chargedAtomic: 480_000, platformFeeAtomic: 28_800, usage: { request: 1, successful_request: 1 }, startedAt: '2026-07-15T03:42:00.000Z', completedAt: '2026-07-15T03:42:05.000Z' },
+      { invocationId: 'inv_test_receipt_001', operationId: 'parse_receipt', status: 'completed', chargedAtomic: 480_000, platformFeeAtomic: 28_800, usage: { request: 1, successful_request: 1 }, startedAt: '2026-07-15T03:40:00.000Z', completedAt: '2026-07-15T03:40:04.000Z' },
+    ],
+    identifiers: { sessionId: 'local-test-buyer-api-recent', activitySessionId: 'test-task-buyer-receipt-004', productId: 'prd_test_receipt_parser', listingId: 'lst_test_receipt_parser' },
   },
   {
     sessionId: 'local-test-seller-compute-active',
@@ -231,16 +269,39 @@ function cloneFixture<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
+const localActivityFixtureAnchor = Date.parse('2026-07-15T04:10:00.000Z')
+const localActivityFixtureNow = new Date()
+let localActivityCurrentAnchor = Date.UTC(localActivityFixtureNow.getUTCFullYear(), localActivityFixtureNow.getUTCMonth(), localActivityFixtureNow.getUTCDate(), 4, 10)
+if (localActivityCurrentAnchor > Date.now()) localActivityCurrentAnchor -= 24 * 60 * 60 * 1000
+const localActivityFixtureOffset = localActivityCurrentAnchor - localActivityFixtureAnchor
+
+function rebaseFixtureTimestamps<T>(value: T): T {
+  const cloned = cloneFixture(value) as any
+  const visit = (item: any) => {
+    if (Array.isArray(item)) { item.forEach(visit); return }
+    if (!item || typeof item !== 'object') return
+    Object.entries(item).forEach(([key, child]) => {
+      if (typeof child === 'string' && key.endsWith('At') && /^\d{4}-\d{2}-\d{2}T/.test(child)) {
+        item[key] = new Date(Date.parse(child) + localActivityFixtureOffset).toISOString()
+      } else {
+        visit(child)
+      }
+    })
+  }
+  visit(cloned)
+  return cloned as T
+}
+
 function activitySummary(detail: LocalActivityDetail): LocalActivitySession {
   const { product: _product, operations: _operations, usage: _usage, invocations: _invocations, events: _events, identifiers: _identifiers, delivery: _delivery, purchases: _purchases, transfers: _transfers, ...summary } = detail
   return cloneFixture(summary)
 }
 
 export function localActivitySessionsForRole(role: LocalActivityRole): LocalActivitySession[] {
-  return localActivityFixtures.filter((fixture) => fixture.role === role).map(activitySummary)
+  return localActivityFixtures.filter((fixture) => fixture.role === role).map((fixture) => activitySummary(rebaseFixtureTimestamps(fixture)))
 }
 
 export function localActivityDetailForSession(sessionId: string): LocalActivityDetail | undefined {
   const fixture = localActivityFixtures.find((item) => item.sessionId === sessionId)
-  return fixture ? cloneFixture(fixture) : undefined
+  return fixture ? rebaseFixtureTimestamps(fixture) : undefined
 }

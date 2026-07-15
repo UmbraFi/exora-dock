@@ -98,8 +98,29 @@ if (!/\.main-workspace:has\(\.v3-seller-surface\)::after\s*\{[^}]*height:\s*64px
 if (!/state\.v3SellerTab = nextTab\s*renderDecisionPanel\(\)\s*fields\.actionView\.scrollTop = 0/.test(renderer)) throw new Error('Seller tab switches must reset the shared scroll position')
 const listingStyles = rendererStyles.slice(rendererStyles.indexOf('.v3-listing-overview,'), rendererStyles.indexOf('.v3-endpoint-review-list'))
 if (!listingStyles || listingStyles.includes('linear-gradient')) throw new Error('Listings containers must use solid backgrounds')
-for (const marker of ['function renderV3HistoryRow', 'function renderV3ActivityDetail', 'data-v3-history-session', 'data-v3-activity-detail']) {
+for (const marker of ['function renderV3HistoryRow', 'function renderV3ActivityDetail', 'data-v3-history-record', 'data-v3-activity-detail']) {
   if (!renderer.includes(marker)) throw new Error(`V3 history surface missing: ${marker}`)
+}
+for (const marker of ['type V3ActivityBucket', 'V3_ACTIVITY_RETENTION_MS', 'function v3ActivityDisplayRecords', 'function archiveV3ActivityDisplay', 'data-v3-history-toggle', 'data-v3-active-order-list', 'v3-history-pull-drawer', 'v3-history-drawer-label', 'activityArchiveMarkers']) {
+  if (!renderer.includes(marker)) throw new Error(`V3 current/history lifecycle missing: ${marker}`)
+}
+for (const retiredMarker of ['data-v3-history-bucket=', 'data-v3-history-drop-target', 'v3-history-bucket-switch']) {
+  if (renderer.includes(retiredMarker) || rendererStyles.includes(retiredMarker)) throw new Error(`Retired V3 history control returned: ${retiredMarker}`)
+}
+if (!/\.v3-history-drawer-toggle\s*\{[^}]*border:\s*0;[^}]*background:\s*transparent;/s.test(rendererStyles)) {
+  throw new Error('History drawer trigger must remain a transparent labeled divider, not a button container')
+}
+if (!/\.v3-history-drawer-label\s*\{[^}]*border:\s*0;[^}]*background:\s*transparent;/s.test(rendererStyles)) {
+  throw new Error('History pull label must remain visually unboxed')
+}
+if (!/\.sidebar-resize-handle:hover::before,[\s\S]*?background:\s*var\(--color-primary\);[\s\S]*?transform:\s*scaleX\(1\.4\);/.test(rendererStyles)) {
+  throw new Error('Sidebar resize hover must keep the emphasized Exora purple rail')
+}
+if (!/\.v3-history-drawer-toggle::before,[\s\S]*?border-top:\s*1px solid var\(--color-border\);[\s\S]*?\.v3-history-drawer-toggle:hover::before,[\s\S]*?border-color:\s*var\(--color-primary\);\s*transform:\s*scaleY\(2\);/.test(rendererStyles)) {
+  throw new Error('History pull divider must keep its emphasized purple hover rail')
+}
+for (const marker of ['counterpartyId', 'inFlightCount', 'rebaseFixtureTimestamps', 'local-test-buyer-api-recent']) {
+  if (!activityFixtures.includes(marker)) throw new Error(`Local activity lifecycle fixture missing: ${marker}`)
 }
 for (const marker of ['localActivitySessionsForRole', 'localActivityDetailForSession', 'setLocalActivityFixturesEnabled(true)', 'setLocalActivityFixturesEnabled(false)']) {
   if (!renderer.includes(marker)) throw new Error(`Local activity test mode missing: ${marker}`)
@@ -123,9 +144,17 @@ const electronMain = fs.readFileSync(path.join(__dirname, 'main.cjs'), 'utf8')
 if (!/auth:\s*Object\.freeze\(\{\s*width:\s*1440,\s*height:\s*900,\s*minWidth:\s*560,\s*minHeight:\s*600\s*\}\)/.test(electronMain)) {
   throw new Error('Authentication must open at the normal 1440x900 desktop size')
 }
+for (const marker of ['function installNativeTooltipBlocker()', "attributeFilter: ['title']", "element.removeAttribute('title')"]) {
+  if (!renderer.includes(marker)) throw new Error(`Native renderer tooltip blocker missing: ${marker}`)
+}
+if ((renderer.match(/installNativeTooltipBlocker\(\)/g) || []).length < 2) throw new Error('Native renderer tooltip blocker is not installed')
+if (/tray\.setToolTip\s*\(/.test(electronMain)) throw new Error('The system tray must not display a native tooltip')
 const preload = fs.readFileSync(path.join(__dirname, 'preload.cjs'), 'utf8')
 const cloudAuthMain = fs.readFileSync(path.join(__dirname, 'cloud-auth.cjs'), 'utf8')
 const authUI = fs.readFileSync(path.join(__dirname, '..', 'src', 'auth-ui.ts'), 'utf8')
+for (const marker of ["element.addEventListener('invalid'", 'form.noValidate = true', "input:invalid", "aria-invalid', 'true"]) {
+  if (!authUI.includes(marker)) throw new Error(`Native authentication validation tooltip suppression missing: ${marker}`)
+}
 const workspaceTemplate = renderer.slice(renderer.indexOf('app.innerHTML ='), renderer.indexOf('const fields ='))
 if (!workspaceTemplate.includes('class="top-window-drag-strip"')) throw new Error('The native top titlebar drag region is missing')
 if (!authUI.includes('class="top-window-drag-strip auth-top-window-drag-strip"')) throw new Error('The auth gate must reuse the single native top titlebar drag region')
@@ -195,6 +224,10 @@ if (!authUI.includes("next.phase === 'authenticated' || next.phase === 'needs_pi
 for (const marker of ["authState?.phase === 'needs_pin'", 'openPINSetupModal()', "state.pinSettingsMode === 'setup'", "invoke<CloudAuthState>('auth_pin_set'"]) {
   if (!renderer.includes(marker)) throw new Error(`Required post-registration PIN modal flow missing: ${marker}`)
 }
+for (const marker of ["pinSettingsSetupStep: 'current' | 'entry' | 'confirmation'", "state.pinSettingsSetupStep === 'current'", "state.pinSettingsSetupStep === 'entry'", "advancePINSettingsStep('confirmation')", 'renderPINSettingsCodeInput()', "app.addEventListener('click', reopenPINSetupForPayment, true)", "app.addEventListener('submit', reopenPINSetupForPayment, true)"]) {
+  if (!renderer.includes(marker)) throw new Error(`Sequential Cloud PIN setup or payment re-prompt guard missing: ${marker}`)
+}
+if (!rendererStyles.includes('.pin-settings-code-control .wallet-code-cells')) throw new Error('Cloud PIN setup must reuse the segmented six-cell wallet input style')
 for (const marker of ['activity_sessions', 'activity_session', '/v3/activity-sessions']) {
   if (!electronMain.includes(marker)) throw new Error(`V3 history IPC missing: ${marker}`)
 }

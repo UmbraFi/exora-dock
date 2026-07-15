@@ -504,6 +504,7 @@
 .auth-field input::placeholder { color: #a2a5b6; }
 .auth-field input:hover { border-color: #c9cbd9; }
 .auth-field input:focus { border-color: var(--color-primary); background: #fff; box-shadow: 0 0 0 3px rgba(102,92,255,.11), 0 7px 22px rgba(23,24,43,.055); }
+.auth-field input[aria-invalid='true'] { border-color: var(--color-danger); box-shadow: 0 0 0 3px rgba(210,64,80,.1); }
 .auth-field:focus-within { color: var(--color-primary); }
 .auth-field:focus-within .auth-input-icon { color: var(--color-primary); }
 .auth-code-input { text-align: center; letter-spacing: .48em; font-size: 22px !important; font-variant-numeric: tabular-nums; }

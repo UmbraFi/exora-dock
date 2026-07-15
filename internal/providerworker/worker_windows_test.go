@@ -40,6 +40,8 @@ func (r *leaseRunner) Run(_ context.Context, name string, args ...string) (strin
 	switch {
 	case strings.Contains(call, "--list --running --quiet"):
 		return "", nil
+	case strings.Contains(call, "--list --quiet"):
+		return "Exora-Lease-lease-1", nil
 	case strings.Contains(call, "cat /etc/wsl.conf"):
 		return "[automount]\nenabled=false\nmountFsTab=false\n[interop]\nenabled=false\nappendWindowsPath=false\n", nil
 	case strings.Contains(call, "hostname -I"):
@@ -153,5 +155,40 @@ func TestWindowsLeaseUsesSingleManagedDistroAndResetReceipt(t *testing.T) {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("missing %q in calls:\n%s", expected, joined)
 		}
+	}
+}
+
+func TestWindowsLeaseWithoutPublicHostUsesProviderHostDirectAccess(t *testing.T) {
+	root := t.TempDir()
+	artifact := filepath.Join(root, "images", "cpu.wsl")
+	if err := os.MkdirAll(filepath.Dir(artifact), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(artifact, []byte("managed image"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &leaseRunner{}
+	server := Server{DataDir: root, Runner: runner}
+	result, err := server.provisionLease(context.Background(), map[string]any{
+		"leaseId":      "lease-local",
+		"leaseEpoch":   float64(1),
+		"sshPublicKey": "ssh-ed25519 AAAATEST desktop",
+		"product": map[string]any{"manifest": map[string]any{
+			"runtimeBackend":     "wsl2",
+			"isolationClass":     "managed_wsl2_shared_host",
+			"environmentImageId": "cpu",
+			"environmentRoot":    filepath.Join(t.TempDir(), "runtime"),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	capability := result["capability"].(map[string]any)
+	if capability["host"] != "172.27.1.2" || capability["port"] != 22 || capability["accessMode"] != "provider_host_direct" {
+		t.Fatalf("capability=%v", capability)
+	}
+	joined := strings.Join(runner.calls, "\n")
+	if strings.Contains(joined, "portproxy add") || strings.Contains(joined, "New-NetFirewallRule") {
+		t.Fatalf("provider-host-only lease requested elevated networking:\n%s", joined)
 	}
 }

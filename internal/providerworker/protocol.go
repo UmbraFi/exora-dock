@@ -67,6 +67,7 @@ var AllowedCommands = map[string]bool{
 	"probe_runtime": true, "list_environment_images": true, "import_environment_image": true,
 	"validate_environment_image": true, "delete_environment_image": true,
 	"lease_recheck": true, "provision_lease": true, "renew_lease_epoch": true, "reset_lease": true,
+	"lease_ssh_target": true,
 }
 
 type cachedWorkerCommand struct {

@@ -17,6 +17,7 @@ import {
   ArrowLeft,
   ArrowRight,
   BadgeCheck,
+  Bell,
   BrainCircuit,
   Check,
   ChevronRight,
@@ -215,6 +216,7 @@ type V3ActivityBucket = 'current' | 'history'
 
 type V3ActivityArchiveMarker = {
   id: string
+  accountId?: string
   archiveKey: string
   role: OrderSide
   productKind: string
@@ -275,10 +277,30 @@ type V3APIRoute = { id: string; routeId: string; operationId: string; method: st
 type V3APIMaterial = { id: string; name: string; extension: string; sizeBytes: number; localPath: string; sha256?: string }
 type V3APIBridgeDraft = { draftId: string; version: number; status: string; bridgeMode?: 'transparent' | 'dock_tunnel'; title: string; description: string; protocol: V3APIBridgeProtocol; baseUrl: string; healthPath: string; routes: Array<{ routeId: string; operationId: string; method: string; path: string; displayName: string; pricing: V3APIPricingComponent[]; maxChargePerInvocationAtomic: number }>; agentNotes?: string; unresolvedFields?: string[] }
 type V3APIProbe = { ok: boolean; status?: number; latencyMs?: number; contentType?: string; checkedURL?: string; checkedAt?: string; error?: string }
-type SettingsView = 'security'
+type SettingsView = 'general' | 'security' | 'account-security' | 'agent-permissions' | 'notifications' | 'data-storage' | 'system-about'
 type WalletPanel = 'receive' | 'withdraw' | 'agent-limit' | 'history'
 type WalletHistoryFilter = 'all' | 'deposit' | 'withdrawal'
-type AppTheme = 'light' | 'dark'
+type AppTheme = 'system' | 'light' | 'dark'
+type CloseBehavior = 'tray' | 'quit'
+type NotificationPreferenceKey = 'approvals' | 'purchases' | 'downloads' | 'leases' | 'wallet' | 'security' | 'sellerOrders' | 'sellerListings' | 'runtime'
+type NotificationPreferences = Record<NotificationPreferenceKey, boolean>
+type DesktopSystemStatus = {
+  appVersion?: string
+  electronVersion?: string
+  chromiumVersion?: string
+  platform?: string
+  arch?: string
+  packaged?: boolean
+  secureStorageAvailable?: boolean
+  notificationsSupported?: boolean
+  notificationPermission?: string
+  loginItem?: { openAtLogin?: boolean; openAsHidden?: boolean }
+  paths?: { data?: string; logs?: string; settings?: string; manifest?: string; downloads?: string }
+  storage?: { dataBytes?: number; logsBytes?: number; cacheBytes?: number; tempBytes?: number }
+  runtime?: AppStatus
+  cloudURL?: string
+  update?: { supported?: boolean; channel?: string; automatic?: boolean; state?: string; checkedAt?: string; message?: string }
+}
 type LLMTestStatus = 'passed' | 'failed'
 type ProfileSubmenu = 'language' | 'theme'
 type ProjectFolderMenuAction = 'open' | 'rename' | 'archive' | 'remove'
@@ -412,6 +434,13 @@ type PersistedAppSettings = {
   sidebarCollapsed?: boolean
   sidebarWidth?: number
   activityArchiveMarkers?: V3ActivityArchiveMarker[]
+  launchAtLogin?: boolean
+  startMinimized?: boolean
+  closeBehavior?: CloseBehavior
+  startDockOnLaunch?: boolean
+  autoUpdate?: boolean
+  downloadDirectory?: string
+  notifications?: Partial<NotificationPreferences>
 }
 
 type DesktopConversationRecord = {
@@ -777,6 +806,75 @@ const SETTINGS_QR_MARGIN = 1
 const SETTINGS_QR_COLOR = { dark: '#17182b', light: '#ffffff' } as const
 app.dataset.platform = isMacPlatform ? 'mac' : 'windows'
 
+const nativeTooltipAriaLabels = new WeakSet<Element>()
+const nativeTooltipAccessibleControlSelector = [
+  'button',
+  'input:not([type="hidden"])',
+  'select',
+  'textarea',
+  'a[href]',
+  'summary',
+  '[role="button"]',
+  '[role="option"]',
+  '[role="switch"]',
+  '[role="separator"]',
+  '[tabindex]',
+].join(',')
+
+function hasAccessibleNameWithoutTooltip(element: Element) {
+  if (element.hasAttribute('aria-labelledby')) return true
+  if (element.hasAttribute('aria-label') && !nativeTooltipAriaLabels.has(element)) return true
+  if (
+    element instanceof HTMLButtonElement
+    || element instanceof HTMLInputElement
+    || element instanceof HTMLSelectElement
+    || element instanceof HTMLTextAreaElement
+  ) {
+    if (element.labels?.length) return true
+  }
+  return Boolean(element.textContent?.trim())
+}
+
+function removeNativeTooltip(element: Element) {
+  const tooltip = element.getAttribute('title')
+  if (tooltip === null) return
+  const label = tooltip.trim()
+  if (
+    label
+    && element.matches(nativeTooltipAccessibleControlSelector)
+    && (!hasAccessibleNameWithoutTooltip(element) || nativeTooltipAriaLabels.has(element))
+  ) {
+    element.setAttribute('aria-label', label)
+    nativeTooltipAriaLabels.add(element)
+  }
+  element.removeAttribute('title')
+}
+
+function removeNativeTooltipsFrom(root: Node) {
+  if (!(root instanceof Element)) return
+  removeNativeTooltip(root)
+  root.querySelectorAll('[title]').forEach(removeNativeTooltip)
+}
+
+function installNativeTooltipBlocker() {
+  removeNativeTooltipsFrom(document.documentElement)
+  const observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      if (mutation.type === 'attributes') {
+        removeNativeTooltip(mutation.target as Element)
+        continue
+      }
+      mutation.addedNodes.forEach(removeNativeTooltipsFrom)
+    }
+  })
+  observer.observe(document.documentElement, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: ['title'],
+  })
+}
+
 type LLMProviderPreset = {
   id: string
   label: string
@@ -965,7 +1063,13 @@ const profileIcons = {
 const walletSurfaceIcon = icon(WalletCards)
 
 const settingsNavIcons: Record<SettingsView, string> = {
+  general: icon(Settings2),
   security: icon(KeyRound),
+  'account-security': icon(KeyRound),
+  'agent-permissions': icon(Network),
+  notifications: icon(Bell),
+  'data-storage': icon(Archive),
+  'system-about': icon(Info),
 }
 const localAgentIcon = icon(Network)
 
@@ -1112,28 +1216,7 @@ app.innerHTML = `
       </section>
 
       <section class="workspace-view app-settings-view hidden" data-view-panel="app-settings" aria-labelledby="app-settings-title">
-        <header class="app-settings-head">
-          <div>
-            <span>ACCOUNT</span>
-            <h1 id="app-settings-title">Settings</h1>
-            <p>Manage security preferences for this Exora Dock account.</p>
-          </div>
-        </header>
-        <section class="app-settings-content" aria-label="Security settings">
-          <div class="app-settings-section-head">
-            <span>SECURITY</span>
-            <h2>Payment security</h2>
-            <p>Control the six-digit PIN used to approve sensitive account actions.</p>
-          </div>
-          <div class="app-setting-row">
-            <span class="app-setting-icon" aria-hidden="true">${icon(KeyRound)}</span>
-            <div>
-              <strong>Payment PIN</strong>
-              <p>Change your current six-digit payment PIN. Your existing PIN is required.</p>
-            </div>
-            <button type="button" data-settings-action="change-pin">Change PIN</button>
-          </div>
-        </section>
+        <div class="app-settings-loading" role="status">Opening settings…</div>
       </section>
 
     </section>
@@ -1344,18 +1427,27 @@ app.innerHTML = `
           <button class="app-modal-close" type="button" data-pin-settings-action="close" aria-label="Close PIN settings" title="Close">${windowIcons.close}</button>
         </header>
         <form class="pin-settings-form" data-pin-settings-form>
-          <label data-pin-settings-current><span>Current PIN</span><input name="currentPIN" type="password" inputmode="numeric" autocomplete="off" maxlength="6" pattern="[0-9]{6}" required /></label>
-          <div class="pin-settings-grid">
-            <label><span data-pin-settings-pin-label>New PIN</span><input name="newPIN" type="password" inputmode="numeric" autocomplete="new-password" maxlength="6" pattern="[0-9]{6}" required /></label>
-            <label><span data-pin-settings-confirm-label>Confirm new PIN</span><input name="pinConfirm" type="password" inputmode="numeric" autocomplete="new-password" maxlength="6" pattern="[0-9]{6}" required /></label>
+          <div class="pin-settings-progress" data-pin-settings-progress>
+            <span data-pin-settings-progress-label>Step 1 of 3</span>
+            <div aria-hidden="true"><i></i><i></i><i></i></div>
           </div>
-          <p class="pin-settings-message" data-pin-settings-message aria-live="polite"></p>
+          <div class="pin-settings-stage">
+            <label class="pin-settings-code-field">
+              <span data-pin-settings-code-label>Current PIN</span>
+              <span class="wallet-code-control masked pin-settings-code-control" data-pin-settings-code-control>
+                <input name="pinEntry" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="6" aria-label="Current six digit payment PIN" required />
+                <span class="wallet-code-cells" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>
+              </span>
+              <small data-pin-settings-step-hint>Enter the PIN you currently use to approve payments.</small>
+            </label>
+            <p class="pin-settings-message" data-pin-settings-message aria-live="polite"></p>
+          </div>
           <div class="pin-settings-actions">
-            <button class="secondary" type="button" data-pin-settings-action="close" data-pin-settings-cancel>Cancel</button>
-            <button type="submit" data-pin-settings-submit>Change PIN</button>
+            <button class="secondary" type="button" data-pin-settings-action="back" data-pin-settings-cancel>Cancel</button>
+            <button type="submit" data-pin-settings-submit>Continue</button>
           </div>
         </form>
-        <footer class="app-modal-footer"><span data-pin-settings-footer>PIN changes apply to sensitive account actions.</span><span data-pin-settings-escape><kbd>Esc</kbd> to close</span></footer>
+        <footer class="app-modal-footer pin-settings-footer"><span data-pin-settings-footer>Your PIN protects sensitive account actions.</span><span data-pin-settings-escape><kbd>Esc</kbd> to close</span></footer>
       </section>
     </div>
 
@@ -1381,6 +1473,8 @@ app.innerHTML = `
 
   <div class="toast" data-message role="status" aria-live="polite" aria-atomic="true"></div>
 `
+
+installNativeTooltipBlocker()
 
 const fields = {
   appShell: app.querySelector<HTMLElement>('.app-shell')!,
@@ -1451,9 +1545,12 @@ const fields = {
   pinSettingsEyebrow: app.querySelector<HTMLElement>('[data-pin-settings-eyebrow]')!,
   pinSettingsTitle: app.querySelector<HTMLElement>('[data-pin-settings-title]')!,
   pinSettingsDetail: app.querySelector<HTMLElement>('[data-pin-settings-detail]')!,
-  pinSettingsCurrent: app.querySelector<HTMLElement>('[data-pin-settings-current]')!,
-  pinSettingsPINLabel: app.querySelector<HTMLElement>('[data-pin-settings-pin-label]')!,
-  pinSettingsConfirmLabel: app.querySelector<HTMLElement>('[data-pin-settings-confirm-label]')!,
+  pinSettingsProgress: app.querySelector<HTMLElement>('[data-pin-settings-progress]')!,
+  pinSettingsProgressLabel: app.querySelector<HTMLElement>('[data-pin-settings-progress-label]')!,
+  pinSettingsCodeControl: app.querySelector<HTMLElement>('[data-pin-settings-code-control]')!,
+  pinSettingsCodeInput: app.querySelector<HTMLInputElement>('[data-pin-settings-code-control] input')!,
+  pinSettingsCodeLabel: app.querySelector<HTMLElement>('[data-pin-settings-code-label]')!,
+  pinSettingsStepHint: app.querySelector<HTMLElement>('[data-pin-settings-step-hint]')!,
   pinSettingsMessage: app.querySelector<HTMLElement>('[data-pin-settings-message]')!,
   pinSettingsSubmit: app.querySelector<HTMLButtonElement>('[data-pin-settings-submit]')!,
   pinSettingsCancel: app.querySelector<HTMLButtonElement>('[data-pin-settings-cancel]')!,
@@ -1546,11 +1643,12 @@ function storedLanguage(): AppLanguage {
 }
 
 function legacyStoredTheme(): AppTheme {
-  return localStorage.getItem('exora.theme') === 'dark' ? 'dark' : 'light'
+  const value = localStorage.getItem('exora.theme')
+  return value === 'dark' || value === 'light' ? value : 'system'
 }
 
 function storedTheme(): AppTheme {
-  return hasDesktopBridge() ? 'light' : legacyStoredTheme()
+  return hasDesktopBridge() ? 'system' : legacyStoredTheme()
 }
 
 function legacyStoredPermissionMode(): PermissionMode {
@@ -1703,8 +1801,19 @@ const state: {
   permissionMode: PermissionMode
   signedOut: boolean
   authAccount?: CloudAuthAccount
+  cloudAuthState?: CloudAuthState
   language: AppLanguage
   theme: AppTheme
+  launchAtLogin: boolean
+  startMinimized: boolean
+  closeBehavior: CloseBehavior
+  startDockOnLaunch: boolean
+  autoUpdate: boolean
+  downloadDirectory: string
+  notifications: NotificationPreferences
+  settingsSystemStatus?: DesktopSystemStatus
+  settingsStatusLoading: boolean
+  settingsStatusError?: string
   orderPlans: OrderPlan[]
   approvals: Approval[]
   tasks: Task[]
@@ -1744,6 +1853,10 @@ const state: {
   pinSettingsModalOpen: boolean
   pinSettingsBusy: boolean
   pinSettingsMode: 'setup' | 'change'
+  pinSettingsSetupStep: 'current' | 'entry' | 'confirmation'
+  pinSettingsCurrentValue: string
+  pinSettingsSetupValue: string
+  cloudPaymentPINConfigured?: boolean
   mcpInfoModalOpen: boolean
   walletModalOpen: boolean
   walletPanel: WalletPanel
@@ -1963,8 +2076,22 @@ const state: {
   permissionMode: storedPermissionMode(),
   signedOut: false,
   authAccount: undefined,
+  cloudAuthState: undefined,
   language: storedLanguage(),
   theme: storedTheme(),
+  launchAtLogin: false,
+  startMinimized: false,
+  closeBehavior: 'tray',
+  startDockOnLaunch: true,
+  autoUpdate: true,
+  downloadDirectory: '',
+  notifications: {
+    approvals: true, purchases: true, downloads: true, leases: true, wallet: true,
+    security: true, sellerOrders: true, sellerListings: true, runtime: true,
+  },
+  settingsSystemStatus: undefined,
+  settingsStatusLoading: false,
+  settingsStatusError: undefined,
   orderPlans: [],
   approvals: [],
   tasks: [],
@@ -1987,11 +2114,15 @@ const state: {
   sellerCardGeneration: undefined,
   cartOpen: false,
   llmTestStatus: undefined,
-  activeSettingsView: 'security',
+  activeSettingsView: 'general',
   settingsOpen: false,
   pinSettingsModalOpen: false,
   pinSettingsBusy: false,
   pinSettingsMode: 'change',
+  pinSettingsSetupStep: 'current',
+  pinSettingsCurrentValue: '',
+  pinSettingsSetupValue: '',
+  cloudPaymentPINConfigured: undefined,
   mcpInfoModalOpen: false,
   walletModalOpen: false,
   walletPanel: 'receive',
@@ -2226,7 +2357,7 @@ function isAppLanguage(value: unknown): value is AppLanguage {
 }
 
 function isAppTheme(value: unknown): value is AppTheme {
-  return value === 'light' || value === 'dark'
+  return value === 'system' || value === 'light' || value === 'dark'
 }
 
 function isPermissionMode(value: unknown): value is PermissionMode {
@@ -2238,8 +2369,8 @@ function isOrderSide(value: unknown): value is OrderSide {
 }
 
 function normalizeSettingsView(value: unknown): SettingsView | undefined {
-  if (value === 'security') return value
-  return 'security'
+  if (value === 'general' || value === 'account-security' || value === 'agent-permissions' || value === 'notifications' || value === 'data-storage' || value === 'system-about') return value
+  return 'general'
 }
 
 function isSettingsView(value: unknown): value is SettingsView {
@@ -2296,7 +2427,7 @@ function normalizeActivityArchiveMarkers(value: unknown): V3ActivityArchiveMarke
     const detailAfterBySession = input.detailAfterBySession && typeof input.detailAfterBySession === 'object' && !Array.isArray(input.detailAfterBySession)
       ? Object.fromEntries(Object.entries(input.detailAfterBySession).filter(([, timestamp]) => typeof timestamp === 'string'))
       : undefined
-    return [{ id: String(input.id), archiveKey: String(input.archiveKey), role: input.role, productKind: String(input.productKind), archivedAt: String(input.archivedAt), archivedThrough: String(input.archivedThrough), records, baselines, detailAfterBySession }]
+    return [{ id: String(input.id), accountId: input.accountId ? String(input.accountId) : undefined, archiveKey: String(input.archiveKey), role: input.role, productKind: String(input.productKind), archivedAt: String(input.archivedAt), archivedThrough: String(input.archivedThrough), records, baselines, detailAfterBySession }]
   })
 }
 
@@ -2309,7 +2440,21 @@ function normalizePersistedSettings(value: unknown): PersistedAppSettings {
     sidebarCollapsed: typeof input.sidebarCollapsed === 'boolean' ? input.sidebarCollapsed : undefined,
     sidebarWidth: input.sidebarWidth === undefined ? undefined : normalizeSidebarWidth(input.sidebarWidth),
     activityArchiveMarkers: normalizeActivityArchiveMarkers(input.activityArchiveMarkers),
+    launchAtLogin: typeof input.launchAtLogin === 'boolean' ? input.launchAtLogin : undefined,
+    startMinimized: typeof input.startMinimized === 'boolean' ? input.startMinimized : undefined,
+    closeBehavior: input.closeBehavior === 'tray' || input.closeBehavior === 'quit' ? input.closeBehavior : undefined,
+    startDockOnLaunch: typeof input.startDockOnLaunch === 'boolean' ? input.startDockOnLaunch : undefined,
+    autoUpdate: typeof input.autoUpdate === 'boolean' ? input.autoUpdate : undefined,
+    downloadDirectory: typeof input.downloadDirectory === 'string' ? input.downloadDirectory : undefined,
+    notifications: normalizeNotificationPreferences(input.notifications),
   }
+}
+
+function normalizeNotificationPreferences(value: unknown): Partial<NotificationPreferences> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const input = value as Partial<NotificationPreferences>
+  return Object.fromEntries((['approvals', 'purchases', 'downloads', 'leases', 'wallet', 'security', 'sellerOrders', 'sellerListings', 'runtime'] as NotificationPreferenceKey[])
+    .flatMap((key) => typeof input[key] === 'boolean' ? [[key, input[key]]] : []))
 }
 
 function mergePersistedSettings(fallback: PersistedAppSettings, value: PersistedAppSettings): PersistedAppSettings {
@@ -2320,6 +2465,13 @@ function mergePersistedSettings(fallback: PersistedAppSettings, value: Persisted
     sidebarCollapsed: value.sidebarCollapsed ?? fallback.sidebarCollapsed,
     sidebarWidth: value.sidebarWidth ?? fallback.sidebarWidth,
     activityArchiveMarkers: value.activityArchiveMarkers ?? fallback.activityArchiveMarkers,
+    launchAtLogin: value.launchAtLogin ?? fallback.launchAtLogin,
+    startMinimized: value.startMinimized ?? fallback.startMinimized,
+    closeBehavior: value.closeBehavior ?? fallback.closeBehavior,
+    startDockOnLaunch: value.startDockOnLaunch ?? fallback.startDockOnLaunch,
+    autoUpdate: value.autoUpdate ?? fallback.autoUpdate,
+    downloadDirectory: value.downloadDirectory ?? fallback.downloadDirectory,
+    notifications: { ...fallback.notifications, ...value.notifications },
   }
 }
 
@@ -2342,6 +2494,13 @@ function applyPersistedSettings(settings: PersistedAppSettings) {
   if (typeof settings.sidebarCollapsed === 'boolean') state.sidebarCollapsed = settings.sidebarCollapsed
   if (typeof settings.sidebarWidth === 'number') state.sidebarWidth = normalizeSidebarWidth(settings.sidebarWidth)
   if (settings.activityArchiveMarkers) state.v3ActivityArchiveMarkers = settings.activityArchiveMarkers
+  if (typeof settings.launchAtLogin === 'boolean') state.launchAtLogin = settings.launchAtLogin
+  if (typeof settings.startMinimized === 'boolean') state.startMinimized = settings.startMinimized
+  if (settings.closeBehavior) state.closeBehavior = settings.closeBehavior
+  if (typeof settings.startDockOnLaunch === 'boolean') state.startDockOnLaunch = settings.startDockOnLaunch
+  if (typeof settings.autoUpdate === 'boolean') state.autoUpdate = settings.autoUpdate
+  if (typeof settings.downloadDirectory === 'string') state.downloadDirectory = settings.downloadDirectory
+  state.notifications = { ...state.notifications, ...settings.notifications }
 }
 
 function appSettingsSnapshot(): PersistedAppSettings {
@@ -2352,6 +2511,13 @@ function appSettingsSnapshot(): PersistedAppSettings {
     sidebarCollapsed: state.sidebarCollapsed,
     sidebarWidth: state.sidebarWidth,
     activityArchiveMarkers: state.v3ActivityArchiveMarkers,
+    launchAtLogin: state.launchAtLogin,
+    startMinimized: state.startMinimized,
+    closeBehavior: state.closeBehavior,
+    startDockOnLaunch: state.startDockOnLaunch,
+    autoUpdate: state.autoUpdate,
+    downloadDirectory: state.downloadDirectory,
+    notifications: state.notifications,
   }
 }
 
@@ -3442,7 +3608,8 @@ function profileInitial(name: string) {
 
 function applyUserPreferences() {
   setI18nLanguage(state.language)
-  document.documentElement.dataset.theme = state.theme
+  document.documentElement.dataset.theme = effectiveTheme()
+  document.documentElement.dataset.themePreference = state.theme
   document.documentElement.dataset.language = state.language
   document.documentElement.lang = htmlLangForLanguage(state.language)
 }
@@ -3502,6 +3669,11 @@ function setPermissionMode(mode: PermissionMode) {
   renderPermissionControl()
 }
 
+function effectiveTheme(): 'light' | 'dark' {
+  if (state.theme !== 'system') return state.theme
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
 function permissionPolicyText(mode = state.permissionMode) {
   if (mode === 'ask') return t('permission.policy.ask')
   if (mode === 'approve') return t('permission.policy.approve')
@@ -3545,6 +3717,7 @@ function profileMenuCopy() {
     changePin: state.language === 'zh' ? '修改支付 PIN' : 'Change payment PIN',
     language: t('profile.language'),
     theme: t('profile.theme'),
+    system: state.language === 'zh' ? '跟随系统' : 'System',
     english: t('profile.english'),
     chinese: t('profile.chinese'),
     light: t('profile.light'),
@@ -3592,6 +3765,7 @@ function renderProfileSubmenu(copy: ReturnType<typeof profileMenuCopy>) {
   if (state.profileSubmenu === 'theme') {
     return `
       <div class="profile-submenu theme" role="menu" aria-label="${escapeAttr(copy.theme)}">
+        ${renderProfileChoice('theme', 'system', copy.system, state.theme === 'system')}
         ${renderProfileChoice('theme', 'light', copy.light, state.theme === 'light')}
         ${renderProfileChoice('theme', 'dark', copy.dark, state.theme === 'dark')}
       </div>
@@ -3670,6 +3844,10 @@ function setTheme(theme: AppTheme) {
 
 const V3_ACTIVITY_RETENTION_MS = 24 * 60 * 60 * 1000
 
+function v3ActivityAccountScope() {
+  return state.localActivityFixturesEnabled ? '__local_activity_test__' : String(state.authAccount?.accountId || '')
+}
+
 function v3HistoryCopy(english: string, chinese: string) {
   return state.language === 'zh' ? chinese : english
 }
@@ -3686,6 +3864,15 @@ function v3ActivityArchiveKey(record: V3ActivitySession) {
 
 function v3ActivityIsBusy(record: V3ActivitySession) {
   return record.status === 'active' || Number(record.inFlightCount || 0) > 0
+}
+
+function v3ActivityIsLocallyBusy(record: V3ActivitySession) {
+  const listingMatches = !state.v3ExpandedListingId || state.v3ExpandedListingId === record.listingId
+  if (record.productKind === 'api_operation' && state.v3ConsumerBusy && listingMatches) return true
+  if (record.productKind !== 'download' || !state.v3ConsumerTransferProgress) return false
+  const grantListingID = String(state.v3ConsumerGrant?.listingId || '')
+  if (grantListingID && grantListingID !== record.listingId) return false
+  return !['complete', 'completed', 'verified', 'failed', 'cancelled'].includes(state.v3ConsumerTransferProgress.phase.toLowerCase())
 }
 
 function v3ActivityRetainUntil(record: V3ActivitySession) {
@@ -3719,7 +3906,7 @@ function v3ActivityDelta(record: V3ActivitySession, baseline: V3ActivitySession)
 function v3LatestActivityBaselines(side: OrderSide) {
   const latest = new Map<string, { record: V3ActivitySession; archivedAt: string }>()
   for (const marker of state.v3ActivityArchiveMarkers) {
-    if (marker.role !== side) continue
+    if (marker.role !== side || marker.accountId !== v3ActivityAccountScope()) continue
     for (const baseline of marker.baselines) {
       const previous = latest.get(baseline.sessionId)
       if (!previous || sortTime(marker.archivedAt) > sortTime(previous.archivedAt)) latest.set(baseline.sessionId, { record: baseline, archivedAt: marker.archivedAt })
@@ -3752,8 +3939,8 @@ function v3AggregateActivityDisplay(
   const attentionRequired = summaries.some((item) => item.attentionRequired || item.status === 'needs_attention')
   const startedAt = summaries.reduce((value, item) => !value || sortTime(item.startedAt) < sortTime(value) ? item.startedAt : value, '')
   const updatedAt = summaries.reduce((value, item) => sortTime(item.updatedAt) > sortTime(value) ? item.updatedAt : value, '')
-  const endedAt = summaries.reduce((value, item) => sortTime(item.endedAt) > sortTime(value) ? item.endedAt : value, '') || undefined
-  const retainUntil = summaries.reduce((value, item) => {
+  const endedAt = summaries.reduce<string | undefined>((value, item) => sortTime(item.endedAt) > sortTime(value) ? item.endedAt : value, undefined)
+  const retainUntil = summaries.reduce<string | undefined>((value, item) => {
     const candidate = v3ActivityRetainUntil(item)
     return sortTime(candidate) > sortTime(value) ? candidate : value
   }, undefined as string | undefined)
@@ -3774,7 +3961,7 @@ function v3AggregateActivityDisplay(
     sessionIds,
     sourceRecords: summaries,
     baselineRecords: baselines,
-    canArchive: bucket === 'current' && baselines.every((item) => !v3ActivityIsBusy(item)),
+    canArchive: bucket === 'current' && baselines.every((item) => !v3ActivityIsBusy(item) && !v3ActivityIsLocallyBusy(item)),
     manuallyArchived: Boolean(options.manuallyArchived),
     archiveMarkerId: options.archiveMarkerId,
     detailAfterBySession: Object.keys(detailAfterBySession).length ? detailAfterBySession : undefined,
@@ -3825,7 +4012,7 @@ function v3ActivityDisplayRecords(side: OrderSide, bucket: V3ActivityBucket): V3
   }
 
   if (bucket === 'history') {
-    for (const marker of state.v3ActivityArchiveMarkers.filter((item) => item.role === side)) {
+    for (const marker of state.v3ActivityArchiveMarkers.filter((item) => item.role === side && item.accountId === v3ActivityAccountScope())) {
       const baselines = new Map(marker.baselines.map((item) => [item.sessionId, item]))
       const detailThroughBySession = Object.fromEntries(marker.baselines.map((item) => [item.sessionId, item.updatedAt]))
       const sources = marker.records.map((summary) => ({ summary, baseline: baselines.get(summary.sessionId) || summary, detailAfter: marker.detailAfterBySession?.[summary.sessionId] }))
@@ -4380,7 +4567,7 @@ async function refreshStatus() {
 }
 
 async function startDockOnLaunch() {
-  if (!hasDesktopBridge()) return
+  if (!hasDesktopBridge() || !state.startDockOnLaunch) return
   try {
     await invoke<AppStatus>('start_dock')
   } catch (error) {
@@ -7728,8 +7915,19 @@ async function searchCardMarket(query: string) {
   }
 }
 
-const settingsNavItems: Array<{ view: SettingsView; label: Record<AppLanguage, string> }> = [
-  { view: 'security', label: { en: 'Security', zh: '安全' } },
+const settingsNavGroups: Array<{ label: Record<AppLanguage, string>; items: Array<{ view: SettingsView; label: Record<AppLanguage, string> }> }> = [
+  { label: { en: 'Preferences', zh: '偏好' }, items: [
+    { view: 'general', label: { en: 'General', zh: '通用' } },
+    { view: 'notifications', label: { en: 'Notifications', zh: '通知' } },
+  ] },
+  { label: { en: 'Account', zh: '账户' }, items: [
+    { view: 'account-security', label: { en: 'Account & Security', zh: '账户与安全' } },
+    { view: 'agent-permissions', label: { en: 'Agent Connections', zh: 'Agent 连接与权限' } },
+  ] },
+  { label: { en: 'System', zh: '系统' }, items: [
+    { view: 'data-storage', label: { en: 'Data & Storage', zh: '数据与存储' } },
+    { view: 'system-about', label: { en: 'System & About', zh: '系统与关于' } },
+  ] },
 ]
 
 function renderLedger() {
@@ -7742,21 +7940,18 @@ function renderLedger() {
 function renderSettingsSidebar() {
   setLedgerEmpty(false)
   fields.ledgerList.classList.add('settings-list')
-  const settingItems = settingsNavItems.map((item) => {
+  const settingItems = settingsNavGroups.map((group) => `<div class="settings-sidebar-group"><span>${escapeHTML(group.label[state.language])}</span>${group.items.map((item) => {
     const title = item.label[state.language]
-    return `
-    <button class="ledger-item history-record settings-record ${item.view === state.activeSettingsView ? 'active' : ''}" data-settings-tab="${escapeHTML(item.view)}">
-      <span class="settings-record-icon">${settingsNavIcons[item.view]}</span>
-      <strong>${escapeHTML(title)}</strong>
-    </button>
-  `
-  }).join('')
+    return `<button class="ledger-item history-record settings-record ${item.view === state.activeSettingsView ? 'active' : ''}" data-settings-tab="${escapeHTML(item.view)}" aria-pressed="${item.view === state.activeSettingsView}"><span class="settings-record-icon">${settingsNavIcons[item.view]}</span><strong>${escapeHTML(title)}</strong></button>`
+  }).join('')}</div>`).join('')
   fields.ledgerList.innerHTML = `<div class="settings-sidebar-heading">${state.language === 'zh' ? '设置' : 'Settings'}</div>${settingItems}`
   fields.ledgerList.querySelectorAll<HTMLButtonElement>('[data-settings-tab]').forEach((button) => {
     button.addEventListener('click', () => {
       state.activeSettingsView = button.dataset.settingsTab as SettingsView
       scheduleSaveAppSettings()
       renderSettingsSidebar()
+      renderSettingsPanel()
+      fields.settingsView.scrollTop = 0
     })
   })
 }
@@ -7919,6 +8114,11 @@ function v3ConsumerMaxCharge(listing: V3Listing, product: V3Product, quantity = 
 
 function setLocalActivityFixturesEnabled(enabled: boolean) {
   state.localActivityFixturesEnabled = enabled
+  if (enabled) {
+    state.v3ActivityArchiveMarkers = state.v3ActivityArchiveMarkers.filter((marker) => !marker.baselines.some((item) => item.sessionId.startsWith('local-test-')))
+    state.v3ActivityArchiveUndo = undefined
+    scheduleSaveAppSettings(0)
+  }
   for (const side of ['buyer', 'seller'] as const) {
     state.v3ActivitySessions[side] = enabled ? localActivitySessionsForRole(side) : []
     state.v3ActivityLoaded[side] = enabled
@@ -7958,32 +8158,89 @@ async function loadV3ActivitySessions(side: OrderSide = state.workOrderSide, for
   }
 }
 
-async function loadV3ActivityDetail(sessionId: string) {
-  if (!sessionId) return
+async function fetchV3ActivitySessionDetail(sessionId: string) {
   if (state.localActivityFixturesEnabled) {
     const fixture = localActivityDetailForSession(sessionId)
-    if (state.selectedV3ActivitySessionId !== sessionId) return
-    state.v3ActivityDetail = fixture
-    state.v3ActivityDetailLoading = false
-    state.v3ActivityDetailError = fixture ? undefined : 'Local test order detail was not found.'
+    if (!fixture) throw new Error('Local test order detail was not found.')
+    return fixture as V3ActivityDetail
+  }
+  const response = await invoke<{ session?: V3ActivityDetail }>('activity_session', { input: { id: sessionId } })
+  if (!response.session) throw new Error('Order detail was not found.')
+  return response.session
+}
+
+function v3ActivityTimestampInBatch(value: string | undefined, after?: string, through?: string) {
+  const timestamp = sortTime(value)
+  if (!timestamp) return !after && !through
+  if (after && timestamp <= sortTime(after)) return false
+  if (through && timestamp > sortTime(through)) return false
+  return true
+}
+
+function mergeV3ActivityDetails(display: V3ActivityDisplayRecord, details: V3ActivityDetail[]): V3ActivityDetail {
+  const invocations: V3ActivityInvocation[] = []
+  const events: NonNullable<V3ActivityDetail['events']> = []
+  const operations = new Set<string>()
+  const usage: Record<string, number> = {}
+  details.forEach((detail) => {
+    const after = display.detailAfterBySession?.[detail.sessionId]
+    const through = display.detailThroughBySession?.[detail.sessionId]
+    const filteredInvocations = (detail.invocations || []).filter((item) => v3ActivityTimestampInBatch(item.startedAt, after, through))
+    const filteredEvents = (detail.events || []).filter((item) => v3ActivityTimestampInBatch(item.occurredAt, after, through))
+    invocations.push(...filteredInvocations)
+    events.push(...filteredEvents)
+    ;(detail.operations || []).forEach((operation) => operations.add(operation))
+    const usageSources = detail.productKind === 'api_operation' && (after || through)
+      ? filteredInvocations.map((item) => item.usage || {})
+      : [detail.usage || {}]
+    usageSources.forEach((source) => Object.entries(source).forEach(([key, value]) => { usage[key] = (usage[key] || 0) + Number(value || 0) }))
+  })
+  invocations.sort((a, b) => sortTime(b.completedAt || b.startedAt) - sortTime(a.completedAt || a.startedAt))
+  events.sort((a, b) => sortTime(b.occurredAt) - sortTime(a.occurredAt))
+  const first = details[0]
+  const grouped = display.sessionIds.length > 1 || Boolean(display.detailAfterBySession) || Boolean(display.detailThroughBySession)
+  const identifiers = grouped
+    ? { activityBatchId: display.displayId, sessionCount: String(display.sessionIds.length), counterpartyId: display.counterpartyId || display.counterpartyLabel }
+    : first.identifiers
+  return {
+    ...first,
+    ...display,
+    product: display.productId && details.every((item) => item.productId === display.productId)
+      ? first.product
+      : { description: v3HistoryCopy('Aggregated API activity grouped by counterparty.', '按交易方聚合的 API 活动。') },
+    operations: [...operations],
+    usage,
+    invocations,
+    events,
+    identifiers,
+    delivery: details.length === 1 ? first.delivery : undefined,
+    purchases: details.flatMap((item) => item.purchases || []),
+    transfers: details.flatMap((item) => item.transfers || []),
+  }
+}
+
+async function loadV3ActivityDetail(displayId: string) {
+  if (!displayId) return
+  const display = findV3ActivityDisplayRecord(displayId)
+  if (!display) {
+    state.v3ActivityDetailError = 'This activity batch is no longer available.'
     renderDecisionPanel()
-    renderLedger()
     return
   }
   state.v3ActivityDetailLoading = true
   state.v3ActivityDetailError = undefined
-  state.v3ActivityDetail = undefined
+  state.v3ActivityDetail = display
   renderDecisionPanel()
   try {
-    const response = await invoke<{ session?: V3ActivityDetail }>('activity_session', { input: { id: sessionId } })
-    if (state.selectedV3ActivitySessionId !== sessionId) return
-    state.v3ActivityDetail = response.session
-    const activitySessionId = response.session?.role === 'buyer' ? response.session.activitySessionId : undefined
+    const details = await Promise.all(display.sessionIds.map(fetchV3ActivitySessionDetail))
+    if (state.selectedV3ActivitySessionId !== displayId) return
+    state.v3ActivityDetail = mergeV3ActivityDetails(display, details)
+    const activitySessionId = display.role === 'buyer' && display.sessionIds.length === 1 ? display.activitySessionId : undefined
     if (activitySessionId) void loadOrderAccessKeyStatus(activitySessionId)
   } catch (error) {
-    if (state.selectedV3ActivitySessionId === sessionId) state.v3ActivityDetailError = humanizeError(error)
+    if (state.selectedV3ActivitySessionId === displayId) state.v3ActivityDetailError = humanizeError(error)
   } finally {
-    if (state.selectedV3ActivitySessionId === sessionId) {
+    if (state.selectedV3ActivitySessionId === displayId) {
       state.v3ActivityDetailLoading = false
       renderDecisionPanel()
       renderLedger()
@@ -7991,18 +8248,24 @@ async function loadV3ActivityDetail(sessionId: string) {
   }
 }
 
-function selectV3ActivitySession(sessionId: string) {
-  if (!sessionId) return
-  state.selectedV3ActivitySessionId = sessionId
+function selectV3ActivityDisplayRecord(displayId: string) {
+  const display = findV3ActivityDisplayRecord(displayId)
+  if (!display) return
+  state.v3ActivityBucket[display.role] = display.status === 'completed' ? 'history' : 'current'
+  state.selectedV3ActivitySessionId = displayId
   state.v3SelectedProduct = undefined
-  const cached = state.v3ActivitySessions[state.workOrderSide].find((item) => item.sessionId === sessionId)
-  state.v3ActivityDetail = cached as V3ActivityDetail | undefined
+  state.v3ActivityDetail = display
   state.v3ActivityDetailError = undefined
   state.v3OrderAccessKey = undefined
-  state.v3OrderAccessKeySessionId = cached?.activitySessionId
+  state.v3OrderAccessKeySessionId = display.sessionIds.length === 1 ? display.activitySessionId : undefined
   state.v3OrderAccessKeyBusy = false
   renderLedger()
-  void loadV3ActivityDetail(sessionId)
+  void loadV3ActivityDetail(displayId)
+}
+
+function selectV3ActivitySession(sessionId: string) {
+  const display = findV3ActivityDisplayForSession(sessionId)
+  if (display) selectV3ActivityDisplayRecord(display.displayId)
 }
 
 function closeV3ActivityDetail() {
@@ -8988,7 +9251,9 @@ function rerenderV3APIKeepingSecret(form?: HTMLFormElement | null) {
 function apiBridgeReviewFingerprint(id: string) {
   if (id === 'service') return JSON.stringify({ title: state.v3APITitle, description: state.v3APIDescription, protocol: state.v3APIProtocol, baseUrl: state.v3APIBaseURL, healthPath: state.v3APIHealthPath })
   const route = state.v3APIRoutes.find((item) => `route:${item.routeId}` === id)
-  return route ? JSON.stringify({ operationId: route.operationId, method: route.method, path: route.path, title: route.title, pricing: route.pricing, maxChargePerInvocationAtomic: route.maxChargePerInvocationAtomic }) : ''
+  if (!route) return ''
+  const pricing = (route.pricing || []).map((item) => ({ dimension: item.dimension, rateAtomic: item.rateAtomic, per: item.per, meterSource: item.meterSource, ...(item.selector ? { selector: item.selector } : {}), chargeOn: item.chargeOn }))
+  return JSON.stringify({ operationId: route.operationId, method: route.method, path: route.path, title: route.title, pricing, maxChargePerInvocationAtomic: route.maxChargePerInvocationAtomic })
 }
 
 function apiBridgeUnresolvedForReview(id: string) {
@@ -9379,15 +9644,17 @@ function renderV3UnifiedListingsPageV2() {
   const empty = !rows && !sourceLoading && (!isBuyer || !sourceError) ? (isBuyer ? buyerEmpty : renderV3ListingEmptyState()) : ''
   const placeholder = isBuyer ? 'Search the marketplace' : 'Search your listings and applications'
   return `<section class="v3-listings-page">
-    <section class="v3-listing-search-switch">
-      <label class="v3-listing-search">${toolbarIcons.search}<input type="search" data-v3-listing-search value="${escapeAttr(state.v3ListingQuery)}" placeholder="${placeholder}" aria-label="${placeholder}"/></label>
-      <div class="v3-listing-mode-switch" role="group" aria-label="Listings view">
-        <button type="button" data-v3-listing-mode="buyer" aria-pressed="${String(isBuyer)}" class="${isBuyer ? 'active' : ''}"><span class="tab-icon">${roleTabIcons.buyer}</span><span>Buyer</span></button>
-        <button type="button" data-v3-listing-mode="seller" aria-pressed="${String(!isBuyer)}" class="${isBuyer ? '' : 'active'}"><span class="tab-icon">${roleTabIcons.seller}</span><span>Seller</span></button>
-      </div>
-    </section>
-    ${isBuyer ? `<div class="v3-listing-agent-hint">${icon(MessagesSquare)}<span>${escapeHTML(t('listings.agentHint'))}</span><span class="v3-listing-agent-actions"><button type="button" data-v3-listing-agent-copy aria-label="${escapeAttr(t('listings.agentCopy'))}" title="${escapeAttr(t('listings.agentCopy'))}">${icon(Copy)}</button><button type="button" data-v3-listing-agent-details aria-label="${escapeAttr(t('listings.agentDetails'))}" title="${escapeAttr(t('listings.agentDetails'))}">${icon(Info)}</button></span></div>` : ''}
-    <section class="v3-listing-workspace v3-listing-${state.v3ListingMode}-view">${sourceError ? `<div class="v3-market-view-error">${escapeHTML(sourceError)}</div>` : ''}${rows ? `<div class="v3-listing-list">${rows}</div>` : ''}${initialLoading}${empty}<div class="v3-listing-no-results hidden"><strong>No matching listings</strong><small>Try a different search.</small></div></section>
+    <header class="v3-listing-fixed-header">
+      <section class="v3-listing-search-switch">
+        <label class="v3-listing-search">${toolbarIcons.search}<input type="search" data-v3-listing-search value="${escapeAttr(state.v3ListingQuery)}" placeholder="${placeholder}" aria-label="${placeholder}"/></label>
+        <div class="v3-listing-mode-switch" role="group" aria-label="Listings view">
+          <button type="button" data-v3-listing-mode="buyer" aria-pressed="${String(isBuyer)}" class="${isBuyer ? 'active' : ''}"><span class="tab-icon">${roleTabIcons.buyer}</span><span>Buyer</span></button>
+          <button type="button" data-v3-listing-mode="seller" aria-pressed="${String(!isBuyer)}" class="${isBuyer ? '' : 'active'}"><span class="tab-icon">${roleTabIcons.seller}</span><span>Seller</span></button>
+        </div>
+      </section>
+      ${isBuyer ? `<div class="v3-listing-agent-hint">${icon(MessagesSquare)}<span>${escapeHTML(t('listings.agentHint'))}</span><span class="v3-listing-agent-actions"><button type="button" data-v3-listing-agent-copy aria-label="${escapeAttr(t('listings.agentCopy'))}" title="${escapeAttr(t('listings.agentCopy'))}">${icon(Copy)}</button><button type="button" data-v3-listing-agent-details aria-label="${escapeAttr(t('listings.agentDetails'))}" title="${escapeAttr(t('listings.agentDetails'))}">${icon(Info)}</button></span></div>` : ''}
+    </header>
+    <section class="v3-listing-workspace v3-listing-${state.v3ListingMode}-view scroll-area">${sourceError ? `<div class="v3-market-view-error">${escapeHTML(sourceError)}</div>` : ''}${rows ? `<div class="v3-listing-list">${rows}</div>` : ''}${initialLoading}${empty}<div class="v3-listing-no-results hidden"><strong>No matching listings</strong><small>Try a different search.</small></div></section>
   </section>`
 }
 
@@ -10145,7 +10412,7 @@ function attachV3SurfaceHandlers() {
     clearV3ApplicationAttempt('resources')
     renderDecisionPanel()
   }))
-  fields.actionView.querySelector<HTMLFormElement>('[data-v3-form="vm"]')?.addEventListener('submit', (event) => { event.preventDefault(); const form = event.currentTarget as HTMLFormElement; void run(async () => { if (!state.v3VMTemplate || !state.v3VMTemplate.valid) throw new Error('Install and validate the selected environment first.'); const data = Object.fromEntries(new FormData(form)); const windows = navigator.userAgent.includes('Windows'); if (windows) { const rescanned = await invoke<{ result: Record<string, unknown> }>('provider_host_scan', { input: { reason: 'pre_publish' } }); state.v3VMProbe = rescanned.result; renderDecisionPanel() } const price = { amount: Number(data.price), currency: 'USD', unit: 'minute' }; const hold = windows ? await invoke<Record<string, any>>('provider_environment_reserve', { input: { environmentId: state.v3VMTemplate.environmentId, workspaceGiB: Number(data.workspaceGiB) } }) : undefined; const selected = state.v3EnvironmentImages.find((image) => image.imageId === state.v3VMTemplate?.imageId); const hardware = state.v3VMProbe?.hardware as Record<string, any> || {}; const gpu = state.v3VMProbe?.gpu as Record<string, any> || {}; const network = state.v3VMProbe?.network as Record<string, any> || {}; const title = windows ? `${gpu.name || hardware.Cpu || 'Windows PC'} · ${selected?.manifest?.name || state.v3VMTemplate.imageId}` : String(data.title || 'Verified compute environment'); const description = windows ? `Verified ${selected?.manifest?.os?.distribution || 'Linux'} environment on ${gpu.name || hardware.Cpu || 'Windows hardware'} with ${Number(data.workspaceGiB)} GiB reserved workspace and ${network.downloadMbps || 0} Mbps measured download capacity.` : String(data.description || 'Verified compute environment'); const manifest = windows ? { runtimeBackend: 'wsl2', hostOS: 'windows', isolationClass: 'managed_wsl2_shared_host', capacityGuarantee: 'disclosed_best_effort', gpuAccessMode: state.v3VMTemplate.cuda ? 'shared_windows_driver' : 'none', resourceGuarantees: { singleLeasePerHost: true, diskReservation: 'hard', cpuMemory: 'configured_caps', gpu: state.v3VMTemplate.cuda ? 'shared_best_effort' : 'none', hardwarePassthroughExclusive: false }, environmentImageId: state.v3VMTemplate.imageId, environmentImageVersion: state.v3VMTemplate.imageVersion, validationReceipt: state.v3VMTemplate, hardware, network, publicHost: network.publicIP || network.ip || '', capacitySnapshot: hold?.capacity, diskReservation: hold?.reservation, price, limits: { minMinutes: 1, maxMinutes: 240 }, workspaceGiB: Number(data.workspaceGiB), region: [network.city, network.region, network.country].filter(Boolean).join(', ') } : { runtimeBackend: 'kvm_libvirt', isolationClass: 'hardware_virtualized', templateId: state.v3VMTemplate.templateId, template: state.v3VMTemplate, price }; await v3CreateProductAndListing({ productKind: 'compute', title, description, manifest }, price, true, windows) }) })
+  fields.actionView.querySelector<HTMLFormElement>('[data-v3-form="vm"]')?.addEventListener('submit', (event) => { event.preventDefault(); const form = event.currentTarget as HTMLFormElement; void run(async () => { if (!state.v3VMTemplate || !state.v3VMTemplate.valid) throw new Error('Install and validate the selected environment first.'); const data = Object.fromEntries(new FormData(form)); const windows = navigator.userAgent.includes('Windows'); if (windows) { const rescanned = await invoke<{ result: Record<string, unknown> }>('provider_host_scan', { input: { reason: 'pre_publish' } }); state.v3VMProbe = rescanned.result; renderDecisionPanel() } const price = { amount: Number(data.price), currency: 'USD', unit: 'minute' }; const hold = windows ? await invoke<Record<string, any>>('provider_environment_reserve', { input: { environmentId: state.v3VMTemplate.environmentId, imageId: state.v3VMTemplate.imageId, imageVersion: state.v3VMTemplate.imageVersion, workspaceGiB: Number(data.workspaceGiB) } }) : undefined; const selected = state.v3EnvironmentImages.find((image) => image.imageId === state.v3VMTemplate?.imageId); const hardware = state.v3VMProbe?.hardware as Record<string, any> || {}; const gpu = state.v3VMProbe?.gpu as Record<string, any> || {}; const network = state.v3VMProbe?.network as Record<string, any> || {}; const title = windows ? `${gpu.name || hardware.Cpu || 'Windows PC'} · ${selected?.manifest?.name || state.v3VMTemplate.imageId}` : String(data.title || 'Verified compute environment'); const description = windows ? `Verified ${selected?.manifest?.os?.distribution || 'Linux'} environment on ${gpu.name || hardware.Cpu || 'Windows hardware'} with ${Number(data.workspaceGiB)} GiB reserved workspace and ${network.downloadMbps || 0} Mbps measured download capacity.` : String(data.description || 'Verified compute environment'); const manifest = windows ? { runtimeBackend: 'wsl2', hostOS: 'windows', isolationClass: 'managed_wsl2_shared_host', capacityGuarantee: 'disclosed_best_effort', gpuAccessMode: state.v3VMTemplate.cuda ? 'shared_windows_driver' : 'none', resourceGuarantees: { singleLeasePerHost: true, diskReservation: 'hard', cpuMemory: 'configured_caps', gpu: state.v3VMTemplate.cuda ? 'shared_best_effort' : 'none', hardwarePassthroughExclusive: false }, environmentImageId: state.v3VMTemplate.imageId, environmentImageVersion: state.v3VMTemplate.imageVersion, environmentRoot: hold?.environmentRoot, validationReceipt: state.v3VMTemplate, hardware, network, publicHost: network.publicIP || network.ip || '', capacitySnapshot: hold?.capacity, diskReservation: hold?.reservation, price, limits: { minMinutes: 1, maxMinutes: 240 }, workspaceGiB: Number(data.workspaceGiB), region: [network.city, network.region, network.country].filter(Boolean).join(', ') } : { runtimeBackend: 'kvm_libvirt', isolationClass: 'hardware_virtualized', templateId: state.v3VMTemplate.templateId, template: state.v3VMTemplate, price }; await v3CreateProductAndListing({ productKind: 'compute', title, description, manifest }, price, true, windows) }) })
   resourceForm?.addEventListener('submit', (event) => {
     event.preventDefault()
     void run(async () => {
@@ -12057,8 +12324,11 @@ async function chooseOrderOption(plan: OrderPlan, option: OrderDraftOption) {
     await executePlanSelection(plan.planId, option.optionId)
     return
   }
-  const setup = !(await paymentPinConfigured())
-  state.pinStep = { action: { kind: 'select_plan', planId: plan.planId, optionId: option.optionId }, setup, pin: '', confirm: '' }
+  if (!(await paymentPinConfigured())) {
+    openPINSetupModal()
+    return
+  }
+  state.pinStep = { action: { kind: 'select_plan', planId: plan.planId, optionId: option.optionId }, setup: false, pin: '', confirm: '' }
   renderAll()
 }
 
@@ -12078,8 +12348,11 @@ async function chooseApproval(approval: Approval, approved: boolean) {
     await executeApproval(approval.approvalId, true)
     return
   }
-  const setup = !(await paymentPinConfigured())
-  state.pinStep = { action: { kind: 'approve', approvalId: approval.approvalId }, setup, pin: '', confirm: '' }
+  if (!(await paymentPinConfigured())) {
+    openPINSetupModal()
+    return
+  }
+  state.pinStep = { action: { kind: 'approve', approvalId: approval.approvalId }, setup: false, pin: '', confirm: '' }
   renderAll()
 }
 
@@ -12099,9 +12372,7 @@ async function submitPinStep() {
 
   setBusy(true)
   try {
-    if (step.setup) {
-      await invoke('set_payment_pin', { input: { pin: step.pin } })
-    }
+    if (step.setup) throw new Error('Create your Cloud payment PIN before continuing.')
     if (step.action.kind === 'select_plan') {
       await executePlanSelection(step.action.planId, step.action.optionId, step.pin, false)
     } else if (step.action.kind === 'approve') {
@@ -12175,8 +12446,11 @@ async function cancelOrderPlan(plan: OrderPlan) {
 }
 
 async function paymentPinConfigured() {
-  const status = await invoke<{ paymentPin?: { configured?: boolean } }>('payment_pin_status')
-  return status.paymentPin?.configured === true
+  if (state.cloudPaymentPINConfigured !== undefined) return state.cloudPaymentPINConfigured
+  const status = await invoke<CloudAuthState>('auth_status')
+  if (status.phase === 'needs_pin') state.cloudPaymentPINConfigured = false
+  else if (status.phase === 'authenticated' || status.phase === 'dock_link_retry' || (status.phase === 'offline' && status.authenticated)) state.cloudPaymentPINConfigured = true
+  return state.cloudPaymentPINConfigured === true
 }
 
 function localRequesterIds() {
@@ -12765,21 +13039,119 @@ function attachSellerStoreSummaryHandlers(root: ParentNode = fields.ledgerList) 
   })
 }
 
+let v3ActivityArchiveUndoTimer: number | undefined
+
+function archiveV3ActivityDisplay(displayId: string) {
+  const display = findV3ActivityDisplayRecord(displayId)
+  if (!display || display.bucket !== 'current' || !display.canArchive) return
+  const archivedAt = new Date().toISOString()
+  const marker: V3ActivityArchiveMarker = {
+    id: `activity-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`,
+    accountId: v3ActivityAccountScope(),
+    archiveKey: display.archiveKey,
+    role: display.role,
+    productKind: display.productKind,
+    archivedAt,
+    archivedThrough: display.baselineRecords.reduce((value, item) => sortTime(item.updatedAt) > sortTime(value) ? item.updatedAt : value, archivedAt),
+    records: display.sourceRecords.map((item) => ({ ...item })),
+    baselines: display.baselineRecords.map((item) => ({ ...item })),
+    detailAfterBySession: display.detailAfterBySession ? { ...display.detailAfterBySession } : undefined,
+  }
+  state.v3ActivityArchiveMarkers.push(marker)
+  state.v3ActivityArchiveUndo = { marker, side: display.role }
+  state.v3ActivityBucket[display.role] = 'history'
+  if (state.selectedV3ActivitySessionId === displayId) closeV3ActivityDetail()
+  scheduleSaveAppSettings(0)
+  if (v3ActivityArchiveUndoTimer !== undefined) window.clearTimeout(v3ActivityArchiveUndoTimer)
+  v3ActivityArchiveUndoTimer = window.setTimeout(() => {
+    if (state.v3ActivityArchiveUndo?.marker.id === marker.id) {
+      state.v3ActivityArchiveUndo = undefined
+      if (state.workOrderSide === display.role) renderLedger()
+    }
+  }, 12_000)
+  renderLedger()
+}
+
+function undoV3ActivityArchive(markerId: string) {
+  const marker = state.v3ActivityArchiveMarkers.find((item) => item.id === markerId)
+  if (!marker) return
+  state.v3ActivityArchiveMarkers = state.v3ActivityArchiveMarkers.filter((item) => item.id !== markerId)
+  if (state.v3ActivityArchiveUndo?.marker.id === markerId) state.v3ActivityArchiveUndo = undefined
+  state.v3ActivityBucket[marker.role] = 'current'
+  scheduleSaveAppSettings(0)
+  renderLedger()
+}
+
+function canRestoreV3ActivityArchive(record: V3ActivityDisplayRecord) {
+  if (!record.manuallyArchived || !record.archiveMarkerId || !v3ActivityNaturallyCurrent(record)) return false
+  const latest = state.v3ActivityArchiveMarkers
+    .filter((item) => item.accountId === v3ActivityAccountScope() && item.role === record.role && item.archiveKey === record.archiveKey)
+    .sort((a, b) => sortTime(b.archivedAt) - sortTime(a.archivedAt))[0]
+  return latest?.id === record.archiveMarkerId
+}
+
+function v3ActivityRetentionHint(record: V3ActivityDisplayRecord) {
+  if (record.manuallyArchived) return v3HistoryCopy('Manually archived', '已手动收纳')
+  if (record.bucket === 'history') {
+    if (record.productKind === 'compute') return v3HistoryCopy('Session ended', '会话已结束')
+    return v3HistoryCopy('24-hour window ended', '24 小时保留期已结束')
+  }
+  if (v3ActivityIsBusy(record)) {
+    if (record.productKind === 'api_operation') return v3HistoryCopy('Call in flight', '有调用进行中')
+    if (record.productKind === 'download') return v3HistoryCopy('Transfer in progress', '传输或校验中')
+    return v3HistoryCopy('Runtime active', '运行中')
+  }
+  const retainUntil = v3ActivityRetainUntil(record)
+  const remaining = Math.max(0, sortTime(retainUntil) - Date.now())
+  const minutes = Math.max(1, Math.ceil(remaining / 60_000))
+  const duration = minutes >= 60 ? `${Math.ceil(minutes / 60)}h` : `${minutes}m`
+  return record.productKind === 'download'
+    ? v3HistoryCopy(`Grant retained ${duration}`, `授权保留 ${duration}`)
+    : v3HistoryCopy(`Retained ${duration}`, `保留 ${duration}`)
+}
+
 function renderOrderActivitySidebar() {
-  const records = state.v3ActivitySessions[state.workOrderSide]
+  const side = state.workOrderSide
+  const currentRecords = v3ActivityDisplayRecords(side, 'current')
+  const historyRecords = v3ActivityDisplayRecords(side, 'history')
+  const historyOpen = state.v3ActivityBucket[side] === 'history'
+  const activeRecords = currentRecords.filter((record) => record.status !== 'completed')
+  const inactiveRecords = [...currentRecords.filter((record) => record.status === 'completed'), ...historyRecords]
+    .sort((a, b) => sortTime(b.updatedAt) - sortTime(a.updatedAt))
   const sideLabel = state.workOrderSide === 'buyer' ? t('orderSide.buyer') : t('orderSide.seller')
   setLedgerEmpty(false)
   fields.ledgerList.classList.remove('settings-list')
-  const loading = state.v3ActivityLoading[state.workOrderSide]
-  const error = state.v3ActivityErrors[state.workOrderSide]
+  const loading = state.v3ActivityLoading[side]
+  const error = state.v3ActivityErrors[side]
+  const historyToggleLabel = historyOpen
+    ? v3HistoryCopy('Collapse order history', '收起历史订单')
+    : v3HistoryCopy('Pull up order history', '上拉展开历史订单')
   fields.ledgerList.innerHTML = `
-    <section class="v3-history-sidebar" aria-label="${escapeAttr(sideLabel)} order history">
-      <div class="v3-history-list ${error && !records.length ? 'is-centered' : ''}" data-v3-history-list aria-live="polite">
-        ${loading && !records.length ? '<div class="v3-history-state is-loading"><span class="v3-history-state-spinner" aria-hidden="true"></span><strong>Loading history&hellip;</strong><small>Fetching your latest activity.</small></div>' : ''}
-        ${error ? `<div class="v3-history-state error" role="status"><span class="v3-history-state-icon" aria-hidden="true">${toolbarIcons.emptyContent}</span><p>Order history is currently unavailable.</p></div>` : ''}
-        ${!loading && !error && !records.length ? `<div class="v3-history-state is-empty"><span class="v3-history-state-icon" aria-hidden="true">${toolbarIcons.emptyContent}</span><strong>No ${escapeHTML(sideLabel.toLowerCase())} orders yet</strong><small>Purchases and resource sessions will appear here.</small></div>` : ''}
-        ${records.map(renderV3HistoryRow).join('')}
+    <section class="v3-history-sidebar ${historyOpen ? 'is-history-open' : ''}" aria-label="${escapeAttr(sideLabel)} order history">
+      <div class="v3-history-list-header">
+        <span><i aria-hidden="true"></i>${escapeHTML(v3HistoryCopy('Active orders', '活跃订单'))}</span><em>${activeRecords.length}</em>
       </div>
+      <div class="v3-history-list v3-history-active-list ${error && !activeRecords.length ? 'is-centered' : ''}" data-v3-active-order-list aria-live="polite">
+        ${loading && !activeRecords.length ? '<div class="v3-history-state is-compact is-loading"><span class="v3-history-state-spinner" aria-hidden="true"></span><strong>Loading orders&hellip;</strong></div>' : ''}
+        ${error ? `<div class="v3-history-state error" role="status"><span class="v3-history-state-icon" aria-hidden="true">${toolbarIcons.emptyContent}</span><p>Order history is currently unavailable.</p></div>` : ''}
+        ${!loading && !error && !activeRecords.length ? `<div class="v3-history-state is-compact is-empty"><span class="v3-history-state-icon" aria-hidden="true">${toolbarIcons.emptyContent}</span><strong>${escapeHTML(v3HistoryCopy('No active orders', '暂无活跃订单'))}</strong><small>${escapeHTML(v3HistoryCopy('New and in-progress orders will appear automatically.', '新的和进行中的订单会自动显示。'))}</small></div>` : ''}
+        ${activeRecords.map(renderV3HistoryRow).join('')}
+      </div>
+      <section class="v3-history-pull-drawer" data-v3-history-drawer>
+        <button class="v3-history-drawer-toggle" type="button" data-v3-history-toggle aria-label="${escapeAttr(historyToggleLabel)}" aria-expanded="${historyOpen}" aria-controls="v3-history-drawer-panel">
+          <span class="v3-history-drawer-label">
+            <i class="v3-history-drawer-chevron" aria-hidden="true"></i>
+            <strong>${escapeHTML(v3HistoryCopy('History', '历史记录'))}</strong>
+            <em>${inactiveRecords.length}</em>
+          </span>
+        </button>
+        <div class="v3-history-drawer-panel" id="v3-history-drawer-panel" ${historyOpen ? '' : 'inert aria-hidden="true"'}>
+          <div class="v3-history-list v3-history-archive-list" data-v3-history-list aria-live="polite">
+            ${!loading && !error && !inactiveRecords.length ? `<div class="v3-history-state is-compact is-empty"><span class="v3-history-state-icon" aria-hidden="true">${toolbarIcons.emptyContent}</span><strong>${escapeHTML(v3HistoryCopy('No history yet', '暂无历史记录'))}</strong><small>${escapeHTML(v3HistoryCopy('Completed and past orders will appear here.', '已完成和过往订单会显示在这里。'))}</small></div>` : ''}
+            ${inactiveRecords.map(renderV3HistoryRow).join('')}
+          </div>
+        </div>
+      </section>
     </section>
   `
   attachV3HistoryHandlers()
@@ -12792,9 +13164,9 @@ function v3ActivityKindLabel(kind: string) {
 }
 
 function v3ActivityStatusLabel(status: string) {
-  if (status === 'active') return 'Active'
-  if (status === 'needs_attention') return 'Needs review'
-  if (status === 'completed') return 'Completed'
+  if (status === 'active') return v3HistoryCopy('Active', '进行中')
+  if (status === 'needs_attention') return v3HistoryCopy('Needs review', '需要检查')
+  if (status === 'completed') return v3HistoryCopy('Completed', '已完成')
   return status.replaceAll('_', ' ')
 }
 
@@ -12804,27 +13176,46 @@ function v3AtomicMoney(value: number, asset = 'USDC') {
   return `${amount.toFixed(digits).replace(/\.?0+$/, '') || '0'} ${asset || 'USDC'}`
 }
 
-function renderV3HistoryRow(record: V3ActivitySession) {
-  const active = record.sessionId === state.selectedV3ActivitySessionId
+function renderV3HistoryRow(record: V3ActivityDisplayRecord) {
+  const active = record.displayId === state.selectedV3ActivitySessionId
   const statusLabel = v3ActivityStatusLabel(record.status)
   return `
-    <button class="v3-history-row ${active ? 'active' : ''}" type="button" data-v3-history-session="${escapeAttr(record.sessionId)}" title="${escapeAttr([record.productTitle, record.outcome, v3AtomicMoney(record.amountAtomic, record.asset), compactTimestamp(record.updatedAt)].join(' / '))}" aria-pressed="${active}">
-      <span class="v3-history-kind kind-${escapeAttr(record.productKind)}" aria-hidden="true">${v3ActivityKindLabel(record.productKind)}</span>
-      <span class="v3-history-copy">
-        <strong>${escapeHTML(record.productTitle || 'Resource session')}</strong>
-        <small>${escapeHTML(compactTimestamp(record.updatedAt))}</small>
-      </span>
-      <span class="v3-history-meta">
-        <span class="v3-history-amount">${escapeHTML(v3AtomicMoney(record.amountAtomic, record.asset))}</span>
-        <span class="v3-history-status ${escapeAttr(record.status)}"><i aria-hidden="true"></i>${escapeHTML(statusLabel)}</span>
-      </span>
-    </button>
+    <article class="v3-history-row-shell ${active ? 'active' : ''}">
+      <button class="v3-history-row" type="button" data-v3-history-record="${escapeAttr(record.displayId)}" title="${escapeAttr([record.productTitle, record.outcome, v3AtomicMoney(record.amountAtomic, record.asset), compactTimestamp(record.updatedAt)].join(' / '))}" aria-pressed="${active}">
+        <span class="v3-history-kind kind-${escapeAttr(record.productKind)}" aria-hidden="true">${v3ActivityKindLabel(record.productKind)}</span>
+        <span class="v3-history-copy">
+          <strong>${escapeHTML(record.productTitle || 'Resource session')}</strong>
+          <small>${escapeHTML([record.counterpartyLabel, v3ActivityRetentionHint(record)].filter(Boolean).join(' · '))}</small>
+        </span>
+        <span class="v3-history-meta">
+          <span class="v3-history-amount">${escapeHTML(v3AtomicMoney(record.amountAtomic, record.asset))}</span>
+          <span class="v3-history-status ${escapeAttr(record.status)}"><i aria-hidden="true"></i>${escapeHTML(statusLabel)}</span>
+        </span>
+      </button>
+    </article>
   `
 }
 
 function attachV3HistoryHandlers() {
-  fields.ledgerList.querySelectorAll<HTMLButtonElement>('[data-v3-history-session]').forEach((button) => {
-    button.addEventListener('click', () => selectV3ActivitySession(button.dataset.v3HistorySession || ''))
+  const sidebar = fields.ledgerList.querySelector<HTMLElement>('.v3-history-sidebar')
+  const toggle = fields.ledgerList.querySelector<HTMLButtonElement>('[data-v3-history-toggle]')
+  const drawerPanel = fields.ledgerList.querySelector<HTMLElement>('#v3-history-drawer-panel')
+  toggle?.addEventListener('click', () => {
+    const historyOpen = !sidebar?.classList.contains('is-history-open')
+    state.v3ActivityBucket[state.workOrderSide] = historyOpen ? 'history' : 'current'
+    sidebar?.classList.toggle('is-history-open', historyOpen)
+    toggle.setAttribute('aria-expanded', String(historyOpen))
+    toggle.setAttribute('aria-label', historyOpen
+      ? v3HistoryCopy('Collapse order history', '收起历史订单')
+      : v3HistoryCopy('Pull up order history', '上拉展开历史订单'))
+    if (drawerPanel) {
+      drawerPanel.inert = !historyOpen
+      if (historyOpen) drawerPanel.removeAttribute('aria-hidden')
+      else drawerPanel.setAttribute('aria-hidden', 'true')
+    }
+  })
+  fields.ledgerList.querySelectorAll<HTMLButtonElement>('[data-v3-history-record]').forEach((button) => {
+    button.addEventListener('click', () => selectV3ActivityDisplayRecord(button.dataset.v3HistoryRecord || ''))
   })
 }
 
@@ -14436,7 +14827,7 @@ function showToast(message: string) {
   }, TOAST_DURATION_MS)
 }
 
-function settingsTitles(): Record<SettingsView, { kicker: string; title: string }> {
+function settingsTitles(): Partial<Record<SettingsView, { kicker: string; title: string }>> {
   return {
     security: {
       kicker: state.language === 'zh' ? '设置' : 'Settings',
@@ -14447,7 +14838,7 @@ function settingsTitles(): Record<SettingsView, { kicker: string; title: string 
 
 function settingsViewForCardRole(role: AgentCardRole): SettingsView {
   void role
-  return 'security'
+  return 'agent-permissions'
 }
 
 function renderSettingsAgentCardPages() {
@@ -14460,20 +14851,182 @@ function renderSettingsAgentCardPages() {
 }
 
 function renderSettingsPanel() {
-  const meta = settingsTitles()[state.activeSettingsView]
-  fields.mainKicker.textContent = meta.kicker
+  const meta = settingsPageMeta()[state.activeSettingsView]
+  fields.mainKicker.textContent = sx('Settings', '设置')
   fields.decisionTitle.textContent = meta.title
   fields.decisionStep.textContent = 'settings'
-  app.querySelectorAll<HTMLButtonElement>('[data-settings-tab]').forEach((button) => {
-    const view = button.dataset.settingsTab as SettingsView
-    button.classList.toggle('active', view === state.activeSettingsView)
-    button.setAttribute('aria-pressed', String(view === state.activeSettingsView))
-  })
-  app.querySelectorAll<HTMLElement>('[data-settings-page]').forEach((page) => {
-    page.classList.toggle('hidden', page.dataset.settingsPage !== state.activeSettingsView)
-  })
-  renderArchiveRecords()
-  localize(fields.settingsView)
+  fields.settingsView.innerHTML = `
+    <header class="app-settings-head">
+      <div><span>${escapeHTML(meta.kicker)}</span><h1 id="app-settings-title">${escapeHTML(meta.title)}</h1><p>${escapeHTML(meta.description)}</p></div>
+      ${state.settingsStatusLoading ? '<span class="app-settings-refreshing" role="status"><i></i></span>' : ''}
+    </header>
+    ${state.settingsStatusError ? `<div class="app-settings-banner warning"><strong>${escapeHTML(sx('Some system details are unavailable', '部分系统信息暂不可用'))}</strong><span>${escapeHTML(state.settingsStatusError)}</span><button type="button" data-settings-action="refresh-status">${escapeHTML(sx('Retry', '重试'))}</button></div>` : ''}
+    <div class="app-settings-content" data-settings-page="${escapeAttr(state.activeSettingsView)}">${renderActiveSettingsPage()}</div>
+  `
+}
+
+function sx(english: string, chinese: string) {
+  return state.language === 'zh' ? chinese : english
+}
+
+function settingsPageMeta(): Record<SettingsView, { kicker: string; title: string; description: string }> {
+  return {
+    security: { kicker: sx('SECURITY', '安全'), title: sx('Security', '安全'), description: sx('Review account protection, runtime health, version, logs, and Technical Preview update status.', '查看账户保护、运行状态、版本、日志与技术预览更新状态。') },
+    general: { kicker: sx('PREFERENCES', '偏好'), title: sx('General', '通用'), description: sx('Choose how Exora Dock looks, starts, and behaves as a desktop application.', '设置 Exora Dock 的语言、外观、启动方式与桌面行为。') },
+    'account-security': { kicker: sx('ACCOUNT', '账户'), title: sx('Account & Security', '账户与安全'), description: sx('Review your Cloud identity and protect sensitive account actions.', '查看 Cloud 账户状态并保护涉及资金与身份的敏感操作。') },
+    'agent-permissions': { kicker: sx('AGENT ACCESS', 'AGENT 访问'), title: sx('Agent Connections & Permissions', 'Agent 连接与权限'), description: sx('Connect local Agent clients to Dock and keep spending behind explicit boundaries.', '将本地 Agent 客户端连接到 Dock，并为消费与外部副作用保留明确边界。') },
+    notifications: { kicker: sx('PREFERENCES', '偏好'), title: sx('Notifications', '通知'), description: sx('Choose which approvals, transactions, and runtime events deserve your attention.', '选择需要提醒你的审批、交易、安全与运行时事件。') },
+    'data-storage': { kicker: sx('LOCAL DATA', '本地数据'), title: sx('Data & Storage', '数据与存储'), description: sx('Inspect local usage, choose download locations, and clear only disposable data.', '查看本地占用、设置下载目录，并仅清理可安全移除的数据。') },
+    'system-about': { kicker: sx('SYSTEM', '系统'), title: sx('System & About', '系统与关于'), description: sx('Check Dock, Cloud, component versions, updates, and privacy-safe diagnostics.', '检查 Dock、Cloud、组件版本、更新与隐私安全的诊断信息。') },
+  }
+}
+
+function renderActiveSettingsPage() {
+  if (state.activeSettingsView === 'general') return renderGeneralSettings()
+  if (state.activeSettingsView === 'account-security') return renderAccountSettings()
+  if (state.activeSettingsView === 'agent-permissions') return renderAgentSettings()
+  if (state.activeSettingsView === 'notifications') return renderNotificationSettings()
+  if (state.activeSettingsView === 'data-storage') return renderDataSettings()
+  return renderSystemSettings()
+}
+
+function settingsSection(kicker: string, title: string, description: string, rows: string) {
+  return `<section class="app-settings-section"><div class="app-settings-section-head"><span>${escapeHTML(kicker)}</span><h2>${escapeHTML(title)}</h2><p>${escapeHTML(description)}</p></div><div class="app-setting-list">${rows}</div></section>`
+}
+
+function settingRow(iconMarkup: string, title: string, description: string, control: string, className = '') {
+  return `<div class="app-setting-row ${className}"><span class="app-setting-icon" aria-hidden="true">${iconMarkup}</span><div class="app-setting-copy"><strong>${escapeHTML(title)}</strong><p>${escapeHTML(description)}</p></div><div class="app-setting-control">${control}</div></div>`
+}
+
+function settingSwitch(key: string, checked: boolean, label: string) {
+  return `<label class="app-setting-switch" title="${escapeAttr(label)}"><input type="checkbox" data-setting-switch="${escapeAttr(key)}" ${checked ? 'checked' : ''}><span aria-hidden="true"></span><em>${escapeHTML(label)}</em></label>`
+}
+
+function settingSegment(key: string, options: Array<{ value: string; label: string }>, active: string) {
+  return `<div class="app-setting-segment" role="group">${options.map((option) => `<button type="button" data-setting-segment="${escapeAttr(key)}" data-setting-value="${escapeAttr(option.value)}" class="${option.value === active ? 'active' : ''}" aria-pressed="${option.value === active}">${escapeHTML(option.label)}</button>`).join('')}</div>`
+}
+
+function settingButton(action: string, label: string, tone: 'primary' | 'soft' | 'outline' | 'danger' = 'outline', extra = '') {
+  return `<button class="app-setting-button ${tone}" type="button" data-settings-action="${escapeAttr(action)}" ${extra}>${escapeHTML(label)}</button>`
+}
+
+function settingStatus(label: string, tone: 'running' | 'success' | 'warning' | 'danger' | 'neutral' = 'neutral') {
+  return `<span class="app-setting-status ${tone}"><i aria-hidden="true"></i>${escapeHTML(label)}</span>`
+}
+
+function renderGeneralSettings() {
+  const preferenceRows = [
+    settingRow(icon(Languages), sx('Language', '语言'), sx('Applies to settings, dialogs, the tray menu, and system notifications.', '应用于设置、对话框、托盘菜单与系统通知。'), settingSegment('language', [{ value: 'en', label: 'English' }, { value: 'zh', label: '中文' }], state.language)),
+    settingRow(icon(Moon), sx('Appearance', '外观'), sx('Follow the operating system or keep a fixed light or dark appearance.', '跟随操作系统，或固定使用浅色或深色外观。'), settingSegment('theme', [{ value: 'system', label: sx('System', '系统') }, { value: 'light', label: sx('Light', '浅色') }, { value: 'dark', label: sx('Dark', '深色') }], state.theme)),
+  ].join('')
+  const startupRows = [
+    settingRow(icon(Settings2), sx('Launch at login', '开机启动'), sx('Start Exora Dock after you sign in to this computer.', '登录此电脑后自动启动 Exora Dock。'), settingSwitch('launchAtLogin', state.launchAtLogin, sx('Launch at login', '开机启动'))),
+    settingRow(icon(Minus), sx('Start minimized', '启动后最小化'), sx('Open quietly in the tray instead of showing the workspace.', '静默进入托盘，不立即显示工作区。'), settingSwitch('startMinimized', state.startMinimized, sx('Start minimized', '启动后最小化'))),
+    settingRow(icon(X), sx('When the window closes', '关闭窗口时'), sx('Keep Dock available from the tray or quit the application completely.', '继续在托盘运行 Dock，或完全退出应用。'), settingSegment('closeBehavior', [{ value: 'tray', label: sx('Tray', '托盘') }, { value: 'quit', label: sx('Quit', '退出') }], state.closeBehavior)),
+    settingRow(icon(Activity), sx('Start Dock with the app', '随应用启动 Dock'), sx('Bring the local MCP and REST runtime online automatically.', '自动启动本地 MCP 与 REST 运行时。'), settingSwitch('startDockOnLaunch', state.startDockOnLaunch, sx('Start Dock', '启动 Dock'))),
+  ].join('')
+  return settingsSection(sx('DISPLAY', '显示'), sx('Language & appearance', '语言与外观'), sx('These choices take effect immediately.', '这些设置会立即生效。'), preferenceRows)
+    + settingsSection(sx('DESKTOP', '桌面'), sx('Startup & window behavior', '启动与窗口行为'), sx('System-level changes are applied by the Electron main process.', '系统级行为由 Electron 主进程统一执行。'), startupRows)
+}
+
+function renderAccountSettings() {
+  const email = state.authAccount?.email || sx('Workspace preview', '工作区预览')
+  const verified = Boolean(state.authAccount?.emailVerifiedAt)
+  const secure = state.cloudAuthState?.storageAvailable ?? state.settingsSystemStatus?.secureStorageAvailable
+  const identityRows = [
+    settingRow(icon(BadgeCheck), sx('Cloud account', 'Cloud 账户'), email, verified ? settingStatus(sx('Verified', '已验证'), 'success') : settingStatus(sx('Verification unknown', '验证状态未知'), 'warning')),
+    settingRow(icon(KeyRound), sx('Login password', '登录密码'), sx('Reset your password through a one-time code sent to the verified email.', '通过发送到已验证邮箱的一次性验证码重置密码。'), settingButton('change-password', sx('Change password', '修改密码'), 'soft')),
+    settingRow(icon(ShieldCheck), sx('Payment PIN', '支付 PIN'), state.cloudPaymentPINConfigured === false ? sx('A six-digit PIN is still required before sensitive payments.', '执行敏感支付前仍需设置六位 PIN。') : sx('Used to approve spending, withdrawals, and other sensitive actions.', '用于批准消费、提现与其他敏感操作。'), `<div class="app-setting-actions">${settingStatus(state.cloudPaymentPINConfigured === false ? sx('Not set', '未设置') : sx('Protected', '已保护'), state.cloudPaymentPINConfigured === false ? 'warning' : 'success')}${settingButton('change-pin', sx('Change', '修改'), 'outline')}${settingButton('reset-pin', sx('Reset', '重置'), 'outline')}</div>`),
+    settingRow(icon(Archive), sx('Secure storage', '安全存储'), sx('Sessions use the operating system credential vault; secrets never enter the settings file.', '会话使用操作系统凭据保险库；密钥不会写入普通设置文件。'), settingStatus(secure === false ? sx('Unavailable', '不可用') : sx('Available', '可用'), secure === false ? 'danger' : 'success')),
+  ].join('')
+  const accountRows = [
+    settingRow(icon(LogOut), sx('Sign out', '退出登录'), sx('Remove the Cloud session from this device while keeping local non-secret preferences.', '移除此设备上的 Cloud 会话，并保留本地非敏感偏好。'), settingButton('sign-out', sx('Sign out', '退出登录'), 'outline')),
+    settingRow(icon(ShieldAlert), sx('Delete account', '删除账户'), sx('Account deletion requires a Cloud support review and permanently removes account access.', '账户删除需要 Cloud 支持审核，并将永久移除账户访问权限。'), settingButton('delete-account', sx('Request deletion', '申请删除'), 'danger'), 'danger'),
+  ].join('')
+  return settingsSection(sx('IDENTITY', '身份'), sx('Identity & credentials', '身份与凭据'), sx('Exora Cloud owns account credentials; Dock only shows their state.', '账户凭据由 Exora Cloud 管理，Dock 只展示状态。'), identityRows)
+    + settingsSection(sx('ACCOUNT ACTIONS', '账户操作'), sx('Session & account', '会话与账户'), sx('Destructive actions always require confirmation.', '破坏性操作始终需要二次确认。'), accountRows)
+}
+
+function renderAgentSettings() {
+  const runtime = state.settingsSystemStatus?.runtime || state.appStatus
+  const healthy = runtime?.daemon === 'healthy'
+  const policy = state.walletStatus?.agentSpendPolicy
+  const spendText = policy?.enabled
+    ? sx(`Enabled · ${formatWalletAtomic(Number(policy.periodLimitAtomic || 0), walletUSDCDecimals())} USDC / 24h`, `已启用 · ${formatWalletAtomic(Number(policy.periodLimitAtomic || 0), walletUSDCDecimals())} USDC / 24 小时`)
+    : sx('Disabled · every purchase requires human approval', '未启用 · 每笔消费均需人工批准')
+  const connectionRows = [
+    settingRow(icon(Activity), sx('Dock MCP runtime', 'Dock MCP 运行时'), runtime?.message || sx('Local MCP and REST endpoints are supervised by Exora Dock.', '本地 MCP 与 REST 端点由 Exora Dock 监管。'), `<div class="app-setting-actions">${settingStatus(healthy ? sx('Running', '运行中') : sx('Offline', '离线'), healthy ? 'running' : 'danger')}${settingButton('test-connection', sx('Test', '测试'), 'soft')}</div>`),
+    settingRow(icon(Copy), sx('Client configurations', '客户端配置'), sx('Copy a ready-to-use configuration without exposing tokens or account credentials.', '复制可直接使用的配置，不暴露 Token 或账户凭据。'), `<div class="app-setting-actions compact">${settingButton('copy-config', 'Codex', 'outline', 'data-settings-command="copy_mcp_command"')}${settingButton('copy-config', 'Claude', 'outline', 'data-settings-command="copy_mcp_command"')}${settingButton('copy-config', 'OpenCode', 'outline', 'data-settings-command="copy_opencode_config"')}${settingButton('copy-config', sx('Generic', '通用'), 'outline', 'data-settings-command="copy_mcp_command"')}</div>`),
+    settingRow(icon(FolderOpen), 'Manifest', sx('Open the read-only discovery document used by local Agent clients.', '打开本地 Agent 客户端使用的只读发现文档。'), settingButton('open-manifest', sx('Open manifest', '打开 Manifest'), 'outline')),
+  ].join('')
+  const permissionRows = [
+    settingRow(icon(Hand), sx('Default approval policy', '默认审批策略'), sx('Spending, renewals, and APIs with external side effects require human approval by default.', '消费、续费与具有外部副作用的 API 默认要求人工批准。'), settingStatus(sx('Human approval', '人工批准'), 'warning')),
+    settingRow(icon(Wallet), sx('Agent spending limit', 'Agent 消费限额'), spendText, settingButton('open-agent-limit', sx('Open Wallet', '前往 Wallet'), 'soft')),
+  ].join('')
+  return settingsSection(sx('CONNECTION', '连接'), sx('Dock & MCP', 'Dock 与 MCP'), sx('Dock publishes one local connection surface for supported Agent clients.', 'Dock 为受支持的 Agent 客户端提供统一的本地连接入口。'), connectionRows)
+    + settingsSection(sx('BOUNDARIES', '边界'), sx('Approval & spending', '审批与消费'), sx('Wallet remains the source of truth for balances and spending limits.', '余额与消费限额仍以 Wallet 为唯一事实来源。'), permissionRows)
+}
+
+function renderNotificationSettings() {
+  const supported = state.settingsSystemStatus?.notificationsSupported
+  const permissionRows = settingRow(icon(Bell), sx('System notifications', '系统通知'), supported === false ? sx('This operating system does not expose notifications to Exora Dock.', '此操作系统未向 Exora Dock 提供通知能力。') : sx('Send a test notification without changing your category preferences.', '发送测试通知，不改变你的分类偏好。'), `<div class="app-setting-actions">${settingStatus(supported === false ? sx('Unavailable', '不可用') : sx('Available', '可用'), supported === false ? 'danger' : 'success')}${settingButton('test-notification', sx('Send test', '发送测试'), 'soft', supported === false ? 'disabled' : '')}</div>`)
+  const definitions: Array<[NotificationPreferenceKey, string, string, string, string]> = [
+    ['approvals', 'Approvals', '审批', 'Agent actions waiting for your decision.', '等待你决定的 Agent 操作。'],
+    ['purchases', 'Purchases', '购买', 'Purchase completion, failure, and refund events.', '购买完成、失败与退款事件。'],
+    ['downloads', 'Downloads', '下载', 'Download readiness, progress failures, and expiry.', '下载就绪、传输失败与授权到期。'],
+    ['leases', 'Leases & renewals', '租约与续费', 'Compute lease lifecycle and renewal requests.', '计算租约生命周期与续费请求。'],
+    ['wallet', 'Balance & withdrawals', '余额与提现', 'Low balance, deposits, and withdrawal status.', '余额不足、充值与提现状态。'],
+    ['security', 'Security events', '安全事件', 'Sign-in, credential, PIN, and account protection events.', '登录、凭据、PIN 与账户保护事件。'],
+    ['sellerOrders', 'Seller orders', '卖家订单', 'New orders and buyer actions that need a provider response.', '需要 Provider 响应的新订单与买家操作。'],
+    ['sellerListings', 'Listing health', 'Listing 状态', 'Listing pauses, validation failures, and availability changes.', 'Listing 暂停、验证失败与可用性变化。'],
+    ['runtime', 'Runtime & settlement', '运行时与结算', 'Dock, Worker, provider runtime, and settlement failures.', 'Dock、Worker、Provider 运行时与结算异常。'],
+  ]
+  const categoryRows = definitions.map(([key, en, zh, enDetail, zhDetail]) => settingRow(icon(key === 'security' ? ShieldCheck : key === 'runtime' ? Activity : Bell), sx(en, zh), sx(enDetail, zhDetail), settingSwitch(`notification.${key}`, state.notifications[key], sx(en, zh)))).join('')
+  return settingsSection(sx('PERMISSION', '权限'), sx('Delivery', '通知能力'), sx('If system permission is denied, critical events remain visible inside the app.', '如果系统权限被拒绝，关键事件仍会保留在应用内。'), permissionRows)
+    + settingsSection(sx('CATEGORIES', '分类'), sx('Events to notify', '需要通知的事件'), sx('Changes save immediately on this device.', '更改会立即保存在此设备上。'), categoryRows)
+}
+
+function renderDataSettings() {
+  const storage = state.settingsSystemStatus?.storage
+  const usageRows = [
+    settingRow(icon(Archive), sx('Application data', '应用数据'), `${formatByteSize(storage?.dataBytes)} · ${sx('Cloud history and purchased/provider files are not cleared here.', 'Cloud 历史与购买文件、Provider 资源不会在此清理。')}`, settingButton('open-data', sx('Open', '打开'), 'outline')),
+    settingRow(icon(Info), sx('Logs', '日志'), `${formatByteSize(storage?.logsBytes)} · ${sx('Operational logs used for local troubleshooting.', '用于本地故障排查的运行日志。')}`, `<div class="app-setting-actions">${settingButton('open-logs', sx('Open', '打开'), 'outline')}${settingButton('clear-logs', sx('Clear', '清理'), 'outline')}</div>`),
+    settingRow(icon(RefreshCw), sx('Cache & temporary files', '缓存与临时文件'), `${formatByteSize(Number(storage?.cacheBytes || 0) + Number(storage?.tempBytes || 0))} · ${sx('Safe to recreate; credentials and purchased files are excluded.', '可安全重建；凭据与购买文件不在此范围。')}`, `<div class="app-setting-actions">${settingButton('clear-cache', sx('Clear cache', '清理缓存'), 'soft')}${settingButton('clear-temporary', sx('Clear temporary', '清理临时文件'), 'outline')}</div>`),
+  ].join('')
+  const downloads = state.downloadDirectory || state.settingsSystemStatus?.paths?.downloads || sx('System Downloads folder', '系统下载目录')
+  const locationRows = settingRow(icon(Folder), sx('Default download directory', '默认下载目录'), downloads, `<div class="app-setting-actions">${settingButton('open-downloads', sx('Open', '打开'), 'outline')}${settingButton('choose-downloads', sx('Choose', '选择'), 'soft')}</div>`)
+  return settingsSection(sx('USAGE', '占用'), sx('Local storage', '本地存储'), sx('Only disposable local data can be cleared from this page.', '此页面只能清理可丢弃的本地数据。'), usageRows)
+    + settingsSection(sx('LOCATIONS', '位置'), sx('Downloads', '下载'), sx('The selected path is stored as a normal preference; file access remains local.', '所选路径作为普通偏好保存，文件访问仍仅发生在本地。'), locationRows)
+}
+
+function renderSystemSettings() {
+  const system = state.settingsSystemStatus
+  const runtime = system?.runtime || state.appStatus
+  const healthy = runtime?.daemon === 'healthy'
+  const cloudURL = system?.cloudURL || state.cloudAuthState?.cloudURL || sx('Not configured', '未配置')
+  const update = system?.update
+  const statusRows = [
+    settingRow(icon(Activity), 'Dock', runtime?.message || sx('Local MCP and REST runtime.', '本地 MCP 与 REST 运行时。'), `<div class="app-setting-actions">${settingStatus(healthy ? sx('Running', '运行中') : sx('Offline', '离线'), healthy ? 'running' : 'danger')}${healthy ? settingButton('stop-dock', sx('Stop', '停止'), 'outline') : settingButton('start-dock', sx('Start', '启动'), 'soft')}${settingButton('restart-dock', sx('Restart', '重启'), 'outline')}</div>`),
+    settingRow(icon(Network), 'Cloud', cloudURL, settingStatus(state.cloudAuthState?.offline ? sx('Offline', '离线') : sx('Connected', '已连接'), state.cloudAuthState?.offline ? 'danger' : 'running')),
+    settingRow(icon(Info), sx('Components', '组件版本'), `Exora Dock ${system?.appVersion || '—'} · Electron ${system?.electronVersion || '—'} · ${system?.platform || '—'} ${system?.arch || ''}`, settingStatus(system?.packaged === false ? sx('Development', '开发构建') : sx('Stable', '稳定版'), 'neutral')),
+  ].join('')
+  const updateRows = settingRow(icon(RefreshCw), sx('Automatic updates', '自动更新'), update?.message || sx('Stable channel updates install only when no active task would be interrupted.', '稳定通道更新只会在不打断活动任务时安装。'), `<div class="app-setting-actions">${settingSwitch('autoUpdate', state.autoUpdate, sx('Automatic updates', '自动更新'))}${settingButton('check-update', sx('Check now', '立即检查'), 'soft')}</div>`)
+  const supportRows = [
+    settingRow(icon(Archive), sx('Redacted diagnostics', '脱敏诊断包'), sx('Exports versions, runtime state, and storage metrics. PINs, tokens, keys, authorization headers, and account details are excluded.', '导出版本、运行状态与存储指标；排除 PIN、Token、密钥、Authorization Header 与账户详情。'), settingButton('export-diagnostics', sx('Export', '导出'), 'soft')),
+    settingRow(icon(ShieldCheck), sx('Legal & privacy', '许可证与隐私'), sx('Review the software license and Exora privacy architecture.', '查看软件许可证与 Exora 隐私架构说明。'), `<div class="app-setting-actions">${settingButton('open-license', sx('License', '许可证'), 'outline')}${settingButton('open-privacy', sx('Privacy', '隐私'), 'outline')}</div>`),
+  ].join('')
+  return settingsSection(sx('HEALTH', '健康状态'), sx('Services & versions', '服务与版本'), sx('Cloud URL is read-only in production builds.', '生产环境中的 Cloud URL 仅可读。'), statusRows)
+    + settingsSection(sx('UPDATES', '更新'), sx('Stable channel', '稳定通道'), sx('Update availability depends on the configured release distribution.', '更新可用性取决于当前发行版所配置的发布源。'), updateRows)
+    + settingsSection(sx('SUPPORT', '支持'), sx('Diagnostics & policy', '诊断与政策'), sx('Advanced details are disclosed only when you ask for them.', '仅在你主动请求时展示高级信息。'), supportRows)
+}
+
+function formatByteSize(value: unknown) {
+  const bytes = Number(value || 0)
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)))
+  const amount = bytes / (1024 ** index)
+  return `${amount >= 10 || index === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[index]}`
 }
 
 function renderArchiveRecords() {
@@ -14990,11 +15543,11 @@ function renderSettingsSurface() {
   fields.appShell.classList.toggle('settings-mode', state.settingsOpen)
   fields.settingsButton.classList.toggle('active', state.settingsOpen)
   fields.settingsButton.setAttribute('aria-pressed', String(state.settingsOpen))
-  if (state.settingsOpen) localize(fields.settingsView)
+  if (state.settingsOpen) renderSettingsPanel()
 }
 
 function openSettings(view?: SettingsView) {
-  state.activeSettingsView = view || 'security'
+  state.activeSettingsView = view || 'general'
   closeMCPInfoModal()
   closeWalletModal()
   closeOrderSearch()
@@ -15006,6 +15559,36 @@ function openSettings(view?: SettingsView) {
   renderSettingsSurface()
   renderLedger()
   renderProfileSummary()
+  void refreshSettingsStatus()
+}
+
+async function refreshSettingsStatus() {
+  if (state.settingsStatusLoading) return
+  state.settingsStatusLoading = true
+  state.settingsStatusError = undefined
+  if (state.settingsOpen) renderSettingsPanel()
+  try {
+    if (hasDesktopBridge()) state.settingsSystemStatus = await invoke<DesktopSystemStatus>('system_settings_status')
+    else state.settingsSystemStatus = previewSystemSettingsStatus()
+    if (state.settingsSystemStatus.runtime) state.appStatus = state.settingsSystemStatus.runtime
+  } catch (error) {
+    state.settingsStatusError = humanizeError(error)
+  } finally {
+    state.settingsStatusLoading = false
+    if (state.settingsOpen) renderSettingsPanel()
+  }
+}
+
+function previewSystemSettingsStatus(): DesktopSystemStatus {
+  return {
+    appVersion: '0.1.0', electronVersion: 'preview', platform: navigator.platform || 'web', arch: '—', packaged: false,
+    secureStorageAvailable: true, notificationsSupported: 'Notification' in window, notificationPermission: 'preview',
+    paths: { data: 'ExoraDock/data', logs: 'ExoraDock/logs', downloads: state.downloadDirectory || sx('System Downloads folder', '系统下载目录') },
+    storage: { dataBytes: 18_874_368, logsBytes: 786_432, cacheBytes: 5_242_880, tempBytes: 262_144 },
+    runtime: state.appStatus || { docker: 'native', container: 'running', daemon: 'healthy', image: 'available', containerName: 'exora-dockd', imageTag: 'preview', baseUrl: 'http://127.0.0.1:8080', dataDir: '', configPath: '', discoveryPath: '', mcpCommand: '', agentPrompt: '', opencodeConfig: '', message: sx('Dock is ready for local Agent connections.', 'Dock 已准备好接受本地 Agent 连接。') },
+    cloudURL: state.cloudAuthState?.cloudURL || 'https://cloud.exora.network',
+    update: { supported: false, channel: 'stable', automatic: state.autoUpdate, state: 'development', message: sx('Updates are disabled in the browser preview.', '浏览器预览中不启用更新。') },
+  }
 }
 
 function returnFromSettings() {
@@ -15017,28 +15600,70 @@ function returnFromSettings() {
 
 function renderPINSettingsModal() {
   const setup = state.pinSettingsMode === 'setup'
+  const step = state.pinSettingsSetupStep
+  const current = !setup && step === 'current'
+  const confirming = step === 'confirmation'
+  const stepNumber = setup ? (confirming ? 2 : 1) : current ? 1 : step === 'entry' ? 2 : 3
+  const stepCount = setup ? 2 : 3
   fields.pinSettingsModal.classList.toggle('hidden', !state.pinSettingsModalOpen)
   fields.pinSettingsModal.setAttribute('aria-hidden', String(!state.pinSettingsModalOpen))
+  fields.pinSettingsModal.dataset.pinStepCount = String(stepCount)
   fields.pinSettingsEyebrow.textContent = setup ? 'One last security step' : 'Account security'
-  fields.pinSettingsTitle.textContent = setup ? 'Create your payment PIN' : 'Change payment PIN'
+  fields.pinSettingsTitle.textContent = setup
+    ? confirming ? 'Confirm your payment PIN' : 'Create your payment PIN'
+    : current ? 'Change payment PIN' : confirming ? 'Confirm your new PIN' : 'Choose a new PIN'
   fields.pinSettingsDetail.textContent = setup
-    ? 'Choose and confirm a six-digit PIN for payments and other sensitive actions.'
-    : 'Enter your current PIN, then choose a new six-digit PIN.'
-  fields.pinSettingsCurrent.classList.toggle('hidden', setup)
-  const currentPIN = fields.pinSettingsForm.elements.namedItem('currentPIN') as HTMLInputElement
-  currentPIN.required = !setup
-  currentPIN.disabled = setup || state.pinSettingsBusy
-  fields.pinSettingsPINLabel.textContent = setup ? 'Payment PIN' : 'New PIN'
-  fields.pinSettingsConfirmLabel.textContent = setup ? 'Confirm payment PIN' : 'Confirm new PIN'
-  fields.pinSettingsSubmit.textContent = setup ? 'Create PIN' : 'Change PIN'
-  fields.pinSettingsCancel.classList.toggle('hidden', setup)
-  fields.pinSettingsModal.querySelectorAll<HTMLElement>('.app-modal-close, .app-modal-scrim').forEach((control) => control.classList.toggle('hidden', setup))
-  fields.pinSettingsFooter.textContent = setup ? 'Your PIN is stored only as a protected Cloud credential.' : 'PIN changes apply to sensitive account actions.'
-  fields.pinSettingsEscape.classList.toggle('hidden', setup)
-  fields.pinSettingsSubmit.disabled = state.pinSettingsBusy
-  fields.pinSettingsForm.querySelectorAll<HTMLInputElement>('input').forEach((input) => {
-    if (input.name !== 'currentPIN') input.disabled = state.pinSettingsBusy
+    ? confirming
+      ? 'Enter the same six-digit PIN again to make sure it was recorded correctly.'
+      : 'Choose a six-digit PIN for payments and other sensitive actions.'
+    : current
+      ? 'Verify your current six-digit PIN before choosing a replacement.'
+      : confirming
+        ? 'Enter the new six-digit PIN once more to make sure it was recorded correctly.'
+        : 'Choose the six-digit PIN you want to use from now on.'
+  fields.pinSettingsProgressLabel.textContent = `Step ${stepNumber} of ${stepCount}`
+  const progressSteps = Array.from(fields.pinSettingsProgress.querySelectorAll<HTMLElement>('i'))
+  progressSteps.forEach((progressStep, index) => {
+    progressStep.classList.toggle('active', index === stepNumber - 1)
+    progressStep.classList.toggle('complete', index < stepNumber - 1)
+    progressStep.hidden = index >= stepCount
   })
+  fields.pinSettingsCodeInput.disabled = state.pinSettingsBusy
+  fields.pinSettingsCodeInput.required = true
+  fields.pinSettingsCodeInput.autocomplete = current ? 'current-password' : 'new-password'
+  fields.pinSettingsCodeInput.setAttribute('aria-label', current
+    ? 'Current six digit payment PIN'
+    : confirming ? 'Confirm new six digit payment PIN' : 'New six digit payment PIN')
+  fields.pinSettingsCodeLabel.textContent = current
+    ? 'Current PIN'
+    : confirming ? (setup ? 'Confirm payment PIN' : 'Confirm new PIN') : (setup ? 'Payment PIN' : 'New PIN')
+  fields.pinSettingsStepHint.textContent = current
+    ? 'Enter the PIN you currently use to approve payments.'
+    : confirming ? 'Enter the same PIN again.' : 'Use exactly six digits.'
+  fields.pinSettingsSubmit.textContent = confirming ? (setup ? 'Create PIN' : 'Change PIN') : 'Continue'
+  const onFirstStep = (setup && step === 'entry') || current
+  fields.pinSettingsCancel.textContent = onFirstStep ? (setup ? 'Not now' : 'Cancel') : 'Back'
+  fields.pinSettingsFooter.textContent = setup
+    ? 'Payments stay locked until you create a PIN.'
+    : 'Your PIN protects sensitive account actions.'
+  fields.pinSettingsSubmit.disabled = state.pinSettingsBusy
+  renderPINSettingsCodeInput()
+}
+
+function renderPINSettingsCodeInput() {
+  const control = fields.pinSettingsCodeControl
+  const input = fields.pinSettingsCodeInput
+  const cells = Array.from(control.querySelectorAll<HTMLElement>('.wallet-code-cells > i'))
+  const digits = input.value.replace(/\D/g, '').slice(0, cells.length)
+  if (input.value !== digits) input.value = digits
+  const focused = document.activeElement === input
+  const activeIndex = Math.min(digits.length, cells.length - 1)
+  cells.forEach((cell, index) => {
+    cell.classList.toggle('filled', index < digits.length)
+    cell.classList.toggle('active', focused && index === activeIndex)
+  })
+  control.classList.toggle('complete', digits.length === cells.length)
+  control.classList.toggle('disabled', input.disabled)
 }
 
 function openPINSettingsModal() {
@@ -15050,10 +15675,12 @@ function openPINSettingsModal() {
   fields.pinSettingsMessage.textContent = ''
   fields.pinSettingsMessage.dataset.tone = ''
   state.pinSettingsMode = 'change'
+  state.pinSettingsSetupStep = 'current'
+  state.pinSettingsCurrentValue = ''
+  state.pinSettingsSetupValue = ''
   state.pinSettingsModalOpen = true
   renderPINSettingsModal()
-  window.setTimeout(() => fields.pinSettingsForm.elements.namedItem('currentPIN') instanceof HTMLInputElement
-    && (fields.pinSettingsForm.elements.namedItem('currentPIN') as HTMLInputElement).focus(), 0)
+  window.setTimeout(() => fields.pinSettingsCodeInput.focus(), 0)
 }
 
 function openPINSetupModal() {
@@ -15065,19 +15692,25 @@ function openPINSetupModal() {
   fields.pinSettingsMessage.textContent = ''
   fields.pinSettingsMessage.dataset.tone = ''
   state.pinSettingsMode = 'setup'
+  state.pinSettingsSetupStep = 'entry'
+  state.pinSettingsCurrentValue = ''
+  state.pinSettingsSetupValue = ''
   state.pinSettingsModalOpen = true
   renderPINSettingsModal()
-  window.setTimeout(() => (fields.pinSettingsForm.elements.namedItem('newPIN') as HTMLInputElement | null)?.focus(), 0)
+  window.setTimeout(() => fields.pinSettingsCodeInput.focus(), 0)
 }
 
 function closePINSettingsModal() {
-  if (!state.pinSettingsModalOpen || state.pinSettingsBusy || state.pinSettingsMode === 'setup') return
+  if (!state.pinSettingsModalOpen || state.pinSettingsBusy) return
   dismissPINSettingsModal()
 }
 
 function dismissPINSettingsModal() {
   state.pinSettingsModalOpen = false
   state.pinSettingsMode = 'change'
+  state.pinSettingsSetupStep = 'current'
+  state.pinSettingsCurrentValue = ''
+  state.pinSettingsSetupValue = ''
   fields.pinSettingsForm.reset()
   fields.pinSettingsMessage.textContent = ''
   fields.pinSettingsMessage.dataset.tone = ''
@@ -15086,27 +15719,46 @@ function dismissPINSettingsModal() {
 
 async function submitPINSettings() {
   if (state.pinSettingsBusy) return
-  const data = Object.fromEntries(new FormData(fields.pinSettingsForm).entries()) as Record<string, string>
   const setup = state.pinSettingsMode === 'setup'
-  if ((!setup && !/^\d{6}$/.test(data.currentPIN || '')) || !/^\d{6}$/.test(data.newPIN || '')) {
-    fields.pinSettingsMessage.textContent = 'PINs must contain exactly six digits.'
+  const entered = fields.pinSettingsCodeInput.value.trim()
+  if (!/^\d{6}$/.test(entered)) {
+    fields.pinSettingsMessage.textContent = 'Enter all six digits before continuing.'
     fields.pinSettingsMessage.dataset.tone = 'error'
     return
   }
-  if (data.newPIN !== data.pinConfirm) {
-    fields.pinSettingsMessage.textContent = 'The new PIN and confirmation do not match.'
+  if (!setup && state.pinSettingsSetupStep === 'current') {
+    state.pinSettingsCurrentValue = entered
+    advancePINSettingsStep('entry')
+    return
+  }
+  if (state.pinSettingsSetupStep === 'entry') {
+    state.pinSettingsSetupValue = entered
+    advancePINSettingsStep('confirmation')
+    return
+  }
+  if (entered !== state.pinSettingsSetupValue) {
+    state.pinSettingsSetupValue = ''
+    fields.pinSettingsMessage.textContent = 'The PINs did not match. Enter the new PIN again.'
     fields.pinSettingsMessage.dataset.tone = 'error'
+    advancePINSettingsStep('entry', true)
     return
   }
   state.pinSettingsBusy = true
-  fields.pinSettingsMessage.textContent = 'Updating payment PIN…'
+  fields.pinSettingsMessage.textContent = 'Updating payment PIN...'
   fields.pinSettingsMessage.dataset.tone = 'info'
   renderPINSettingsModal()
   try {
     if (setup) {
-      await invoke<CloudAuthState>('auth_pin_set', { input: { pin: data.newPIN, pinConfirm: data.pinConfirm } })
+      await invoke<CloudAuthState>('auth_pin_set', { input: { pin: state.pinSettingsSetupValue, pinConfirm: state.pinSettingsSetupValue } })
+      state.cloudPaymentPINConfigured = true
     } else {
-      await invoke<CloudAuthState>('auth_pin_change', { input: data })
+      await invoke<CloudAuthState>('auth_pin_change', {
+        input: {
+          currentPIN: state.pinSettingsCurrentValue,
+          newPIN: state.pinSettingsSetupValue,
+          pinConfirm: entered,
+        },
+      })
     }
     dismissPINSettingsModal()
     showToast(setup ? 'Payment PIN created.' : t('toast.paymentPinChanged'))
@@ -15117,6 +15769,32 @@ async function submitPINSettings() {
     state.pinSettingsBusy = false
     renderPINSettingsModal()
   }
+}
+
+function advancePINSettingsStep(step: 'current' | 'entry' | 'confirmation', keepMessage = false) {
+  state.pinSettingsSetupStep = step
+  fields.pinSettingsCodeInput.value = ''
+  if (!keepMessage) {
+    fields.pinSettingsMessage.textContent = ''
+    fields.pinSettingsMessage.dataset.tone = ''
+  }
+  renderPINSettingsModal()
+  window.setTimeout(() => fields.pinSettingsCodeInput.focus(), 0)
+}
+
+function goBackPINSettingsStep() {
+  if (state.pinSettingsBusy) return
+  const setup = state.pinSettingsMode === 'setup'
+  if (state.pinSettingsSetupStep === 'confirmation') {
+    advancePINSettingsStep('entry')
+    return
+  }
+  if (!setup && state.pinSettingsSetupStep === 'entry') {
+    state.pinSettingsCurrentValue = ''
+    advancePINSettingsStep('current')
+    return
+  }
+  closePINSettingsModal()
 }
 
 async function refreshWalletStatus() {
@@ -15314,16 +15992,154 @@ fields.settingsReturnButton.addEventListener('click', returnFromSettings)
 fields.settingsView.addEventListener('click', (event) => {
   const target = event.target
   if (!(target instanceof Element)) return
+  const segment = target.closest<HTMLButtonElement>('[data-setting-segment]')
+  if (segment) {
+    event.preventDefault()
+    applySettingsSegment(segment.dataset.settingSegment || '', segment.dataset.settingValue || '')
+    return
+  }
   if (target.closest('[data-settings-action="close"]')) {
     event.preventDefault()
     returnFromSettings()
     return
   }
-  if (target.closest('[data-settings-action="change-pin"]')) {
-    event.preventDefault()
-    openPINSettingsModal()
-  }
+  const button = target.closest<HTMLButtonElement>('[data-settings-action]')
+  if (!button) return
+  event.preventDefault()
+  void handleSettingsAction(button.dataset.settingsAction || '', button)
 })
+
+fields.settingsView.addEventListener('change', (event) => {
+  const input = event.target
+  if (!(input instanceof HTMLInputElement) || !input.matches('[data-setting-switch]')) return
+  applySettingsSwitch(input.dataset.settingSwitch || '', input.checked)
+})
+
+function applySettingsSegment(key: string, value: string) {
+  if (key === 'language' && isAppLanguage(value)) {
+    setLanguage(value)
+    scheduleSaveAppSettings(0)
+    return
+  }
+  if (key === 'theme' && isAppTheme(value)) setTheme(value)
+  else if (key === 'closeBehavior' && (value === 'tray' || value === 'quit')) state.closeBehavior = value
+  else return
+  scheduleSaveAppSettings(0)
+  renderSettingsPanel()
+}
+
+function applySettingsSwitch(key: string, checked: boolean) {
+  if (key.startsWith('notification.')) {
+    const notificationKey = key.slice('notification.'.length) as NotificationPreferenceKey
+    if (!Object.hasOwn(state.notifications, notificationKey)) return
+    state.notifications[notificationKey] = checked
+  } else if (key === 'launchAtLogin') state.launchAtLogin = checked
+  else if (key === 'startMinimized') state.startMinimized = checked
+  else if (key === 'startDockOnLaunch') state.startDockOnLaunch = checked
+  else if (key === 'autoUpdate') state.autoUpdate = checked
+  else return
+  scheduleSaveAppSettings(0)
+  renderSettingsPanel()
+}
+
+async function handleSettingsAction(action: string, button: HTMLButtonElement) {
+  if (button.disabled) return
+  const invokeAction = async <T = unknown>(command: string, payload?: Record<string, unknown>) => {
+    button.disabled = true
+    try { return await invoke<T>(command, payload) } finally { button.disabled = false }
+  }
+  try {
+    if (action === 'refresh-status') return void refreshSettingsStatus()
+    if (action === 'change-pin') { openPINSettingsModal(); return }
+    if (action === 'reset-pin') {
+      returnFromSettings()
+      authGate.openPINReset()
+      return
+    }
+    if (action === 'change-password') {
+      returnFromSettings()
+      authGate.openPasswordReset()
+      return
+    }
+    if (action === 'sign-out') {
+      if (window.confirm(sx('Sign out of Exora Cloud on this device?', '确定要在此设备上退出 Exora Cloud 吗？'))) signOutProfile()
+      return
+    }
+    if (action === 'delete-account') {
+      if (window.confirm(sx('Account deletion is permanent. Continue to the support review notice?', '删除账户不可撤销。是否继续查看支持审核说明？'))) {
+        showToast(sx('Self-service deletion is not enabled. Contact Exora Cloud support for a reviewed deletion request.', '暂未开放自助删除。请联系 Exora Cloud 支持提交审核删除申请。'))
+      }
+      return
+    }
+    if (action === 'open-agent-limit') { returnFromSettings(); openWalletModal('agent-limit'); return }
+    if (action === 'copy-config') {
+      const command = button.dataset.settingsCommand || 'copy_mcp_command'
+      const value = await invokeAction<string>(command)
+      await navigator.clipboard.writeText(String(value || ''))
+      showToast(sx('Configuration copied.', '配置已复制。'))
+      return
+    }
+    if (action === 'test-connection') {
+      const runtime = await invokeAction<AppStatus>('app_status')
+      state.appStatus = runtime
+      if (state.settingsSystemStatus) state.settingsSystemStatus.runtime = runtime
+      showToast(runtime.daemon === 'healthy' ? sx('Dock connection is healthy.', 'Dock 连接正常。') : runtime.message || sx('Dock is not ready.', 'Dock 尚未就绪。'))
+      renderSettingsPanel()
+      return
+    }
+    const openKinds: Record<string, string> = { 'open-manifest': 'manifest', 'open-data': 'data', 'open-logs': 'logs', 'open-downloads': 'downloads' }
+    if (openKinds[action]) { await invokeAction('system_open_path', { input: { kind: openKinds[action] } }); return }
+    if (action === 'choose-downloads') {
+      const result = await invokeAction<{ canceled?: boolean; path?: string }>('system_choose_download_directory')
+      if (!result.canceled && result.path) {
+        state.downloadDirectory = result.path
+        scheduleSaveAppSettings(0)
+        await refreshSettingsStatus()
+      }
+      return
+    }
+    const clearKinds: Record<string, string> = { 'clear-cache': 'cache', 'clear-logs': 'logs', 'clear-temporary': 'temporary' }
+    if (clearKinds[action]) {
+      if (!window.confirm(sx('Clear this disposable local data now?', '现在清理这部分可丢弃的本地数据吗？'))) return
+      await invokeAction('system_clear_storage', { input: { kind: clearKinds[action] } })
+      showToast(sx('Local data cleared.', '本地数据已清理。'))
+      await refreshSettingsStatus()
+      return
+    }
+    if (action === 'test-notification') {
+      await invokeAction('system_notification_test', { input: { language: state.language } })
+      showToast(sx('Test notification sent.', '测试通知已发送。'))
+      return
+    }
+    if (action === 'export-diagnostics') {
+      const result = await invokeAction<{ canceled?: boolean }>('system_export_diagnostics')
+      if (!result.canceled) showToast(sx('Redacted diagnostics exported.', '脱敏诊断包已导出。'))
+      return
+    }
+    if (action === 'check-update') {
+      const update = await invokeAction<NonNullable<DesktopSystemStatus['update']>>('system_update_check')
+      if (state.settingsSystemStatus) state.settingsSystemStatus.update = update
+      showToast(update.message || sx('Update check complete.', '更新检查完成。'))
+      renderSettingsPanel()
+      return
+    }
+    if (action === 'open-license' || action === 'open-privacy') {
+      await invokeAction('system_open_legal', { input: { kind: action === 'open-privacy' ? 'privacy' : 'license' } })
+      return
+    }
+    if (action === 'start-dock' || action === 'stop-dock' || action === 'restart-dock') {
+      if (action !== 'start-dock' && !window.confirm(action === 'stop-dock' ? sx('Stop Dock now? Agent connections will be interrupted.', '现在停止 Dock 吗？Agent 连接将被中断。') : sx('Restart Dock now? Active local connections may reconnect.', '现在重启 Dock 吗？活动的本地连接可能需要重新连接。'))) return
+      const command = action === 'start-dock' ? 'start_dock' : action === 'stop-dock' ? 'stop_dock' : 'restart_dock'
+      const runtime = await invokeAction<AppStatus>(command)
+      state.appStatus = runtime
+      if (state.settingsSystemStatus) state.settingsSystemStatus.runtime = runtime
+      renderSettingsPanel()
+      return
+    }
+  } catch (error) {
+    showToast(humanizeError(error))
+  }
+}
 
 fields.pinSettingsModal.addEventListener('click', (event) => {
   const target = event.target
@@ -15331,6 +16147,9 @@ fields.pinSettingsModal.addEventListener('click', (event) => {
   if (target.closest('[data-pin-settings-action="close"]')) {
     event.preventDefault()
     closePINSettingsModal()
+  } else if (target.closest('[data-pin-settings-action="back"]')) {
+    event.preventDefault()
+    goBackPINSettingsStep()
   }
 })
 
@@ -15351,7 +16170,11 @@ fields.pinSettingsForm.addEventListener('input', (event) => {
   const input = event.target
   if (!(input instanceof HTMLInputElement)) return
   input.value = input.value.replace(/\D/g, '').slice(0, 6)
+  if (input === fields.pinSettingsCodeInput) renderPINSettingsCodeInput()
 })
+
+fields.pinSettingsCodeInput.addEventListener('focus', renderPINSettingsCodeInput)
+fields.pinSettingsCodeInput.addEventListener('blur', renderPINSettingsCodeInput)
 
 fields.pinSettingsForm.addEventListener('submit', (event) => {
   event.preventDefault()
@@ -15446,6 +16269,45 @@ fields.sidebarButton.addEventListener('click', (event) => {
   closeProfileMenu()
   setSidebarCollapsed(!state.sidebarCollapsed)
 })
+
+function paymentPINRequiredForElement(target: Element, submitter?: HTMLElement | null) {
+  if (target.closest('[data-pin-settings-modal]')) return false
+  if (target.closest('[data-action="open-wallet"], [data-settings-action="change-pin"], [data-profile-action="change-pin"]')) return true
+  if (target.closest('[data-wallet-withdraw-form], [data-wallet-limit-form], [data-wallet-tab="withdraw"], [data-wallet-tab="agent-limit"]')) return true
+  if (target.closest('[data-v3-consumer-form="api"], [data-v3-consumer-form="compute"]')) return true
+  if (target.closest('[data-v3-consumer-action="purchase-download"], [data-v3-consumer-action="extend-compute"]')) return true
+  const approvalForm = target.closest<HTMLFormElement>('[data-v3-approval-form]')
+  if (approvalForm) {
+    const decision = submitter?.getAttribute('value') || target.closest<HTMLButtonElement>('button')?.value
+    return decision !== 'reject'
+  }
+  const planButton = target.closest<HTMLButtonElement>('[data-select-plan]')
+  if (planButton) {
+    const plan = state.orderPlans.find((item) => item.planId === planButton.dataset.selectPlan)
+    const option = plan?.options?.find((item) => item.optionId === planButton.dataset.optionId)
+    return Boolean(option && optionIsPaid(option))
+  }
+  const approvalButton = target.closest<HTMLButtonElement>('[data-approve]')
+  if (approvalButton) {
+    const approval = state.approvals.find((item) => item.approvalId === approvalButton.dataset.approve)
+    return approval?.paymentRequired === true
+  }
+  return Boolean(target.closest('[data-pin-form]'))
+}
+
+function reopenPINSetupForPayment(event: Event) {
+  if (state.cloudPaymentPINConfigured !== false || state.pinSettingsModalOpen) return
+  const target = event.target
+  if (!(target instanceof Element)) return
+  const submitter = event instanceof SubmitEvent ? event.submitter as HTMLElement | null : undefined
+  if (!paymentPINRequiredForElement(target, submitter)) return
+  event.preventDefault()
+  event.stopImmediatePropagation()
+  openPINSetupModal()
+}
+
+app.addEventListener('click', reopenPINSetupForPayment, true)
+app.addEventListener('submit', reopenPINSetupForPayment, true)
 
 fields.walletButton.addEventListener('click', () => {
   if (state.walletModalOpen) closeWalletModal()
@@ -15584,7 +16446,10 @@ function waitForWorkspacePaint() {
 async function openWorkspace(authState?: CloudAuthState) {
   if (authState) {
     state.authAccount = authState.account
+    state.cloudAuthState = authState
     state.signedOut = false
+    if (authState.phase === 'needs_pin') state.cloudPaymentPINConfigured = false
+    else if (authState.phase === 'authenticated') state.cloudPaymentPINConfigured = true
   }
   resetWorkspaceLanding()
   await bootstrapWorkspace()
@@ -15602,10 +16467,12 @@ const authGate = createAuthGate(app, {
     setLocalActivityFixturesEnabled(false)
     await openWorkspace(authState)
   },
-  onSignedOut: () => {
+  onSignedOut: (authState) => {
     void requestWindowMode('auth').catch((error) => console.warn('Failed to restore the authentication window:', error))
     state.authAccount = undefined
+    state.cloudAuthState = authState
     state.signedOut = true
+    state.cloudPaymentPINConfigured = undefined
     state.profileMenuOpen = false
     dismissPINSettingsModal()
     renderProfileSummary()
@@ -15697,5 +16564,9 @@ function clearRetiredRendererStorage() {
     WORK_TASK_STATE_KEY,
   ]) localStorage.removeItem(key)
 }
+
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  if (state.theme === 'system') applyUserPreferences()
+})
 
 void bootstrap()

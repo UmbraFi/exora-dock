@@ -2,7 +2,7 @@
 
 Exora Dock is the local MCP and provider runtime for the Exora V3.2 AI-first resource market protocol.
 
-Providers use Dock to register hosted files, publish one strictly exclusive VM per physical Linux host, or expose OpenAPI services through Exora Gateway. Consumers connect their own local Agent to Dock MCP to discover, lease, invoke, and settle those resources. Exora does not require a provider Agent and does not provide a separate chat interface.
+Providers use Dock to register hosted files, publish managed compute, expose a private local Endpoint, or publish a public OpenAPI API Bridge. Consumers connect their own local Agent to Dock MCP to discover, purchase, invoke, and settle those resources.
 
 ## V3.2 protocol direction
 
@@ -28,7 +28,7 @@ Resource → Listing → Lease → Usage → Settlement
 - `file`: Exora-hosted multipart assets, downloadable or environment-only.
 - `AI-first`: one machine-readable AgentProductManifest for compute, download, and api_operation products.
 - `download`: AssetBundle purchase creates a seller-configured, time-limited DownloadGrant with free retry and resume.
-- `compute`: one Linux physical host, one InventorySlot, one KVM/libvirt Consumer VM, and no overcommit.
+- `compute`: Linux KVM uses hardware virtualization; the Windows Technical Preview uses a disclosed `managed_wsl2_shared_host` environment with one active lease per host and Cloud reverse-SSH delivery.
 - `availability`: automatic provider_busy delisting and verified relisting without a manual availability switch.
 - `pricing`: compute is prepurchased in integer minutes; voluntary early release does not refund unused minutes.
 - `storage`: verified Golden Image and fully reserved workspace disk before `availableNow`.
@@ -39,7 +39,7 @@ Resource → Listing → Lease → Usage → Settlement
 
 ## Repository implementation status
 
-The current Go daemon, Electron application, and Cloud integration are still primarily the legacy V2 transaction-supervisor implementation. V3.2 is an Alpha protocol specification and is not yet implemented. Legacy V2 integration documents remain for code maintenance and are explicitly marked as legacy.
+The Go daemon, Electron application, and Cloud implement the V3 marketplace paths for Resources, Endpoint, API Bridge, and managed compute. Version `0.1.0-preview.1` is an unsigned Windows x64 Technical Preview, not an Authenticode-signed production release. Windows may show Unknown publisher or SmartScreen warnings; verify the release SHA-256 before installation.
 
 ## Current local development
 
