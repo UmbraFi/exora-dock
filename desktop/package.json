@@ -14,7 +14,7 @@
     "build:electron": "node --test electron/app-settings.test.cjs electron/cloud-auth.test.cjs electron/resource-archive.test.cjs electron/legacy-frontend-cleanup.test.cjs && node electron/check.cjs",
     "build": "npm run build:frontend && npm run build:electron && electron-builder",
     "build:dmg": "npm run build:frontend && npm run build:electron && electron-builder --mac dmg",
-    "build:exe": "npm run build:frontend && npm run build:electron && electron-builder --win nsis",
+    "build:exe": "npm run build:frontend && npm run build:electron && electron-builder --win nsis --publish never",
     "build:linux": "npm run build:frontend && npm run build:electron && electron-builder --linux AppImage deb",
     "build:win": "powershell -ExecutionPolicy Bypass -File ../scripts/build-win-docker.ps1",
     "build:win-docker": "powershell -ExecutionPolicy Bypass -File ../scripts/build-win-docker.ps1 -BuildDockerImage"
