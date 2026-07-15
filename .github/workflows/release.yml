@@ -7,106 +7,8 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
-  binaries:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - goos: linux
-            goarch: amd64
-          - goos: linux
-            goarch: arm64
-          - goos: darwin
-            goarch: amd64
-          - goos: darwin
-            goarch: arm64
-          - goos: windows
-            goarch: amd64
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-      - name: Build daemon
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-        run: |
-          ext=""
-          if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
-          CGO_ENABLED=0 go build -o exora-dockd-${GOOS}-${GOARCH}${ext} ./cmd/exora-dock/
-      - uses: actions/upload-artifact@v4
-        with:
-          name: exora-dockd-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: exora-dockd-*
-
-  docker:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: |
-            ghcr.io/exora-dock/exora-dock:${{ github.ref_name }}
-            ghcr.io/exora-dock/exora-dock:latest
-
-  deb:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-      - name: Install nfpm
-        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
-      - name: Build binary
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o exora-dock ./cmd/exora-dock/
-      - name: Build deb
-        run: |
-          mkdir -p dist
-          chmod +x packaging/deb/postinstall.sh packaging/deb/preremove.sh
-          VERSION="${GITHUB_REF_NAME#v}" GOARCH=amd64 nfpm package --config packaging/deb/nfpm.yaml --packager deb --target dist/
-      - uses: actions/upload-artifact@v4
-        with:
-          name: exora-dock-deb
-          path: dist/*.deb
-
-  desktop-macos:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Install desktop dependencies
-        run: npm install
-        working-directory: desktop
-      - name: Build daemon sidecar
-        run: |
-          mkdir -p desktop/binaries
-          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o desktop/binaries/exora-dockd ./cmd/exora-dock/
-      - name: Build dmg
-        run: npm run build:dmg
-        working-directory: desktop
-      - uses: actions/upload-artifact@v4
-        with:
-          name: exora-dock-dmg
-          path: desktop/release/*.dmg
-
   desktop-windows:
     runs-on: windows-latest
     steps:
@@ -158,35 +60,8 @@ jobs:
             desktop/release/SHA256SUMS.txt
             desktop/release/*SBOM*.json
 
-  desktop-linux:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.25'
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Install desktop dependencies
-        run: npm install
-        working-directory: desktop
-      - name: Build daemon sidecar
-        run: |
-          mkdir -p desktop/binaries
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o desktop/binaries/exora-dockd ./cmd/exora-dock/
-      - name: Build Linux desktop packages
-        run: npm run build:linux
-        working-directory: desktop
-      - uses: actions/upload-artifact@v4
-        with:
-          name: exora-dock-linux-desktop
-          path: |
-            desktop/release/*.AppImage
-            desktop/release/*.deb
-
   release:
-    needs: [binaries, deb, desktop-windows]
+    needs: [desktop-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -194,10 +69,14 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
+          name: Exora Dock 0.1.0 Preview 1 (Unsigned Technical Preview)
           prerelease: true
+          make_latest: false
+          body: |
+            Windows x64 only. This is an unsigned technical preview and is not a production or compliance release.
+
+            Windows may show an Unknown publisher or SmartScreen warning because this installer does not use Authenticode. Verify the signed release manifest and SHA-256 checksum before running it.
           files: |
-            exora-dockd-*
-            *.deb
             *.exe
             release-manifest.json
             release-manifest.sig
