@@ -17,14 +17,16 @@ type Scope int
 const (
 	ScopeNone Scope = iota
 	ScopeAgent
+	ScopeProviderAgent
 	ScopeOwner
 )
 
 type Tokens struct {
-	OwnerToken string `json:"ownerToken"`
-	AgentToken string `json:"agentToken"`
-	CreatedAt  string `json:"createdAt"`
-	UpdatedAt  string `json:"updatedAt"`
+	OwnerToken         string `json:"ownerToken"`
+	AgentToken         string `json:"agentToken"`
+	ProviderAgentToken string `json:"providerAgentToken"`
+	CreatedAt          string `json:"createdAt"`
+	UpdatedAt          string `json:"updatedAt"`
 }
 
 type Store struct {
@@ -59,6 +61,14 @@ func LoadOrCreate(path string) (*Store, error) {
 			tokens.AgentToken = token
 			changed = true
 		}
+		if strings.TrimSpace(tokens.ProviderAgentToken) == "" {
+			token, err := randomToken("exora_provider_agent_")
+			if err != nil {
+				return nil, err
+			}
+			tokens.ProviderAgentToken = token
+			changed = true
+		}
 		if strings.TrimSpace(tokens.CreatedAt) == "" {
 			tokens.CreatedAt = time.Now().UTC().Format(time.RFC3339)
 			changed = true
@@ -83,11 +93,16 @@ func LoadOrCreate(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	providerAgent, err := randomToken("exora_provider_agent_")
+	if err != nil {
+		return nil, err
+	}
 	tokens := Tokens{
-		OwnerToken: owner,
-		AgentToken: agent,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		OwnerToken:         owner,
+		AgentToken:         agent,
+		ProviderAgentToken: providerAgent,
+		CreatedAt:          now,
+		UpdatedAt:          now,
 	}
 	if err := writeTokens(path, tokens); err != nil {
 		return nil, err
@@ -117,6 +132,10 @@ func (s *Store) OwnerToken() string {
 	return s.Tokens().OwnerToken
 }
 
+func (s *Store) ProviderAgentToken() string {
+	return s.Tokens().ProviderAgentToken
+}
+
 func (s *Store) ScopeForToken(token string) Scope {
 	if s == nil {
 		return ScopeNone
@@ -127,6 +146,9 @@ func (s *Store) ScopeForToken(token string) Scope {
 	}
 	if constantTimeEqual(token, s.tokens.OwnerToken) {
 		return ScopeOwner
+	}
+	if constantTimeEqual(token, s.tokens.ProviderAgentToken) {
+		return ScopeProviderAgent
 	}
 	if constantTimeEqual(token, s.tokens.AgentToken) {
 		return ScopeAgent

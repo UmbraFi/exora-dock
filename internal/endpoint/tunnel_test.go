@@ -19,6 +19,11 @@ import (
 
 func TestTunnelClientForwardsBodyAndStreamsSSE(t *testing.T) {
 	local := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer vault-token" {
+			t.Errorf("local request did not receive vault credential: %q", got)
+			http.Error(w, "missing local credential", http.StatusUnauthorized)
+			return
+		}
 		switch r.URL.Path {
 		case "/health":
 			w.WriteHeader(http.StatusNoContent)
@@ -47,7 +52,7 @@ func TestTunnelClientForwardsBodyAndStreamsSSE(t *testing.T) {
 	defer c.Close()
 	store := NewStore(c)
 	endpointID := "epd_stream_test_1234"
-	_, err = store.Save(context.Background(), Config{EndpointID: endpointID, LocalBaseURL: local.URL, HealthPath: "/health", Routes: []Route{{OperationID: "echo", Method: "POST", Path: "/echo"}, {OperationID: "events", Method: "GET", Path: "/events"}}, TimeoutSeconds: 5, Concurrency: 2})
+	_, err = store.Save(context.Background(), Config{EndpointID: endpointID, LocalBaseURL: local.URL, HealthPath: "/health", Routes: []Route{{OperationID: "echo", Method: "POST", Path: "/echo"}, {OperationID: "events", Method: "GET", Path: "/events"}}, TimeoutSeconds: 5, Concurrency: 2, AuthType: "bearer", CredentialRef: "cred-local-test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,6 +133,12 @@ func TestTunnelClientForwardsBodyAndStreamsSSE(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := NewTunnelClient(cloud.URL, tokenPath, store)
+	client.CredentialResolver = func(ref string) (string, string, string, error) {
+		if ref != "cred-local-test" {
+			return "", "", "", &tunnelTestError{"unexpected credential ref: " + ref}
+		}
+		return "bearer", "", "vault-token", nil
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	go func() { _ = client.runConnection(ctx) }()

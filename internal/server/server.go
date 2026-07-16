@@ -29,6 +29,7 @@ import (
 	"github.com/exora-dock/exora-dock/internal/product"
 	"github.com/exora-dock/exora-dock/internal/resource"
 	"github.com/exora-dock/exora-dock/internal/runcapability"
+	"github.com/exora-dock/exora-dock/internal/sellerdraft"
 	"github.com/exora-dock/exora-dock/internal/supervisor"
 	"github.com/exora-dock/exora-dock/internal/task"
 	"github.com/exora-dock/exora-dock/internal/wallet"
@@ -72,6 +73,7 @@ type RuntimeStores struct {
 	LegacyMarket    bool
 	Endpoints       *endpoint.Store
 	EndpointTunnel  *endpoint.TunnelClient
+	SellerDrafts    *sellerdraft.Service
 }
 
 func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring *dht.Ring, ic *ipfs.Client, ps *ipfs.PinStore, ra *agent.ReviewAgent, products *product.Store, orders *orderpkg.Store, resources *resource.Store, delegations *delegation.Store, leases *lease.Store, selfPubkey string, runtime ...RuntimeStores) http.Handler {
@@ -110,6 +112,7 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 		ConfigPath:      stores.ConfigPath,
 		Endpoints:       stores.Endpoints,
 		EndpointTunnel:  stores.EndpointTunnel,
+		SellerDrafts:    stores.SellerDrafts,
 	})
 	r := chi.NewRouter()
 
@@ -310,6 +313,19 @@ func New(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub, ring 
 		r.Get("/review/{productID}", h.GetReview)
 	})
 	r.Route("/v3", func(r chi.Router) {
+		r.Get("/local/seller-automation/policy", h.V3SellerAutomationPolicy)
+		r.Put("/local/seller-automation/policy", h.V3SaveSellerAutomationPolicy)
+		r.Get("/local/seller-automation/credentials", h.V3SellerCredentials)
+		r.Post("/local/seller-automation/credentials", h.V3SaveSellerCredential)
+		r.Delete("/local/seller-automation/credentials/{id}", h.V3DeleteSellerCredential)
+		r.Get("/provider-agent/capabilities", h.V3SellerDraftCapabilities)
+		r.Post("/provider-agent/candidates/discover", h.V3DiscoverSellerCandidates)
+		r.Post("/provider-agent/materials/read", h.V3ReadSellerMaterial)
+		r.Get("/provider-agent/draft-runs", h.V3ListSellerDraftRuns)
+		r.Post("/provider-agent/draft-runs", h.V3CreateSellerDraftRun)
+		r.Get("/provider-agent/draft-runs/{id}", h.V3GetSellerDraftRun)
+		r.Post("/provider-agent/draft-runs/{id}/resume", h.V3ResumeSellerDraftRun)
+		r.Post("/provider-agent/draft-runs/{id}/cancel", h.V3CancelSellerDraftRun)
 		r.Get("/local/endpoints", h.V3LocalEndpoints)
 		r.Put("/local/endpoints/{id}", h.V3SaveLocalEndpoint)
 		r.Post("/local/endpoints/probe", h.V3ProbeLocalEndpoint)
@@ -386,7 +402,8 @@ func allowedOrigins(configured []string) []string {
 		"http://localhost:*",
 		"http://127.0.0.1:*",
 		"tauri://localhost",
-		"https://exora-dock.github.io",
+		"https://exoradock.com",
+		"https://www.exoradock.com",
 	}
 }
 
@@ -417,6 +434,10 @@ func authMiddleware(store *localauth.Store, capabilities ...*runcapability.Manag
 				http.Error(w, `{"error":"owner authorization required"}`, http.StatusForbidden)
 				return
 			}
+			if scope == localauth.ScopeProviderAgent && required != localauth.ScopeProviderAgent {
+				http.Error(w, `{"error":"provider agent route is not authorized"}`, http.StatusForbidden)
+				return
+			}
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -443,6 +464,9 @@ func bearerToken(r *http.Request) string {
 func requiredScope(r *http.Request) localauth.Scope {
 	path := r.URL.Path
 	method := r.Method
+	if strings.HasPrefix(path, "/v3/provider-agent/") {
+		return localauth.ScopeProviderAgent
+	}
 	if path == "/health" || path == "/.well-known/exora-dock.json" || path == "/ws" {
 		return localauth.ScopeNone
 	}

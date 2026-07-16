@@ -47,7 +47,7 @@ button.app-modal-scrim:focus-visible {
 .app-modal-panel {
   animation: order-search-dialog-in 200ms cubic-bezier(.22, .8, .25, 1) both;
   background: var(--color-surface);
-  border: 1px solid rgb(102 92 255 / .2);
+  border: 1px solid rgb(var(--color-primary-rgb) / .2);
   border-radius: 15px;
   box-shadow: 0 24px 72px rgb(var(--color-shadow-rgb) / .22), inset 0 1px 0 rgb(255 255 255 / .72);
   max-height: calc(100vh - clamp(88px, 14vh, 136px));
@@ -80,7 +80,7 @@ button.app-modal-scrim:focus-visible {
   align-items: center;
   background: var(--color-primary);
   border-radius: 11px;
-  color: #fff;
+  color: var(--color-on-primary);
   display: flex;
   flex: 0 0 auto;
   height: 38px;
@@ -177,7 +177,7 @@ button.v3-environment-cloud-scrim:hover {
 }
 
 .v3-environment-cloud-panel {
-  border: 1px solid rgb(102 92 255 / .2);
+  border: 1px solid rgb(var(--color-primary-rgb) / .2);
   border-radius: 15px;
   box-shadow: 0 24px 72px rgb(var(--color-shadow-rgb) / .22), inset 0 1px 0 rgb(255 255 255 / .72);
 }
@@ -246,7 +246,7 @@ button.v3-environment-cloud-scrim:hover {
 }
 
 .pin-settings-progress i.complete {
-  background: rgb(102 92 255 / .36);
+  background: rgb(var(--color-primary-rgb) / .36);
 }
 
 .pin-settings-progress i.active {
@@ -255,8 +255,8 @@ button.v3-environment-cloud-scrim:hover {
 }
 
 .pin-settings-stage {
-  background: linear-gradient(145deg, rgb(102 92 255 / .055), rgb(102 92 255 / .016));
-  border: 1px solid rgb(102 92 255 / .13);
+  background: linear-gradient(145deg, rgb(var(--color-primary-rgb) / .055), rgb(var(--color-primary-rgb) / .016));
+  border: 1px solid rgb(var(--color-primary-rgb) / .13);
   border-radius: 13px;
   display: grid;
   gap: 11px;
@@ -335,12 +335,12 @@ button.v3-environment-cloud-scrim:hover {
 .pin-settings-code-control .wallet-code-cells > i.active {
   background: var(--color-surface);
   border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px rgb(102 92 255 / .1);
+  box-shadow: 0 0 0 3px rgb(var(--color-primary-rgb) / .1);
   transform: translateY(-1px);
 }
 
 .pin-settings-code-control.complete .wallet-code-cells > i {
-  border-color: rgb(102 92 255 / .34);
+  border-color: rgb(var(--color-primary-rgb) / .34);
 }
 
 .pin-settings-code-control.disabled {
@@ -385,7 +385,7 @@ button.v3-environment-cloud-scrim:hover {
 
 .pin-settings-actions button:not(.secondary) {
   background: var(--color-primary);
-  color: #fff;
+  color: var(--color-on-primary);
 }
 
 .pin-settings-actions button:not(.secondary):hover {
@@ -400,7 +400,7 @@ button.v3-environment-cloud-scrim:hover {
 
 .pin-settings-actions button.secondary:hover {
   background: var(--color-primary-soft);
-  border-color: rgb(102 92 255 / .24);
+  border-color: rgb(var(--color-primary-rgb) / .24);
   color: var(--color-primary);
 }
 

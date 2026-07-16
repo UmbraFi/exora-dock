@@ -129,17 +129,19 @@ func (s Server) managedPath(name string) (string, error) {
 }
 func (s Server) dispatch(ctx context.Context, cmd string, in map[string]any) (map[string]any, error) {
 	switch cmd {
-	case "probe_host":
+	case "probe_host", "probe_runtime":
 		return s.probe(ctx)
-	case "list_domains":
+	case "list_domains", "list_environment_images":
 		return s.domains(ctx)
 	case "capacity_check":
 		return s.capacity(ctx)
 	case "reserve_disk":
 		return s.reserve(ctx, in)
-	case "import_template":
+	case "release_disk":
+		return s.release(in)
+	case "import_template", "import_environment_image":
 		return s.importTemplate(ctx, in)
-	case "validate_template":
+	case "validate_template", "validate_environment_image":
 		return s.validate(ctx, in)
 	case "create_test_clone":
 		return s.clone(ctx, in)
@@ -153,7 +155,7 @@ func (s Server) dispatch(ctx context.Context, cmd string, in map[string]any) (ma
 		return persistentWorkerCommand(s.DataDir, cmd, in, func() (map[string]any, error) { return s.renewLease(ctx, in) })
 	case "reset_lease":
 		return persistentWorkerCommand(s.DataDir, cmd, in, func() (map[string]any, error) { return s.resetLease(ctx, in) })
-	case "delete_template":
+	case "delete_template", "delete_environment_image":
 		p, err := s.managedPath(str(in, "templateId") + ".qcow2")
 		if err != nil {
 			return nil, err
@@ -229,6 +231,16 @@ func (s Server) reserve(ctx context.Context, in map[string]any) (map[string]any,
 		return nil, fmt.Errorf("disk reservation size verification failed")
 	}
 	return map[string]any{"path": p, "sizeBytes": size, "reserved": true, "allocation": "fallocate"}, nil
+}
+func (s Server) release(in map[string]any) (map[string]any, error) {
+	p, err := s.managedPath(str(in, "slotId") + ".reserve")
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	return map[string]any{"released": true}, nil
 }
 func (s Server) importTemplate(ctx context.Context, in map[string]any) (map[string]any, error) {
 	domain := str(in, "domain")

@@ -47,9 +47,6 @@ export type LocalActivityDetail = LocalActivitySession & {
     occurredAt: string
   }>
   identifiers?: Record<string, string>
-  delivery?: Record<string, unknown>
-  purchases?: Array<Record<string, unknown>>
-  transfers?: Array<Record<string, unknown>>
 }
 
 const localActivityFixtures: LocalActivityDetail[] = [
@@ -293,7 +290,7 @@ function rebaseFixtureTimestamps<T>(value: T): T {
 }
 
 function activitySummary(detail: LocalActivityDetail): LocalActivitySession {
-  const { product: _product, operations: _operations, usage: _usage, invocations: _invocations, events: _events, identifiers: _identifiers, delivery: _delivery, purchases: _purchases, transfers: _transfers, ...summary } = detail
+  const { product: _product, operations: _operations, usage: _usage, invocations: _invocations, events: _events, identifiers: _identifiers, ...summary } = detail
   return cloneFixture(summary)
 }
 
