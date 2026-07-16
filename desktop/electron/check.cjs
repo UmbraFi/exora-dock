@@ -279,6 +279,12 @@ for (const marker of ['provider_asset_clear_selection', 'asset_packaging', 'appl
 }
 const packageConfig = fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')
 if (!packageConfig.includes('resources/wsl')) throw new Error('Windows installer does not embed the locked WSL Runtime resource')
+const packageDocument = JSON.parse(packageConfig)
+for (const script of ['build:exe', 'build:mac', 'build:linux']) {
+  if (!String(packageDocument.scripts?.[script] || '').includes('--publish never')) {
+    throw new Error(`${script} must disable electron-builder implicit tag publishing`)
+  }
+}
 for (const exclusion of ['!electron/**/*.test.cjs', '!electron/check.cjs']) {
   if (!packageConfig.includes(exclusion)) throw new Error(`release package must exclude test-only Electron files: ${exclusion}`)
 }
