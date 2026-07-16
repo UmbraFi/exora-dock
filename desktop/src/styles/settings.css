@@ -256,17 +256,18 @@
 }
 
 .app-setting-switch > span {
-  background: var(--color-border-strong, var(--color-border));
+  background: var(--color-switch-track-off);
   border-radius: 999px;
+  box-shadow: inset 0 0 0 1px var(--color-switch-border-off);
   display: block;
   height: 20px;
   position: relative;
-  transition: background-color 160ms ease;
+  transition: background-color 160ms ease, box-shadow 160ms ease;
   width: 36px;
 }
 
 .app-setting-switch > span::after {
-  background: #fff;
+  background: var(--color-switch-thumb-off);
   border-radius: 50%;
   box-shadow: 0 1px 3px rgb(23 24 43 / 20%);
   content: '';
@@ -274,22 +275,30 @@
   left: 2px;
   position: absolute;
   top: 2px;
-  transition: transform 160ms ease;
+  transition: background-color 160ms ease, transform 160ms ease;
   width: 16px;
 }
 
 .app-setting-switch input:checked + span {
-  background: var(--color-primary);
+  background: var(--color-switch-track-on);
+  box-shadow: inset 0 0 0 1px var(--color-switch-border-on);
 }
 
 .app-setting-switch input:checked + span::after {
+  background: var(--color-switch-thumb-on);
   transform: translateX(16px);
 }
 
-.app-setting-switch input:focus-visible + span {
-  outline: 2px solid color-mix(in srgb, var(--color-primary) 42%, transparent);
-  outline-offset: 2px;
+.app-setting-switch:hover input:not(:disabled) + span {
+  box-shadow: inset 0 0 0 1px var(--color-primary);
 }
+
+.app-setting-switch input:focus-visible + span {
+  outline: 3px solid var(--color-switch-focus);
+  outline-offset: 1px;
+}
+
+.app-setting-switch input:disabled + span { cursor: not-allowed; opacity: .55; }
 
 .app-setting-switch em {
   color: var(--color-text-tertiary);
@@ -400,10 +409,6 @@
 
 :root[data-theme="dark"] .app-settings-view .app-setting-button.outline {
   background: var(--color-surface);
-}
-
-:root[data-theme="dark"] .app-settings-view .app-setting-switch > span::after {
-  background: #eef3f0;
 }
 
 :root[data-theme="dark"] .settings-record.active,

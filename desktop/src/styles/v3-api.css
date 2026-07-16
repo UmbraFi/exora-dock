@@ -304,6 +304,9 @@
 .v3-resource-custom-select { position: relative; width: 100%; min-width: 0; border-radius: 9px; }
 .v3-resource-custom-select.open { z-index: 80; }
 .v3-resource-custom-select > input { display: none; }
+.v3-resource-fixed-delivery { display: grid; align-content: center; height: 40px; padding: 6px 11px; border: 1px solid rgb(var(--color-primary-rgb) / .28); border-radius: 9px; background: rgb(var(--color-primary-rgb) / .055); }
+.v3-resource-fixed-delivery strong { color: var(--color-text-primary); font-size: 10px; }
+.v3-resource-fixed-delivery small { margin-top: 2px; color: var(--color-primary); font-size: 7px; }
 .v3-provider-form .v3-resource-select-trigger,
 .v3-provider-form .v3-resource-select-trigger:focus-visible { display: grid; grid-template-columns: minmax(0, 1fr) 20px; gap: 10px; align-items: center; width: 100%; height: 40px; min-height: 40px; padding: 8px 11px; border: 1px solid var(--color-border); border-radius: 9px; outline: 0; color: var(--color-text-primary); text-align: left; background: var(--color-surface); box-shadow: none; font-size: 11px; font-weight: 650; cursor: pointer; transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease; }
 .v3-resource-select-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -400,3 +403,71 @@
 .v3-host-facts em { margin-top: 3px; color: var(--color-text-secondary); font-size: 9px; font-style: normal; }
 .v3-scan-empty { display: grid; gap: 5px; padding: 24px; border: 1px dashed var(--color-border-strong); border-radius: 9px; text-align: center; background: var(--color-surface-soft); }
 .v3-scan-empty span { color: var(--color-text-secondary); font-size: 10px; }
+.v3-interface-mode {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin: 16px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface-soft);
+}
+.v3-interface-mode-copy { display: grid; min-width: 0; gap: 4px; }
+.v3-interface-mode-copy > strong { color: var(--color-text-primary); font-size: 11px; }
+.v3-interface-mode-copy > small { color: var(--color-text-secondary); font-size: 9px; }
+.v3-interface-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 9px;
+  min-height: 30px;
+  padding: 0;
+  border: 0;
+  color: var(--color-text-tertiary);
+  background: transparent;
+  box-shadow: none;
+}
+.v3-interface-mode-toggle:hover { color: var(--color-text-secondary); background: transparent; box-shadow: none; transform: none; }
+.v3-interface-mode-label { font-size: 9px; font-weight: 650; white-space: nowrap; transition: color 160ms ease; }
+.v3-interface-mode[data-mode="passthrough"] .v3-interface-mode-label.passthrough,
+.v3-interface-mode[data-mode="agent_managed"] .v3-interface-mode-label.agent-managed { color: var(--color-primary); font-weight: 800; }
+.v3-interface-mode-track {
+  position: relative;
+  width: 42px;
+  height: 24px;
+  flex: 0 0 42px;
+  border: 1px solid var(--color-switch-border-off);
+  border-radius: 999px;
+  background: var(--color-switch-track-off);
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+.v3-interface-mode-track > i {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-switch-thumb-off);
+  box-shadow: 0 1px 4px rgb(23 24 43 / 22%);
+  transition: background-color 160ms ease, transform 160ms ease;
+}
+.v3-interface-mode-toggle[aria-checked="true"] .v3-interface-mode-track { border-color: var(--color-switch-border-on); background: var(--color-switch-track-on); }
+.v3-interface-mode-toggle[aria-checked="true"] .v3-interface-mode-track > i { background: var(--color-switch-thumb-on); transform: translateX(18px); }
+.v3-interface-mode-toggle:hover .v3-interface-mode-track { border-color: var(--color-primary); }
+.v3-interface-mode-toggle:focus-visible { outline: none; }
+.v3-interface-mode-toggle:focus-visible .v3-interface-mode-track { box-shadow: 0 0 0 3px var(--color-switch-focus); }
+.v3-interface-mode-toggle:disabled { cursor: not-allowed; opacity: .55; }
+
+@media (max-width: 720px) {
+  .v3-interface-mode { align-items: flex-start; flex-direction: column; gap: 10px; }
+  .v3-interface-mode-toggle { width: 100%; justify-content: flex-start; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .v3-interface-mode-label,
+  .v3-interface-mode-track,
+  .v3-interface-mode-track > i { transition: none; }
+}

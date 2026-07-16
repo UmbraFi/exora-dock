@@ -197,7 +197,28 @@ function registerIpc() {
   registerIpcHandlers(ipcMain, createIpcHandlerGroups(), {
     validateSender: (event) => isTrustedIpcSender(event, APP_URL_POLICY),
     authorizeCommand: (command) => assertDesktopCommandSupported(command, process.platform),
+    timeoutForCommand: desktopCommandTimeoutMs,
   })
+}
+
+const INTERACTIVE_OR_STREAMING_COMMANDS = new Set([
+  'system_choose_download_directory',
+  'system_update_install',
+  'consumer_create_transfer',
+  'provider_environment_choose_root',
+  'provider_environment_download',
+  'provider_asset_choose_files',
+  'provider_asset_upload',
+  'provider_api_bridge_materials_choose',
+  'provider_openapi_choose',
+  'seller_automation_choose_root',
+])
+
+function desktopCommandTimeoutMs(command) {
+  if (INTERACTIVE_OR_STREAMING_COMMANDS.has(command)) return 0
+  if (command === 'provider_host_scan') return 75000
+  if (command === 'consumer_invoke_operation' || command.startsWith('provider_vm_')) return 190000
+  return 45000
 }
 
 function createIpcHandlerGroups() {
@@ -301,6 +322,7 @@ function createIpcHandlerGroups() {
       provider_asset_upload,
       provider_asset_cancel,
       provider_api_bridge_materials_choose,
+      provider_api_bridge_materials_add,
       provider_api_bridge_material_remove,
       provider_api_bridge_materials_get,
       provider_api_bridge_draft_get,
@@ -532,10 +554,15 @@ function releaseVerificationKey() {
 async function release_status() {
   const manifestURL = String(process.env.EXORA_RELEASE_MANIFEST_URL || 'https://github.com/UmbraFi/exora-dock/releases/download/v0.1.0-preview.2/release-manifest.json').trim()
   const signatureURL = manifestURL.replace(/release-manifest\.json(?:\?.*)?$/, 'release-manifest.sig')
-  const [manifestResponse, signatureResponse] = await Promise.all([fetch(manifestURL), fetch(signatureURL)])
+  const [manifestResult, signatureResult] = await Promise.all([
+    fetchArrayBufferWithTimeout(manifestURL, {}, 15000),
+    fetchTextWithTimeout(signatureURL, {}, 15000),
+  ])
+  const manifestResponse = manifestResult.response
+  const signatureResponse = signatureResult.response
   if (!manifestResponse.ok || !signatureResponse.ok) throw new Error('The signed Technical Preview release manifest is unavailable.')
-  const encoded = Buffer.from(await manifestResponse.arrayBuffer())
-  const signature = Buffer.from((await signatureResponse.text()).trim(), 'base64')
+  const encoded = Buffer.from(manifestResult.arrayBuffer)
+  const signature = Buffer.from(signatureResult.text.trim(), 'base64')
   const raw = Buffer.from(releaseVerificationKey(), 'base64')
   if (raw.length !== 32) throw new Error('Release verification key is not configured.')
   const spki = Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), raw])
@@ -609,19 +636,18 @@ async function set_locale(payload = {}) {
 }
 
 async function wallet_status() {
-	const [balanceResult, custodyResult, depositsResult, withdrawalsResult, spendPolicyResult] = await Promise.all([
+  const addressRequest = cloudAuth.apiRequest('GET', '/v3/billing/deposit-address').catch((error) => {
+    if (Number(error?.status || 0) === 423 || Number(error?.status || 0) === 503) return {}
+    throw error
+  })
+	const [balanceResult, custodyResult, depositsResult, withdrawalsResult, spendPolicyResult, addressResult] = await Promise.all([
     cloudAuth.apiRequest('GET', '/v3/billing/balance'),
     cloudAuth.apiRequest('GET', '/v3/billing/custody-status'),
     cloudAuth.apiRequest('GET', '/v3/billing/deposits'),
     cloudAuth.apiRequest('GET', '/v3/billing/withdrawals'),
 		cloudAuth.apiRequest('GET', '/v3/account/spend-policy'),
+    addressRequest,
   ])
-	let addressResult = {}
-	try {
-		addressResult = await cloudAuth.apiRequest('GET', '/v3/billing/deposit-address')
-	} catch (error) {
-		if (Number(error?.status || 0) !== 423 && Number(error?.status || 0) !== 503) throw error
-	}
   const balance = objectOr(balanceResult.balance || balanceResult)
   const address = String(addressResult.address || '').trim()
   return {
@@ -1300,7 +1326,7 @@ async function terminateProcess(pid) {
 
 function runCommand(program, args) {
   return new Promise((resolve, reject) => {
-    execFile(program, args, { windowsHide: true }, (error, stdout, stderr) => {
+    execFile(program, args, { windowsHide: true, timeout: 15000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (!error) {
         resolve(String(stdout || '').trim())
         return
@@ -2060,7 +2086,7 @@ async function catalog_product(payload = {}) {
 async function catalog_listings(payload = {}) {
   const input = payload?.input || {}
   const query = new URLSearchParams()
-  for (const key of ['q', 'kind']) {
+  for (const key of ['q', 'applicationSource']) {
     const value = String(input[key] || '').trim()
     if (value) query.set(key, value)
   }
@@ -2152,7 +2178,7 @@ async function clearDockLink(paths) {
 }
 
 async function cloudAbsoluteJSON(cloudURL, method, route, body, token = '', timeoutMs = 15000) {
-  const response = await fetchWithTimeout(`${String(cloudURL).replace(/\/$/, '')}${route}`, {
+  const result = await fetchTextWithTimeout(`${String(cloudURL).replace(/\/$/, '')}${route}`, {
     method,
     headers: {
       Accept: 'application/json',
@@ -2163,7 +2189,7 @@ async function cloudAbsoluteJSON(cloudURL, method, route, body, token = '', time
     redirect: 'error',
     cache: 'no-store',
   }, timeoutMs)
-  const text = await response.text()
+  const { response, text } = result
   let decoded = {}
   try { decoded = text.trim() ? JSON.parse(text) : {} } catch { decoded = { error: text } }
   if (!response.ok) {
@@ -2180,14 +2206,14 @@ async function cloudConsumerJson(method, route, body, explicitKey = '') {
   const key = String(explicitKey || connection.token).trim()
   if (!key) throw new Error('Sign in to Exora Cloud before purchasing or invoking a product.')
   const { cloudURL } = connection
-  const response = await fetchWithTimeout(`${cloudURL}${route}`, {
+  const result = await fetchTextWithTimeout(`${cloudURL}${route}`, {
     method,
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
     redirect: 'error',
     cache: 'no-store',
   }, 180000)
-  const text = await response.text()
+  const { response, text } = result
   let decoded = {}
   try { decoded = text.trim() ? JSON.parse(text) : {} } catch { decoded = { error: text } }
   if (!response.ok) {
@@ -2267,7 +2293,7 @@ async function downloadConsumerTransfer(response) {
     offset = 0
   }
   const headers = offset > 0 ? { Range: `bytes=${offset}-` } : {}
-  const transferResponse = await fetchWithTimeout(String(response.transfer.url), { method: 'GET', headers, redirect: 'error', cache: 'no-store' }, 30 * 60 * 1000)
+  const transferResponse = await fetchWithTimeout(String(response.transfer.url), { method: 'GET', headers, redirect: 'error', cache: 'no-store' }, 30000)
   if (!transferResponse.ok && transferResponse.status !== 206) throw new Error(`Download transfer returned ${transferResponse.status}`)
   if (offset > 0 && transferResponse.status !== 206) {
     await fsp.truncate(partial, 0)
@@ -2279,7 +2305,7 @@ async function downloadConsumerTransfer(response) {
     const reader = transferResponse.body?.getReader()
     if (!reader) throw new Error('Download response has no body')
     while (true) {
-      const { done, value } = await reader.read()
+      const { done, value } = await readStreamChunk(reader, 30000)
       if (done) break
       await handle.write(Buffer.from(value))
       downloaded += value.byteLength
@@ -2747,7 +2773,7 @@ async function provider_environment_download(payload = {}) {
     let interruptedAttempts = 0
     while (offset < Number(artifact.sizeBytes || 0)) {
       try {
-        const response = await fetch(url, { headers: offset ? { Range: `bytes=${offset}-` } : {}, signal: controller.signal })
+        const response = await fetchWithTimeout(url, { headers: offset ? { Range: `bytes=${offset}-` } : {}, signal: controller.signal }, 30000)
         if (!response.ok && response.status !== 206) throw new Error(`Environment image download failed with HTTP ${response.status}`)
         if (offset && response.status !== 206) {
           offset = 0
@@ -2755,7 +2781,12 @@ async function provider_environment_download(payload = {}) {
         }
         const handle = await fsp.open(partialPath, offset ? 'a' : 'w')
         try {
-          for await (const chunk of response.body) {
+          const reader = response.body?.getReader()
+          if (!reader) throw new Error('Environment image response has no body')
+          while (true) {
+            const { done, value } = await readStreamChunk(reader, 30000, controller.signal)
+            if (done) break
+            const chunk = Buffer.from(value)
             await handle.write(chunk)
             offset += chunk.length
             mainWindow?.webContents.send('exora:v3-progress', { kind: 'environment_image', imageId, phase: 'downloading', bytesDownloaded: offset, sizeBytes: Number(artifact.sizeBytes || 0) })
@@ -2793,11 +2824,34 @@ async function provider_environment_download(payload = {}) {
   }
 }
 
-async function provider_asset_choose_files() {
-  const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile', 'multiSelections'] })
-  if (result.canceled || !result.filePaths.length) return { canceled: true }
+async function showResourceFileDialog() {
+  const options = {
+    title: currentAppSettings.language === 'zh' ? '选择要打包的资源文件' : 'Choose resource files to package',
+    defaultPath: app.getPath('documents'),
+    properties: ['openFile', 'multiSelections'],
+  }
+  if (!mainWindow || mainWindow.isDestroyed()) return dialog.showOpenDialog(options)
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.moveTop()
+  mainWindow.focus()
+  await new Promise((resolve) => setImmediate(resolve))
+  return dialog.showOpenDialog(mainWindow, options)
+}
+
+async function provider_asset_choose_files(payload = {}) {
+  const input = payload?.input || {}
+  let filePaths
+  if (Array.isArray(input.filePaths)) {
+    filePaths = [...new Set(input.filePaths.map((value) => String(value || '').trim()).filter(Boolean))]
+    if (!filePaths.length) throw new Error('Drop at least one local file.')
+  } else {
+    const result = await showResourceFileDialog()
+    if (result.canceled || !result.filePaths.length) return { canceled: true }
+    filePaths = result.filePaths
+  }
   const packaged = await createResourceArchive({
-    filePaths: result.filePaths,
+    filePaths,
     tempRoot: resourceArchiveTempRoot(),
     maxBytes: MAX_RESOURCE_ARCHIVE_BYTES,
     onProgress: (progress) => mainWindow?.webContents.send('exora:v3-progress', { kind: 'asset_packaging', ...progress }),
@@ -2854,9 +2908,9 @@ async function provider_asset_upload(payload = {}) {
       const length = Math.min(partSize, stat.size - offset)
       const buffer = Buffer.alloc(length)
       await handle.read(buffer, 0, length, offset)
-      const response = await fetch(presigned.urls[String(partNumber)], { method: 'PUT', body: buffer })
-      if (!response.ok) throw new Error(`S3 part ${partNumber} failed with ${response.status}`)
-      parts.push({ partNumber, etag: response.headers.get('etag') || '' })
+      const result = await fetchTextWithTimeout(presigned.urls[String(partNumber)], { method: 'PUT', body: buffer }, 120000)
+      if (!result.response.ok) throw new Error(`S3 part ${partNumber} failed with ${result.response.status}: ${result.text.slice(0, 300)}`)
+      parts.push({ partNumber, etag: result.response.headers.get('etag') || '' })
       mainWindow?.webContents.send('exora:v3-progress', { kind: 'asset_upload', uploadSessionId: upload.uploadSessionId, completed: partNumber, total: partCount })
     }
   } finally { await handle.close() }
@@ -2899,38 +2953,51 @@ async function writeAPIBridgeMaterialManifest(draftId, manifest) {
 async function provider_api_bridge_materials_get(payload = {}) {
   return readAPIBridgeMaterialManifest(payload?.input?.draftId)
 }
-async function provider_api_bridge_materials_choose(payload = {}) {
-  const draftId = String(payload?.input?.draftId || '')
+async function apiBridgeFileOperation(label, operation, timeoutMs = 15000) {
+  let timeout
+  const deadline = new Promise((_, reject) => {
+    timeout = setTimeout(() => reject(new Error(`${label} did not respond within ${Math.round(timeoutMs / 1000)} seconds`)), timeoutMs)
+  })
+  try { return await Promise.race([operation, deadline]) }
+  finally { clearTimeout(timeout) }
+}
+async function storeAPIBridgeMaterials(draftId, sourcePaths) {
   const current = await readAPIBridgeMaterialManifest(draftId)
-  const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile', 'multiSelections'], filters: [{ name: 'API materials', extensions: Array.from(API_BRIDGE_MATERIAL_EXTENSIONS) }] })
-  if (result.canceled) return { ...current, canceled: true }
-  const candidates = []
-  for (const sourcePath of result.filePaths) {
+  const uniquePaths = [...new Set((sourcePaths || []).map((value) => String(value || '').trim()).filter(Boolean))]
+  if (!uniquePaths.length) throw new Error('Choose or drop at least one API material')
+  if (uniquePaths.length > API_BRIDGE_FILE_COUNT_LIMIT) throw new Error('An API material package can contain at most 20 files')
+  const candidates = await Promise.all(uniquePaths.map(async (sourcePath) => {
     const extension = path.extname(sourcePath).slice(1).toLowerCase()
     if (!API_BRIDGE_MATERIAL_EXTENSIONS.has(extension)) throw new Error(`Unsupported API material: ${path.basename(sourcePath)}`)
-    const stat = await fsp.stat(sourcePath)
-    if (!stat.isFile() || stat.size > API_BRIDGE_FILE_LIMIT) throw new Error(`${path.basename(sourcePath)} exceeds the 5 MiB file limit`)
-    candidates.push({ sourcePath, name: path.basename(sourcePath), extension, sizeBytes: stat.size })
-  }
+    const stat = await apiBridgeFileOperation(`Reading ${path.basename(sourcePath)}`, fsp.stat(sourcePath))
+    if (!stat.isFile()) throw new Error(`${path.basename(sourcePath)} is not a regular file`)
+    if (stat.size > API_BRIDGE_FILE_LIMIT) throw new Error(`${path.basename(sourcePath)} exceeds the 5 MiB file limit`)
+    return { sourcePath, name: path.basename(sourcePath), extension, sizeBytes: stat.size }
+  }))
   const byName = new Map((current.files || []).map(file => [String(file.name).toLowerCase(), file]))
   for (const candidate of candidates) byName.set(candidate.name.toLowerCase(), candidate)
   const combined = Array.from(byName.values())
   if (combined.length > API_BRIDGE_FILE_COUNT_LIMIT) throw new Error('An API material package can contain at most 20 files')
   if (combined.reduce((sum, file) => sum + Number(file.sizeBytes || 0), 0) > API_BRIDGE_PACKAGE_LIMIT) throw new Error('The API material package exceeds 20 MiB')
+  await Promise.all(candidates.map(async (candidate) => {
+    candidate.contents = await apiBridgeFileOperation(`Reading ${candidate.name}`, fsp.readFile(candidate.sourcePath))
+    if (candidate.contents.length !== candidate.sizeBytes) throw new Error(`${candidate.name} changed while it was being imported`)
+  }))
   const root = apiBridgeMaterialRoot(draftId); await fsp.mkdir(root, { recursive: true })
   const files = []
   for (const file of combined) {
     if (file.sourcePath) {
       const storedName = `${crypto.createHash('sha256').update(file.name.toLowerCase()).digest('hex').slice(0, 12)}-${file.name}`
-      const storedPath = path.join(root, storedName); await fsp.copyFile(file.sourcePath, storedPath)
-      files.push({ id: storedName, name: file.name, extension: file.extension, sizeBytes: file.sizeBytes, sha256: await sha256File(storedPath), localPath: storedPath })
+      const storedPath = path.join(root, storedName)
+      await fsp.writeFile(storedPath, file.contents)
+      files.push({ id: storedName, name: file.name, extension: file.extension, sizeBytes: file.sizeBytes, sha256: crypto.createHash('sha256').update(file.contents).digest('hex'), localPath: storedPath })
     } else files.push(file)
   }
   let discovery = current.discovery
   for (const candidate of candidates) {
     if (!['json', 'yaml', 'yml'].includes(candidate.extension)) continue
     try {
-      const document = await fsp.readFile(candidate.sourcePath, 'utf8'); let parsed
+      const document = candidate.contents.toString('utf8'); let parsed
       try { parsed = JSON.parse(document) } catch { parsed = YAML.parse(document) }
       if (!parsed?.openapi || !parsed?.paths) continue
       const operations = []; const methods = new Set(['get','post','put','patch','delete','head','options'])
@@ -2945,6 +3012,18 @@ async function provider_api_bridge_materials_choose(payload = {}) {
     } catch { /* best-effort discovery; the material remains available to the Agent */ }
   }
   const manifest = { draftId, files, discovery, updatedAt: new Date().toISOString() }; await writeAPIBridgeMaterialManifest(draftId, manifest); return manifest
+}
+async function provider_api_bridge_materials_choose(payload = {}) {
+  const draftId = String(payload?.input?.draftId || '')
+  const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile', 'multiSelections'], filters: [{ name: 'API materials', extensions: Array.from(API_BRIDGE_MATERIAL_EXTENSIONS) }] })
+  if (result.canceled) return { ...(await readAPIBridgeMaterialManifest(draftId)), canceled: true }
+  return storeAPIBridgeMaterials(draftId, result.filePaths)
+}
+async function provider_api_bridge_materials_add(payload = {}) {
+  const draftId = String(payload?.input?.draftId || '')
+  const filePaths = payload?.input?.filePaths
+  if (!Array.isArray(filePaths)) throw new Error('Dropped API material paths are required')
+  return storeAPIBridgeMaterials(draftId, filePaths)
 }
 async function provider_api_bridge_material_remove(payload = {}) {
   const draftId = String(payload?.input?.draftId || ''); const id = String(payload?.input?.id || '')
@@ -3096,26 +3175,26 @@ async function httpJson(method, route, body, token, options = {}) {
     Authorization: `Bearer ${token}`,
     'Content-Type': 'application/json',
   }
-  const request = () => fetchWithTimeout(`${BASE_URL}${route}`, {
+  const request = () => fetchTextWithTimeout(`${BASE_URL}${route}`, {
     method,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
   }, timeoutMs)
-  let response
+  let result
   try {
-    response = await request()
+    result = await request()
   } catch (error) {
     if (!retryOnOffline || !isLocalConnectionFailure(error)) {
       throw localRequestError(error, route, timeoutMs)
     }
     try {
       await start_dock()
-      response = await request()
+      result = await request()
     } catch (retryError) {
       throw localRequestError(retryError, route, timeoutMs)
     }
   }
-  const text = await response.text()
+  const { response, text } = result
   if (!response.ok) throw new Error(`local dock returned ${response.status}: ${text}`)
   if (!text.trim()) return {}
   try {
@@ -3209,8 +3288,7 @@ async function llmPostJsonWithBase(baseUrl, route, apiKey, body) {
     try {
       const headers = { 'Content-Type': 'application/json' }
       if (String(apiKey || '').trim()) headers.Authorization = `Bearer ${String(apiKey).trim()}`
-      const response = await fetchWithTimeout(url, { method: 'POST', headers, body: JSON.stringify(body) }, 20000)
-      const text = await response.text()
+      const { response, text } = await fetchTextWithTimeout(url, { method: 'POST', headers, body: JSON.stringify(body) }, 20000)
       if (!response.ok) {
         lastError = new Error(`LLM API ${route} returned ${response.status}: ${text}`)
         if (response.status === 404 || response.status === 405) continue
@@ -3240,8 +3318,7 @@ async function llmGetModelsWithBase(baseUrl, apiKey) {
     try {
       const headers = {}
       if (String(apiKey || '').trim()) headers.Authorization = `Bearer ${String(apiKey).trim()}`
-      const response = await fetchWithTimeout(url, { method: 'GET', headers }, 12000)
-      const text = await response.text()
+      const { response, text } = await fetchTextWithTimeout(url, { method: 'GET', headers }, 12000)
       if (!response.ok) {
         lastError = new Error(`LLM models endpoint returned ${response.status}: ${text}`)
         if (response.status === 404 || response.status === 405) continue
@@ -3282,9 +3359,15 @@ function classifyLlmError(error) {
 
 async function fetchWithTimeout(url, options, timeoutMs) {
   const controller = new AbortController()
+  const upstreamSignal = options?.signal
+  const fetchOptions = { ...(options || {}) }
+  delete fetchOptions.signal
+  const abortFromUpstream = () => controller.abort(upstreamSignal?.reason)
+  if (upstreamSignal?.aborted) abortFromUpstream()
+  else upstreamSignal?.addEventListener('abort', abortFromUpstream, { once: true })
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    return await fetch(url, { ...options, signal: controller.signal })
+    return await fetch(url, { ...fetchOptions, signal: controller.signal })
   } catch (error) {
     if (controller.signal.aborted) {
       throw new Error(`request timed out after ${timeoutMs}ms`)
@@ -3292,7 +3375,43 @@ async function fetchWithTimeout(url, options, timeoutMs) {
     throw error
   } finally {
     clearTimeout(timeout)
+    upstreamSignal?.removeEventListener('abort', abortFromUpstream)
   }
+}
+
+async function readStreamChunk(reader, timeoutMs, signal) {
+  if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('download canceled')
+  let timer
+  let removeAbort = () => undefined
+  const timeoutError = new RequestTimeoutError(`download stopped receiving data for ${Math.round(timeoutMs / 1000)} seconds`)
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      void reader.cancel(timeoutError).catch(() => undefined)
+      reject(timeoutError)
+    }, timeoutMs)
+  })
+  const canceled = new Promise((_, reject) => {
+    if (!signal) return
+    const abort = () => {
+      const error = signal.reason instanceof Error ? signal.reason : new Error('download canceled')
+      void reader.cancel(error).catch(() => undefined)
+      reject(error)
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    removeAbort = () => signal.removeEventListener('abort', abort)
+  })
+  try { return await Promise.race([reader.read(), deadline, canceled]) }
+  finally { clearTimeout(timer); removeAbort() }
+}
+
+async function fetchTextWithTimeout(url, options, timeoutMs) {
+  const result = await fetchAndReadWithTimeout(url, options, timeoutMs, (response) => response.text())
+  return { response: result.response, text: result.body }
+}
+
+async function fetchArrayBufferWithTimeout(url, options, timeoutMs) {
+  const result = await fetchAndReadWithTimeout(url, options, timeoutMs, (response) => response.arrayBuffer())
+  return { response: result.response, arrayBuffer: result.body }
 }
 
 async function openPath(target) {

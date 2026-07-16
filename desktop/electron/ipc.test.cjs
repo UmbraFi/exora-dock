@@ -24,3 +24,18 @@ test('IPC authorization runs before a supported command handler', async () => {
   )
   assert.equal(handled, false)
 })
+
+test('IPC deadlines release a stalled command', async () => {
+  let invokeHandler
+  const ipcMain = { handle: (_channel, handler) => { invokeHandler = handler } }
+  registerIpcHandlers(ipcMain, {
+    wallet: { wallet_status: async () => new Promise(() => undefined) },
+  }, {
+    timeoutForCommand: () => 15,
+  })
+
+  await assert.rejects(
+    invokeHandler({}, 'wallet_status', {}),
+    (error) => error?.code === 'IPC_COMMAND_TIMEOUT' && /interface has been released/i.test(error.message),
+  )
+})

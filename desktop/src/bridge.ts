@@ -5,6 +5,7 @@ type ExoraBridge = {
     chromiumLocale?: string
   }
   invoke<T = unknown>(command: string, payload?: Record<string, unknown>): Promise<T>
+  getPathForFile?(file: File): string
   onV3Progress?(callback: (payload: unknown) => void): () => void
   onAuthStateChanged?(callback: (payload: unknown) => void): () => void
 }

@@ -18,6 +18,7 @@ The canonical specification is available in:
 
 - [中文 V3.2 白皮书](./docs/WHITEPAPER.md)
 - [English V3.2 whitepaper](./docs/WHITEPAPER.en.md)
+- [四个核心项目的架构边界](./docs/CORE_APPLICATION_BOUNDARIES.md)
 
 V3.2 centers on:
 
@@ -26,7 +27,7 @@ Resource → Listing → Lease → Usage → Settlement
 ```
 
 - `file`: Exora-hosted multipart assets, downloadable or environment-only.
-- `AI-first`: one machine-readable AgentProductManifest for compute, download, and api_operation products.
+- `AI-first`: four authoritative `applicationSource` projects (`vm`, `resources`, `endpoint`, `api_bridge`) share the underlying compute, download, and api_operation execution models.
 - `download`: AssetBundle purchase creates a seller-configured, time-limited DownloadGrant with free retry and resume.
 - `compute`: Linux KVM uses hardware virtualization; the Windows Technical Preview uses a disclosed `managed_wsl2_shared_host` environment with one active lease per host and Cloud reverse-SSH delivery.
 - `availability`: automatic provider_busy delisting and verified relisting without a manual availability switch.

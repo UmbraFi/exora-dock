@@ -140,7 +140,7 @@ func TestMissingCommercialFieldsEnterNeedsInputAndCreateIsIdempotent(t *testing.
 	if err != nil || len(candidates) != 1 {
 		t.Fatalf("discover err=%v candidates=%+v", err, candidates)
 	}
-	request := CreateRequest{Kind: KindResources, CandidateIDs: []string{candidates[0].CandidateID}, IdempotencyKey: "stable-resource-run"}
+	request := CreateRequest{Kind: KindResources, CandidateIDs: []string{candidates[0].CandidateID}, Specification: map[string]any{"version": "1.0.0", "license": "commercial"}, IdempotencyKey: "stable-resource-run"}
 	first, err := service.Create(request)
 	if err != nil {
 		t.Fatal(err)
@@ -188,7 +188,7 @@ func TestCreateEnforcesSellerPolicyConcurrencyLimit(t *testing.T) {
 }
 
 func TestExplicitCommercialValueOverridesDefaultWithoutInference(t *testing.T) {
-	policy := SellerAutomationPolicy{Defaults: map[string]map[string]any{KindResources: {"commercial": map[string]any{"price": map[string]any{"amount": float64(5), "currency": "USDC"}}}}}
+	policy := SellerAutomationPolicy{Defaults: map[string]map[string]any{KindResources: {"commercial": map[string]any{"price": map[string]any{"amount": float64(5), "currency": "USDC"}}, "specification": map[string]any{"version": "1.0.0", "license": "commercial"}}}}
 	request := CreateRequest{Kind: KindResources, Commercial: map[string]any{"price": map[string]any{"amount": float64(0), "currency": "USDC"}}}
 	normalized, missing, err := normalizeRunInput(policy, request, []Candidate{{DisplayName: "bundle", Summary: "files"}})
 	if err != nil || len(missing) != 0 {
@@ -205,7 +205,7 @@ func TestExplicitCommercialValueOverridesDefaultWithoutInference(t *testing.T) {
 }
 
 func TestExplicitNestedCommercialFieldKeepsSavedSiblingDefaults(t *testing.T) {
-	policy := SellerAutomationPolicy{Defaults: map[string]map[string]any{KindResources: {"commercial": map[string]any{"price": map[string]any{"amount": float64(5), "currency": "USDC"}}}}}
+	policy := SellerAutomationPolicy{Defaults: map[string]map[string]any{KindResources: {"commercial": map[string]any{"price": map[string]any{"amount": float64(5), "currency": "USDC"}}, "specification": map[string]any{"version": "1.0.0", "license": "commercial"}}}}
 	request := CreateRequest{Kind: KindResources, Commercial: map[string]any{"price": map[string]any{"amount": float64(2)}}}
 	normalized, missing, err := normalizeRunInput(policy, request, []Candidate{{DisplayName: "bundle"}})
 	if err != nil || len(missing) != 0 {
@@ -214,6 +214,17 @@ func TestExplicitNestedCommercialFieldKeepsSavedSiblingDefaults(t *testing.T) {
 	price := mapValue(normalized, "price")
 	if amount, _ := numberValue(price, "amount"); amount != 2 || textValue(price, "currency") != "USDC" {
 		t.Fatalf("explicit nested override discarded saved sibling defaults: %+v", price)
+	}
+}
+
+func TestResourcesRejectVMMountDelivery(t *testing.T) {
+	policy := SellerAutomationPolicy{Defaults: map[string]map[string]any{KindResources: {
+		"commercial":    map[string]any{"price": map[string]any{"amount": float64(5), "currency": "USDC"}},
+		"specification": map[string]any{"version": "1.0.0", "license": "commercial"},
+	}}}
+	request := CreateRequest{Kind: KindResources, Specification: map[string]any{"delivery": "downloadable_and_environment"}}
+	if _, _, err := normalizeRunInput(policy, request, []Candidate{{DisplayName: "bundle"}}); err == nil || !strings.Contains(err.Error(), "Resources cannot be mounted") {
+		t.Fatalf("cross-system Resources delivery accepted: %v", err)
 	}
 }
 

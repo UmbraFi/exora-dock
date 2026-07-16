@@ -1,5 +1,6 @@
 const DEFAULT_CLOUD_URL = 'http://127.0.0.1:8090'
 const PRODUCTION_CLOUD_URL = 'https://api.exoradock.com'
+const { RequestTimeoutError, fetchAndReadWithTimeout } = require('./network-timeout.cjs')
 
 class CloudAuthError extends Error {
   constructor(message, options = {}) {
@@ -16,6 +17,7 @@ function createCloudAuth(options = {}) {
   if (typeof fetchImpl !== 'function') throw new Error('Cloud auth requires fetch')
   const now = options.now || (() => new Date())
   const randomUUID = options.randomUUID || (() => require('node:crypto').randomUUID())
+  const requestTimeoutMs = Math.max(1, Number(options.requestTimeoutMs) || 15000)
   let memorySession = ''
   let memoryPendingRevocations = []
   let pendingRegistration
@@ -48,12 +50,11 @@ function createCloudAuth(options = {}) {
     return parsed.toString().replace(/\/$/, '')
   }
 
-  async function request(cloudURL, method, route, body, token, timeoutMs = 15000) {
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  async function request(cloudURL, method, route, body, token, timeoutMs = requestTimeoutMs) {
     let response
+    let text
     try {
-      response = await fetchImpl(`${cloudURL}${route}`, {
+      const result = await fetchAndReadWithTimeout(`${cloudURL}${route}`, {
         method,
         headers: {
           Accept: 'application/json',
@@ -63,17 +64,15 @@ function createCloudAuth(options = {}) {
         body: body === undefined ? undefined : JSON.stringify(body),
         redirect: 'error',
         cache: 'no-store',
-        signal: controller.signal,
-      })
+      }, timeoutMs, (value) => value.text(), fetchImpl)
+      response = result.response
+      text = result.body
     } catch (error) {
-      const timedOut = error?.name === 'AbortError'
+      const timedOut = error instanceof RequestTimeoutError || error?.name === 'AbortError'
       throw new CloudAuthError(timedOut ? 'Exora Cloud request timed out.' : 'Exora Cloud is unavailable.', {
         code: timedOut ? 'cloud_timeout' : 'cloud_unavailable', network: true,
       })
-    } finally {
-      clearTimeout(timeout)
     }
-    const text = await response.text()
     let decoded = {}
     try { decoded = text.trim() ? JSON.parse(text) : {} } catch { decoded = { error: text.trim() } }
     if (!response.ok) {

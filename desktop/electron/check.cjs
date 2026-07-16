@@ -77,10 +77,10 @@ for (const marker of ['button::before', 'button::after', 'button *', 'background
 for (const marker of ['function renderV3SellerSurface', "['listings', 'Listings',", "['vm', 'VM',", "['resources', 'Resources',", "['endpoint', 'Endpoint',", "['api_bridge', 'API Bridge',", 'function renderV3EndpointAgentPage', 'class="v3-seller-active-bar"', 'class="v3-market-surface v3-seller-surface"']) {
   if (!renderer.includes(marker)) throw new Error(`V3 Electron surface missing: ${marker}`)
 }
-for (const marker of ['function renderV3HostScanButton', 'async function runV3WindowsHostScan()', "state.v3HostScanProgress = { phase: 'hardware', percent: 0 }", 'state.v3HostScanProgress = undefined', 'if (button.dataset.v3Action === \'vm-probe\') return']) {
+for (const marker of ['function renderV3HostScanButton', 'async function runV3WindowsHostScan()', "state.v3HostScanProgress = { phase: 'hardware', percent: 0 }", 'state.v3HostScanProgress = undefined']) {
   if (!renderer.includes(marker)) throw new Error(`Recoverable host scan UI missing: ${marker}`)
 }
-if (!renderer.includes('if (agentQuery) agentQuery.disabled = next || builtInBuyerInputLocked()')) throw new Error('Global busy state must tolerate the retired Agent composer')
+if (!renderer.includes('if (agentQuery) agentQuery.disabled = state.busy || builtInBuyerInputLocked()')) throw new Error('Busy state must tolerate the retired Agent composer without locking global controls')
 if (!electronMain.includes("new RequestTimeoutError('Hardware scan timed out after 60 seconds.")) throw new Error('Host scan must have an overall timeout')
 if (!electronMain.includes('fetchAndReadWithTimeout(target, requestOptions, 15000')) throw new Error('Host bandwidth probes must time out while reading response bodies')
 const tabOrder = ["['listings', 'Listings',", "['vm', 'VM',", "['resources', 'Resources',", "['endpoint', 'Endpoint',", "['api_bridge', 'API Bridge',"].map((marker) => renderer.indexOf(marker))
@@ -98,6 +98,13 @@ for (const marker of ['function renderV3UnifiedListingsPageV2', "v3ListingMode: 
   if (!renderer.includes(marker)) throw new Error(`Unified marketplace surface missing: ${marker}`)
 }
 const listingsSurface = renderer.slice(renderer.indexOf('function renderV3UnifiedListingsPageV2'), renderer.indexOf('function renderV3SellerSurface'))
+for (const marker of ['data-v3-listing-project="vm"', 'data-v3-listing-project="resources"', 'data-v3-listing-project="api"']) {
+  if (!listingsSurface.includes(marker)) throw new Error(`Three-way Listings project switch missing: ${marker}`)
+}
+for (const retiredProjectButton of ['data-v3-listing-project="endpoint"', 'data-v3-listing-project="api_bridge"']) {
+  if (listingsSurface.includes(retiredProjectButton)) throw new Error(`Listings project switch returned to four projects: ${retiredProjectButton}`)
+}
+if (!/\.v3-listing-project-switch\s*\{[^}]*grid-template-columns:\s*repeat\(3,/s.test(rendererStyles)) throw new Error('Listings project switch must remain a three-column VM / RES / API control')
 for (const removedListingChrome of ['v3-listing-overview', 'v3-listing-stats', 'data-v3-listing-filter-scope', 'data-v3-listing-filter-kind', 'data-v3-listing-filter-status', 'Refresh both']) {
   if (listingsSurface.includes(removedListingChrome)) throw new Error(`Listings surface still includes removed overview or filters: ${removedListingChrome}`)
 }
@@ -160,6 +167,19 @@ for (const marker of ['function installNativeTooltipBlocker()', "attributeFilter
 if ((renderer.match(/installNativeTooltipBlocker\(\)/g) || []).length < 2) throw new Error('Native renderer tooltip blocker is not installed')
 if (/tray\.setToolTip\s*\(/.test(electronMain)) throw new Error('The system tray must not display a native tooltip')
 const preload = fs.readFileSync(path.join(__dirname, 'preload.cjs'), 'utf8')
+for (const marker of ['webUtils', 'getPathForFile(file)', 'provider_api_bridge_materials_add', 'function attachV3AgentMaterialDropHandlers()', 'async function importV3AgentMaterials(']) {
+  if (!preload.includes(marker) && !electronMain.includes(marker) && !renderer.includes(marker)) throw new Error(`API material drag-and-drop support missing: ${marker}`)
+}
+if (!renderer.includes('v3APIMaterialsImporting: boolean') || !renderer.includes('v3EndpointMaterialsImporting: boolean')) throw new Error('API material import must use local recoverable busy state')
+for (const marker of ["action === 'choose-files'", 'Release to package these files', 'async function chooseV3ResourceFiles(filePaths?: string[])']) {
+  if (!renderer.includes(marker)) throw new Error(`Resource file drag-and-drop support missing: ${marker}`)
+}
+if (!electronMain.includes('Array.isArray(input.filePaths)')) throw new Error('Resource file drops must reach the existing ZIP packaging path')
+if (renderer.includes("action('choose-files', () => void run(")) throw new Error('Native file dialogs must not be wrapped in the renderer busy-state helper')
+for (const marker of ['async function showResourceFileDialog()', 'mainWindow.moveTop()', 'setImmediate(resolve)']) {
+  if (!electronMain.includes(marker)) throw new Error(`Resource file dialog foreground handling missing: ${marker}`)
+}
+if (!/\.v3-file-drop-backdrop\s*\{[^}]*backdrop-filter:\s*blur\(14px\)/s.test(rendererStyles)) throw new Error('File drag feedback must keep the blurred workspace backdrop')
 const cloudAuthMain = fs.readFileSync(path.join(__dirname, 'cloud-auth.cjs'), 'utf8')
 const authUI = fs.readFileSync(path.join(__dirname, '..', 'src', 'auth-ui.ts'), 'utf8')
 for (const marker of ["element.addEventListener('invalid'", 'form.noValidate = true', "input:invalid", "aria-invalid', 'true"]) {
@@ -274,6 +294,13 @@ for (const marker of ['order_access_key_status', 'order_access_key_create', 'ord
 }
 for (const marker of ['data-wallet-tab="agent-limit"', 'data-wallet-tab="history"', 'data-v3-order-key-action', 'data-v3-approval-form']) {
 	if (!renderer.includes(marker)) throw new Error(`wallet or order security surface missing: ${marker}`)
+}
+for (const marker of ['actionBusyControls', 'walletStatusRequest', 'walletModalRefreshRequest', 'void refreshWalletModalStatus()']) {
+  if (!renderer.includes(marker)) throw new Error(`recoverable local busy state is missing: ${marker}`)
+}
+if (renderer.includes("app.querySelectorAll<HTMLButtonElement>('button').forEach")) throw new Error('async actions must not disable every button in the application')
+for (const marker of ['timeoutForCommand: desktopCommandTimeoutMs', 'fetchTextWithTimeout', 'readStreamChunk']) {
+  if (!electronMain.includes(marker)) throw new Error(`system-wide timeout protection is missing: ${marker}`)
 }
 for (const marker of ['data-account-key-section', 'data-account-key-save', 'data-account-key-delete']) {
 	if (renderer.includes(marker)) throw new Error(`retired account-wide key UI remains: ${marker}`)

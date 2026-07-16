@@ -87,6 +87,17 @@ func normalizeRunInput(policy SellerAutomationPolicy, request CreateRequest, can
 		if runtime.GOOS == "windows" && textValue(specification, "environmentRoot") == "" {
 			missing = append(missing, "specification.environmentRoot")
 		}
+	case KindResources:
+		if textValue(specification, "version") == "" {
+			missing = append(missing, "specification.version")
+		}
+		if textValue(specification, "license") == "" {
+			missing = append(missing, "specification.license")
+		}
+		if delivery := textValue(specification, "delivery"); delivery != "" && delivery != "downloadable" {
+			return nil, nil, errors.New("specification.delivery must be downloadable; Resources cannot be mounted into a VM")
+		}
+		specification["delivery"] = "downloadable"
 	case KindEndpoint, KindAPIBridge:
 		service, err := authorizedService(policy, candidates[0])
 		if err != nil {

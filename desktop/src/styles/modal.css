@@ -599,8 +599,31 @@ button.v3-environment-cloud-scrim:hover {
 
 :root[data-theme="dark"] .app-modal-panel,
 :root[data-theme="dark"] .app-modal-head,
-:root[data-theme="dark"] .app-modal-footer {
-  background: #171827;
+:root[data-theme="dark"] .app-modal-footer,
+:root[data-theme="dark"] .order-search-result-drawer,
+:root[data-theme="dark"] .order-search-result-drawer > header,
+:root[data-theme="dark"] .order-search-results {
+  background: var(--color-surface);
+}
+
+:root[data-theme="dark"] .app-modal-panel {
+  box-shadow: 0 24px 72px rgb(0 0 0 / .38);
+}
+
+:root[data-theme="dark"] .order-search-field,
+:root[data-theme="dark"] .order-search-field:focus-within,
+:root[data-theme="dark"] .order-search-result-drawer {
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .order-search-field > input,
+:root[data-theme="dark"] .order-search-field > input:focus,
+:root[data-theme="dark"] .order-search-field > input:focus-visible {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  outline: 0;
 }
 
 :root[data-theme="dark"] .pin-settings-code-control .wallet-code-cells > i {

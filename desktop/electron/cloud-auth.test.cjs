@@ -29,6 +29,7 @@ function harness(routes, settings = {}) {
     configuredCloudURL: async () => '',
     randomUUID: () => 'fixed-install-id',
     deviceName: () => 'Test Dock',
+    requestTimeoutMs: settings.requestTimeoutMs,
     fetchImpl: async (url, options = {}) => {
       const request = { url, method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : undefined, headers: options.headers || {} }
       requests.push(request)
@@ -45,6 +46,25 @@ function harness(routes, settings = {}) {
   })
 	return { auth, get state() { return state }, requests, get localPINClears() { return localPINClears }, broadcasts }
 }
+
+test('times out when a Cloud response body stalls', async () => {
+  const routes = {
+    'POST /v1/auth/sessions/password': jsonResponse(200, {
+      account: { accountId: 'acct_1', email: 'user@example.com' },
+      session: { sessionId: 'sess_1' },
+      sessionToken: 'session_token',
+    }),
+    'GET /v1/auth/providers': jsonResponse(200, { password: true, social: [] }),
+    'GET /v1/me': jsonResponse(200, { account: { accountId: 'acct_1', email: 'user@example.com' }, session: { sessionId: 'sess_1' } }),
+    'GET /v3/stalled': { ok: true, text: () => new Promise(() => undefined) },
+  }
+  const h = harness(routes, { requestTimeoutMs: 15 })
+  await h.auth.login({ input: { email: 'user@example.com', password: 'long secure password' } })
+  await assert.rejects(
+    h.auth.apiRequest('GET', '/v3/stalled'),
+    (error) => error?.code === 'cloud_timeout' && error?.network === true,
+  )
+})
 
 test('registration does not retain a PIN while email verification is pending', async () => {
 	let pinConfigured = false

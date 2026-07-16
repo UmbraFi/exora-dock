@@ -1,4 +1,4 @@
-<!-- Source: WHITEPAPER.md; normalized-sha256: b7ade609f5e80ef42e58b3c33e184802082861327dbfb2a6f4456b703f6587ce -->
+<!-- Source: WHITEPAPER.md; normalized-sha256: 9782052c58c84d695197e104a556a84f3e4f477e6659588faa9ac61f9259b676 -->
 
 # Exora V3.2 AI-First Resource Market Protocol Whitepaper
 
@@ -18,7 +18,7 @@ The protocol flow is:
 Resource → Listing → Lease → Usage → Settlement
 ```
 
-The market has three Agent products: `compute` prepurchases an exclusive server VM in integer minutes; `download` purchases a time-limited DownloadGrant for one AssetVersion; `api_operation` purchases one data row, report, query, conversion, or side-effecting OpenAPI operation. One `AgentProductManifest` describes them all.
+The market exposes four first-class application categories: `vm`, `resources`, `endpoint`, and `api_bridge`. Top-level `applicationSource` defines responsibility; `productKind` describes only the billing/execution model: `compute` prepurchases VM minutes, `download` buys a time-limited DownloadGrant for one AssetVersion, and `api_operation` buys one declared operation. One `AgentProductManifest` describes them all.
 
 Compute retains a strict 1:1 model: one physical computer, one `InventorySlot`, and one Consumer VM. Worker detects provider activity and pauses automatically without manual delisting. After the host becomes idle, three full checks restore the Listing. Consumer Agent receives Guest Root; Worker restores a clean VM from signed Golden Image after use.
 
@@ -67,7 +67,7 @@ V3.2 Alpha does not:
 - support Hyper-V or VMware, or represent managed WSL2 as equivalent to KVM hardware isolation;
 - carry large file bodies in MCP messages;
 - infer the semantics of an API without OpenAPI;
-- make meal ordering a fourth product kind or settle external meal, shipping, or merchandise charges;
+- make meal ordering a new first-class application category or settle external meal, shipping, or merchandise charges;
 - expose Host Root, libvirt socket, Provider SSH, payment credentials, or owner tokens to a Consumer or Agent;
 - treat a cleanup script as equivalent to Golden Image Reset;
 - claim that an Alpha or locally configured deployment has production availability, custody, or security certification.
@@ -116,12 +116,13 @@ HTTP retains the `/v3` major version. Schemas use `exora.<object>.v3alpha1`. V3 
 
 ### 4.1 AgentProductManifest
 
-`AgentProductManifest` is the authoritative AI-market description. `productKind` is `compute`, `download`, or `api_operation`. Natural language supports search and explanation; JSON Schema, price, limits, and errors drive deterministic use. Images or human pages cannot add a capability absent from the Manifest.
+`AgentProductManifest` is the authoritative AI-market description; `V3Product.applicationSource` is the authoritative business category and is one of `vm`, `resources`, `endpoint`, or `api_bridge`. The same Manifest field remains a compatibility mirror, while a Listing derives its immutable category from Product. `productKind` is only `compute`, `download`, or `api_operation`. Missing, unknown, or contradictory mappings fail with `application_contract_mismatch`; they are never guessed or defaulted to API Bridge. Natural language supports search and explanation; JSON Schema, price, limits, and errors drive deterministic use.
 
 ```json
 {
   "schemaVersion": "exora.agent_product_manifest.v3alpha1",
   "productId": "prd_01",
+  "applicationSource": "api_bridge",
   "productKind": "api_operation",
   "title": "Generate one sales report",
   "description": "Returns a structured monthly sales report.",
@@ -370,7 +371,6 @@ ResetReceipt proves the post-Lease reset.
   "slotId": "slot_h100_01",
   "encryptionKeyDestroyed": true,
   "writeLayerDeleted": true,
-  "restrictedAssetsUnmounted": true,
   "vmRecreated": true,
   "verification": {"imageHashMatch": true, "oldUsersAbsent": true, "oldSshKeysAbsent": true, "gpuReady": true, "memoryReady": true, "diskReady": true, "networkReady": true},
   "state": "verified",
@@ -462,8 +462,7 @@ Every Lease uses:
 
 - a pinned read-only Golden Image;
 - an independently encrypted write layer and random Lease Disk Key;
-- temporary Guest identity, SSH credential, and Lease Capability;
-- optional read-only `environment_only` assets.
+- temporary Guest identity, SSH credential, and Lease Capability.
 
 Release state is:
 
@@ -472,7 +471,7 @@ active → draining → stopping → sanitizing → resetting → verifying → 
                                       ↘ failure → quarantined
 ```
 
-Worker stops new work, provides a bounded artifact-export window, powers off the VM, revokes identities, unmounts restricted assets, destroys the disk key, deletes the write layer, rebuilds from Golden Image, and boots. It then checks image hash, GPU, RAM, disk, CUDA, network, and the absence of old users, SSH keys, processes, and files.
+Worker stops new work, provides a bounded artifact-export window, powers off the VM, revokes identities, destroys the disk key, deletes the write layer, rebuilds from Golden Image, and boots. It then checks image hash, GPU, RAM, disk, CUDA, network, and the absence of old users, SSH keys, processes, and files.
 
 A cleanup script cannot substitute for Reset. Any failure moves the Slot to `quarantined`, blocks new Leases, pauses relevant Settlement, and preserves evidence. Compute billing stops after `draining`; `stopping`, `sanitizing`, `resetting`, `verifying`, and `cleaning` are not billed.
 
@@ -480,11 +479,7 @@ A cleanup script cannot substitute for Reset. Any failure moves the Slot to `qua
 
 A Provider uses the Resources workspace or authorized seller-draft MCP to select local files. Dock revalidates the authorized candidates, packages them into one immutable ZIP AssetBundle, computes SHA-256, and uploads it with a text description, fixed AssetVersion, license, per-download price, and a DownloadGrant duration from one hour to 30 days. The current Desktop enforces its configured bundle-size limit. Files default to Exora-managed S3-compatible storage. Provider uploads directly with multipart and signed URLs; MCP and Cloud application server do not carry bodies. Completion supplies part manifest, total size, and SHA-256 and passes MIME, malware, duplicate-content, and license validation. Replacement creates a new immutable AssetVersion.
 
-A Listing selects:
-
-- `downloadable`: a valid purchase or Lease receives an account-, object-, count-, and time-bound URL;
-- `environment_only`: the asset is mounted read-only into a related VM and no raw download URL is issued;
-- `downloadable_and_environment`: both modes are allowed.
+A Resources Listing has fixed `downloadable` delivery: a valid purchase receives an object-, account-, count-, and time-bound DownloadGrant. Resources never attach to a VM or Lease, never mount into compute, and never automatically receive VM code or results. Legacy `environment_only` and `downloadable_and_environment` Listings are paused for seller confirmation; the system does not automatically broaden download rights.
 
 Assets declare license, commercial and derivative rights, attribution, territory, and refund terms. A report can pause new Leases but never erase historical ledger or evidence.
 
@@ -494,10 +489,10 @@ A `download` purchase charges before DownloadGrant issuance. During validity, th
 
 The Electron application exposes two seller paths that both normalize approved routes as `api_operation` products:
 
-- **Endpoint:** an authorized private or loopback service stays behind Dock. The seller configures the local URL and a local `credentialRef`; Dock performs side-effect-free health and route probes and serves purchased requests through its outbound tunnel. Local URLs and plaintext credentials do not enter the public Listing.
-- **API Bridge:** an authorized public HTTPS service is reached through Exora's transparent Gateway. Import accepts OpenAPI 3.x or a seller-reviewed structured route draft. Dock and Cloud enforce public HTTPS, DNS-rebinding and redirect protection, safe headers, health checks, request/response bounds, and declared metering.
+- **Endpoint:** an authorized private or loopback service stays behind Dock. Its local URL, plaintext Secret, and `credentialRef` remain only in Dock secure storage and never enter the Cloud database, responses, or logs; Cloud stores only configured proof, routes, and metering contract. Dock performs side-effect-free health checks and serves requests through its outbound tunnel. An offline or unhealthy Dock makes the Endpoint unavailable.
+- **API Bridge:** an authorized public HTTPS service is reached through Exora Cloud's transparent Gateway. It requires a validated public HTTPS `baseUrl`, forbids `tunnelEndpointId`, and keeps credentials encrypted in Cloud. Once published it does not require Dock to remain online. Import accepts OpenAPI 3.x or a seller-reviewed structured route draft.
 
-Every approved operation generates an independent ApiOperationProduct and stable Capability. Manifest contains natural-language description, input/output JSON Schema, fixed or metered price, rate, timeout, idempotency, privacy, and side-effect class. One data row, report, query result, file conversion, and meal order are different operation results or effects, not new product kinds.
+Every approved operation generates an independent ApiOperationProduct and stable Capability. Manifest contains natural-language description, input/output JSON Schema, fixed or metered price, rate, timeout, idempotency, privacy, and side-effect class. One data row, report, query result, file conversion, and meal order are different operation results or effects, not new first-class application categories.
 
 Consumer Agent calls only the Exora Gateway or Dock's listing-scoped Gateway. The Gateway verifies Lease, Schema, rate, budget, and operation before injecting Provider credentials. The Agent never receives origin secrets. Arbitrary URLs, headers, private-network redirects, and undeclared paths are denied by default.
 
@@ -578,7 +573,7 @@ The implemented marketplace surface exposes these Consumer Agent tools:
 
 | Tool | Purpose |
 |---|---|
-| `search_products` | Search compute, download, and api_operation |
+| `search_products` | Search published `vm`, `resources`, `endpoint`, and `api_bridge` products |
 | `get_product_manifest` | Read authoritative text, Schema, price, delivery, and availability |
 | `estimate_purchase` | Produce an expiring structured purchase estimate |
 | `purchase_compute_minutes` | Create Hold and prepay integer minutes |
@@ -621,7 +616,7 @@ small control data  MCP / HTTPS JSON
 large files         S3 multipart + short-lived signed URL
 workspace deltas    temporary Lease SSH/SFTP/rsync
 live logs           bounded WebSocket/SSE stream
-very large data     pre-mounted environment_only; originals do not move
+Resources data      independent S3 object version + DownloadGrant
 ```
 
 The Cloud application server does not proxy large bodies. A signed URL allows one action on one object version and is constrained by account, Lease, size, count, and expiry.
@@ -631,7 +626,7 @@ The Cloud application server does not proxy large bodies. A signed URL allows on
 - Dock private keys use OS secure storage; Cloud stores public keys and revocation state.
 - Provider Host SSH, libvirt, and Golden Image never enter Consumer Agent.
 - Guest does not mount Host Docker socket, management directories, or privileged devices. GPU is delivered only through declared PCIe Passthrough.
-- Provider API secrets are injected by Gateway key management or Provider Dock.
+- Endpoint secrets are injected only by Provider Dock; API Bridge secrets are encrypted and injected by Cloud Gateway.
 - Seller MCP can reference only locally stored credential aliases; it cannot retrieve plaintext credentials or place them in a draft.
 - Hosted files are encrypted at rest and in transit. Each VM Lease has an independent disk key.
 - Full prompts, Agent conversations, file bodies, and sensitive API fields are not Cloud events by default.

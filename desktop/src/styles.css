@@ -5,7 +5,13 @@
   --color-surface-soft: #f0f1fa;
   --color-surface-tint: #ecebff;
   --color-sidebar: #fafafe;
-  --color-switch-track: var(--color-surface-tint);
+  --color-switch-track-off: var(--color-surface);
+  --color-switch-thumb-off: var(--color-primary);
+  --color-switch-track-on: var(--color-primary);
+  --color-switch-thumb-on: var(--color-surface);
+  --color-switch-border-off: color-mix(in srgb, var(--color-primary) 28%, var(--color-border));
+  --color-switch-border-on: var(--color-primary);
+  --color-switch-focus: rgb(var(--color-primary-rgb) / 0.22);
   --color-text-primary: #17182b;
   --color-text-secondary: #686b80;
   --color-text-tertiary: #8b8ea3;
@@ -787,6 +793,8 @@ h3 {
 
 .view-switch {
   --view-switch-tone: var(--color-primary-rgb);
+  --view-switch-active-background: rgb(var(--view-switch-tone) / 0.09);
+  --view-switch-active-border: rgb(var(--view-switch-tone) / 0.18);
   background: #f1f3f2;
   border: 0.5px solid #e0e5e2;
   border-radius: 8px;
@@ -798,6 +806,27 @@ h3 {
   width: 100%;
 }
 
+.view-switch::before {
+  background: var(--view-switch-active-background);
+  border: 0.5px solid var(--view-switch-active-border);
+  border-radius: 6px;
+  bottom: 3px;
+  box-sizing: border-box;
+  content: '';
+  left: 3px;
+  pointer-events: none;
+  position: absolute;
+  top: 3px;
+  transform: translateX(0);
+  transition: transform 220ms var(--chrome-motion-ease), opacity 160ms ease;
+  width: calc((100% - 8px) / 2);
+  z-index: 0;
+}
+
+.view-switch:has([data-order-side-tab="seller"].active)::before {
+  transform: translateX(calc(100% + 2px));
+}
+
 .view-tab-cell {
   align-items: center;
   border: 0.5px solid transparent;
@@ -807,6 +836,7 @@ h3 {
   min-height: 27px;
   min-width: 0;
   position: relative;
+  z-index: 1;
 }
 
 .settings-return-cell {
@@ -824,6 +854,10 @@ h3 {
   background: transparent;
   border-color: transparent;
   padding: 0;
+}
+
+.app-shell.settings-mode .view-switch::before {
+  opacity: 0;
 }
 
 .app-shell.settings-mode {
@@ -844,8 +878,8 @@ h3 {
 }
 
 .view-tab-cell:has(button.active) {
-  background: rgb(var(--view-switch-tone) / 0.09);
-  border-color: rgb(var(--view-switch-tone) / 0.18);
+  background: transparent;
+  border-color: transparent;
   box-shadow: none;
 }
 
@@ -9379,7 +9413,13 @@ label span {
   --color-surface-soft: #20211d;
   --color-surface-tint: #27291f;
   --color-sidebar: #11130f;
-  --color-switch-track: #20211d;
+  --color-switch-track-off: var(--color-surface-soft);
+  --color-switch-thumb-off: var(--color-primary);
+  --color-switch-track-on: var(--color-primary);
+  --color-switch-thumb-on: var(--color-surface);
+  --color-switch-border-off: color-mix(in srgb, var(--color-primary) 24%, var(--color-border));
+  --color-switch-border-on: var(--color-primary);
+  --color-switch-focus: rgb(var(--color-primary-rgb) / 0.24);
   --color-text-primary: #f7f7f3;
   --color-text-secondary: #c4c4be;
   --color-text-tertiary: #888982;
@@ -9591,8 +9631,10 @@ label span {
 
 :root[data-theme="dark"] .view-switch {
   --view-switch-tone: var(--color-primary-rgb);
-  background: #171e1b;
-  border-color: #303b36;
+  --view-switch-active-background: rgb(var(--view-switch-tone) / 0.12);
+  --view-switch-active-border: rgb(var(--view-switch-tone) / 0.24);
+  background: var(--color-surface-soft);
+  border-color: var(--color-border);
 }
 
 :root[data-theme="dark"] .view-switch button {
@@ -9610,8 +9652,8 @@ label span {
 }
 
 :root[data-theme="dark"] .view-tab-cell:has(button.active) {
-  background: rgb(var(--view-switch-tone) / 0.12);
-  border-color: rgb(var(--view-switch-tone) / 0.24);
+  background: transparent;
+  border-color: transparent;
   box-shadow: none;
 }
 
@@ -10992,7 +11034,8 @@ label span {
   .app-shell,
   .main-workspace,
   .task-sidebar,
-  .sidebar-chrome {
+  .sidebar-chrome,
+  .view-switch::before {
     transition: none;
   }
 
