@@ -143,18 +143,22 @@
   justify-content: center;
   min-height: 32px;
   padding: 0 11px;
-  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease;
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
   white-space: nowrap;
-}
-
-.app-setting-button:hover:not(:disabled) {
-  transform: translateY(-1px);
 }
 
 .app-setting-button.primary {
   background: var(--color-primary);
   border: 1px solid var(--color-primary);
-  color: #fff;
+  color: var(--color-on-primary);
+}
+
+.app-setting-button.primary:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+  border-color: var(--color-primary-hover);
+  box-shadow: none;
+  color: var(--color-on-primary);
+  transform: none;
 }
 
 .app-setting-button.soft {
@@ -163,16 +167,40 @@
   color: var(--color-primary);
 }
 
+.app-setting-button.soft:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+  border-color: var(--color-primary-hover);
+  box-shadow: none;
+  color: var(--color-on-primary);
+  transform: none;
+}
+
 .app-setting-button.outline {
   background: transparent;
   border: 1px solid var(--color-border);
   color: var(--color-text-secondary);
 }
 
+.app-setting-button.outline:hover:not(:disabled) {
+  background: var(--color-primary-soft);
+  border-color: rgb(var(--color-primary-rgb) / .42);
+  box-shadow: none;
+  color: var(--color-primary);
+  transform: none;
+}
+
 .app-setting-button.danger {
   background: transparent;
   border: 1px solid color-mix(in srgb, var(--color-danger) 35%, var(--color-border));
   color: var(--color-danger);
+}
+
+.app-setting-button.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-danger) 9%, var(--color-surface));
+  border-color: color-mix(in srgb, var(--color-danger) 52%, var(--color-border));
+  box-shadow: none;
+  color: var(--color-danger);
+  transform: none;
 }
 
 .app-setting-button:disabled {
@@ -198,12 +226,19 @@
   font-weight: 700;
   min-height: 27px;
   padding: 0 9px;
-  transition: background-color 160ms ease, color 160ms ease;
+  transition: background-color 150ms ease, color 150ms ease;
 }
 
 .app-setting-segment button.active {
   background: var(--color-primary-soft);
   color: var(--color-primary);
+}
+
+.app-setting-segment button:hover:not(:disabled) {
+  background: var(--color-primary-soft);
+  box-shadow: none;
+  color: var(--color-primary);
+  transform: none;
 }
 
 .app-setting-switch {
@@ -299,7 +334,22 @@
 
 .app-settings-banner strong { color: var(--color-text-primary); }
 .app-settings-banner span { grid-column: 1; }
-.app-settings-banner button { color: var(--color-primary); grid-column: 2; grid-row: 1 / span 2; }
+.app-settings-banner button {
+  background: var(--color-surface);
+  border: 1px solid rgb(var(--color-primary-rgb) / .24);
+  color: var(--color-primary);
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.app-settings-banner button:hover:not(:disabled) {
+  background: var(--color-primary-soft);
+  border-color: rgb(var(--color-primary-rgb) / .42);
+  box-shadow: none;
+  color: var(--color-primary);
+  transform: none;
+}
 
 .app-settings-refreshing,
 .app-settings-refreshing i {
@@ -336,20 +386,20 @@
 }
 
 :root[data-theme="dark"] .app-settings-view {
-  --color-surface: #111815;
-  --color-surface-soft: #18221e;
-  --color-text-primary: #eef3f0;
-  --color-text-secondary: #c2cbc6;
-  --color-text-tertiary: #929e98;
-  --color-border: #2b3933;
-  --color-border-strong: #43534c;
-  --color-primary: #8d83ff;
-  --color-primary-soft: #292641;
-  background: var(--color-surface);
+  --color-surface: #181917;
+  --color-surface-soft: #20211d;
+  --color-text-primary: #f7f7f3;
+  --color-text-secondary: #c4c4be;
+  --color-text-tertiary: #888982;
+  --color-border: #2e2f2a;
+  --color-border-strong: #41423c;
+  --color-primary: #ccff00;
+  --color-primary-soft: #273015;
+  background: var(--color-canvas);
 }
 
 :root[data-theme="dark"] .app-settings-view .app-setting-button.outline {
-  background: #141d19;
+  background: var(--color-surface);
 }
 
 :root[data-theme="dark"] .app-settings-view .app-setting-switch > span::after {
@@ -359,7 +409,7 @@
 :root[data-theme="dark"] .settings-record.active,
 :root[data-theme="dark"] .settings-record.active:hover {
   background: transparent;
-  color: #8d83ff;
+  color: var(--color-primary);
 }
 
 @keyframes settings-spin { to { transform: rotate(360deg); } }

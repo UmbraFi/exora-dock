@@ -56,7 +56,7 @@ func (m *Message) Verify() error {
 	return nil
 }
 
-// NewMessage creates a properly hashed message. Signature must be added by the PWA.
+// NewMessage creates a properly hashed message. Signature must be added by the client.
 func NewMessage(orderID, from, to, text, prevHash string) *Message {
 	ts := time.Now().Unix()
 	hash := ComputeHash(orderID, from, to, text, ts, prevHash)

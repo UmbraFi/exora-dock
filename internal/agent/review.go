@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// ReviewRequest is the product listing review request from PWA.
+// ReviewRequest is a product listing review request from a client.
 type ReviewRequest struct {
 	ProductID    string   `json:"product_id"`
 	Title        string   `json:"title"`

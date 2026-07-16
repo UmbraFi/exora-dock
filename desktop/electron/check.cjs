@@ -12,6 +12,8 @@ for (const file of electronScripts(__dirname)) {
 }
 
 const renderer = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.ts'), 'utf8')
+const electronMain = fs.readFileSync(path.join(__dirname, 'main.cjs'), 'utf8')
+const electronIpc = fs.readFileSync(path.join(__dirname, 'ipc.cjs'), 'utf8')
 const activityFixtures = fs.readFileSync(path.join(__dirname, '..', 'src', 'activity-fixtures.ts'), 'utf8')
 const viteConfig = fs.readFileSync(path.join(__dirname, '..', 'vite.config.ts'), 'utf8')
 if (!/base:\s*['"]\.\/['"]/.test(viteConfig)) throw new Error('Packaged renderer assets must use file-relative URLs')
@@ -78,6 +80,12 @@ for (const marker of ['function renderV3SellerSurface', "['listings', 'Listings'
 const tabOrder = ["['listings', 'Listings',", "['vm', 'VM',", "['resources', 'Resources',", "['endpoint', 'Endpoint',", "['api_bridge', 'API Bridge',"].map((marker) => renderer.indexOf(marker))
 if (tabOrder.some((index) => index < 0) || tabOrder.some((index, position) => position > 0 && index <= tabOrder[position - 1])) throw new Error('Main workspace tabs must be ordered Listings, VM, Resources, Endpoint, API Bridge')
 if (!renderer.includes("v3SellerTab: 'listings'")) throw new Error('Listings must be the default main workspace tab')
+for (const marker of ['const vmProviderAvailable = !isMacPlatform', "tab === 'vm' ? 'listings' : tab", "vmProviderAvailable || id !== 'vm'", 'const sources = v3ProviderApplicationSources()', "vmProviderAvailable ? renderV3EnvironmentCloudModal() : ''", "vmProviderAvailable || value !== 'vm'"]) {
+  if (!renderer.includes(marker)) throw new Error(`macOS VM provider UI gate missing: ${marker}`)
+}
+if (!rendererStyles.includes("#app[data-vm-provider='false'] .seller-automation-attestations label:has(> [data-seller-auto-install])")) throw new Error('macOS must hide automatic VM image downloads')
+if (!electronMain.includes('authorizeCommand: (command) => assertDesktopCommandSupported(command, process.platform)')) throw new Error('Desktop IPC must apply platform capability authorization')
+if (!electronIpc.includes('await authorizeCommand(command, payload, event)')) throw new Error('IPC authorization must run before command handlers')
 const sideSwitch = renderer.slice(renderer.indexOf('function selectOrderSide('), renderer.indexOf('function sellerMonitorActive('))
 if (!sideSwitch || sideSwitch.includes('v3SellerTab =')) throw new Error('Buyer/Seller history switching must not change the main workspace tab')
 for (const marker of ['function renderV3UnifiedListingsPageV2', "v3ListingMode: 'buyer'", 'data-v3-listing-mode="buyer"', 'data-v3-listing-mode="seller"', 'v3-listing-search-switch', 'v3-listing-agent-hint', 'data-v3-listing-agent-copy', 'v3-listing-agent-details', 'listings.agentPrompt', 'data-listing-owner=', 'data-v3-consumer-form="api"', 'data-v3-consumer-form="compute"', 'data-v3-consumer-action="purchase-download"']) {
@@ -122,9 +130,6 @@ if (!/\.v3-history-drawer-toggle::before,[\s\S]*?border-top:\s*1px solid var\(--
 for (const marker of ['counterpartyId', 'inFlightCount', 'rebaseFixtureTimestamps', 'local-test-buyer-api-recent']) {
   if (!activityFixtures.includes(marker)) throw new Error(`Local activity lifecycle fixture missing: ${marker}`)
 }
-for (const marker of ['localActivitySessionsForRole', 'localActivityDetailForSession', 'setLocalActivityFixturesEnabled(true)', 'setLocalActivityFixturesEnabled(false)']) {
-  if (!renderer.includes(marker)) throw new Error(`Local activity test mode missing: ${marker}`)
-}
 if ((activityFixtures.match(/role: 'buyer'/g) || []).length < 3 || (activityFixtures.match(/role: 'seller'/g) || []).length < 3) {
   throw new Error('Local activity test mode must include at least three buyer and three seller orders')
 }
@@ -140,7 +145,6 @@ if (!decisionPanel.includes('syncV3SellerTabsVisibility()') || decisionPanel.inc
 }
 const settingsSurface = renderer.slice(renderer.indexOf('function renderSettingsSurface()'), renderer.indexOf('function openSettings('))
 if (!settingsSurface.includes('syncV3SellerTabsVisibility()')) throw new Error('Returning from settings must preserve activity detail tab visibility')
-const electronMain = fs.readFileSync(path.join(__dirname, 'main.cjs'), 'utf8')
 if (!/auth:\s*Object\.freeze\(\{\s*width:\s*1440,\s*height:\s*900,\s*minWidth:\s*560,\s*minHeight:\s*600\s*\}\)/.test(electronMain)) {
   throw new Error('Authentication must open at the normal 1440x900 desktop size')
 }
@@ -195,8 +199,8 @@ if (!/onAuthenticated:\s*\(state: CloudAuthState\)\s*=>\s*Promise<void>/.test(au
 for (const marker of ['openingWorkspace', 'workspaceUnavailable', 'workspaceTransition', 'workspace-retry']) {
   if (!authUI.includes(marker)) throw new Error(`atomic workspace transition support missing: ${marker}`)
 }
-if (!authUI.includes('const authUITestControlsEnabled = true') || !renderer.includes('const authUITestControlsEnabled = true')) {
-  throw new Error('Authentication test controls must remain available in current builds')
+for (const forbiddenTestControl of ['authUITestControlsEnabled', 'data-auth-action="test-workspace"', 'data-test-auth-view="signin"', 'onTestWorkspace', 'openTestSignIn']) {
+  if (authUI.includes(forbiddenTestControl) || renderer.includes(forbiddenTestControl)) throw new Error(`desktop source contains a login-bypass test control: ${forbiddenTestControl}`)
 }
 const retiredDesktopCapabilities = ['local_agent_', 'bind_local_agent', 'workspace_snapshot', 'buyer_flow_action', 'save_chat_thread', 'archive_chat_threads', 'save_transactions', 'agent_card_', 'market_rail_cards', 'seller_market_status', 'project_folder_status', 'choose_project_folder', 'open_project_folder', 'archive_project_chats', 'stop_work_run', 'release_work_mcp_lease', 'llm_profiles']
 const builtRenderer = fs.existsSync(path.join(__dirname, '..', 'dist', 'assets'))
@@ -205,6 +209,9 @@ const builtRenderer = fs.existsSync(path.join(__dirname, '..', 'dist', 'assets')
     .map((file) => fs.readFileSync(path.join(__dirname, '..', 'dist', 'assets', file), 'utf8'))
     .join('\n')
   : ''
+for (const forbiddenReleaseMarker of ['data-auth-action="test-workspace"', 'data-test-auth-view="signin"', '__local_activity_test__', 'local-test-buyer-api-recent', 'Local test order detail was not found.', 'Open workspace preview']) {
+  if (builtRenderer.includes(forbiddenReleaseMarker)) throw new Error(`production renderer contains test-only UI or order data: ${forbiddenReleaseMarker}`)
+}
 for (const retired of retiredDesktopCapabilities) {
   if (renderer.includes(retired) || electronMain.includes(retired) || preload.includes(retired) || builtRenderer.includes(retired)) {
     throw new Error(`retired desktop capability returned: ${retired}`)
@@ -272,6 +279,9 @@ for (const marker of ['provider_asset_clear_selection', 'asset_packaging', 'appl
 }
 const packageConfig = fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')
 if (!packageConfig.includes('resources/wsl')) throw new Error('Windows installer does not embed the locked WSL Runtime resource')
+for (const exclusion of ['!electron/**/*.test.cjs', '!electron/check.cjs']) {
+  if (!packageConfig.includes(exclusion)) throw new Error(`release package must exclude test-only Electron files: ${exclusion}`)
+}
 const imageFiles = fs.readdirSync(path.join(__dirname, '..', 'resources', 'wsl'))
 if (imageFiles.some((name) => name.endsWith('.wsl'))) throw new Error('Windows installer must not embed a Linux environment image')
 

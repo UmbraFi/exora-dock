@@ -49,6 +49,7 @@ import (
 	"github.com/exora-dock/exora-dock/internal/resource"
 	"github.com/exora-dock/exora-dock/internal/runcapability"
 	"github.com/exora-dock/exora-dock/internal/samplemarket"
+	"github.com/exora-dock/exora-dock/internal/sellerdraft"
 	"github.com/exora-dock/exora-dock/internal/server"
 	"github.com/exora-dock/exora-dock/internal/supervisor"
 	"github.com/exora-dock/exora-dock/internal/task"
@@ -192,7 +193,6 @@ func main() {
 	resourceStore := resource.NewStore(c)
 	endpointStore := endpoint.NewStore(c)
 	endpointTunnel := endpoint.NewTunnelClient(cfg.CloudURL, cfg.CloudTokenPath, endpointStore)
-	go endpointTunnel.Run(ctx)
 	agentCardStore := agentcard.NewStore(c)
 	delegationStore := delegation.NewStore(c)
 	leaseStore := lease.NewStore(c)
@@ -201,6 +201,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("auth init: %v", err)
 	}
+	sellerDraftStore := sellerdraft.NewStore(c)
+	sellerCredentialVault := sellerdraft.NewCredentialVault(cfg.DataDir)
+	sellerDraftService := sellerdraft.NewService(sellerdraft.ServiceOptions{
+		Store: sellerDraftStore, Vault: sellerCredentialVault, DataDir: cfg.DataDir,
+		CloudURL: cfg.CloudURL, CloudTokenPath: cfg.CloudTokenPath, Endpoints: endpointStore,
+		NotifyEndpoint: endpointTunnel.Notify,
+	})
+	endpointTunnel.CredentialResolver = func(ref string) (string, string, string, error) {
+		metadata, secret, err := sellerCredentialVault.Resolve(ref, "")
+		return metadata.AuthType, metadata.APIKeyHeader, secret, err
+	}
+	go endpointTunnel.Run(ctx)
+	sellerDraftService.RecoverInterrupted()
 	paymentPINStore := paymentpin.New(cfg.PaymentPINPath)
 	paymentStore := payment.NewStore(c)
 	orderPlanStore := orderplan.NewStore(c)
@@ -261,6 +274,12 @@ func main() {
 		discoveryManifest.OpenCodeConfig = discovery.OpenCodeConfig(discoveryManifest.MCPCommand)
 	}
 	discoveryManifest.DiscoveryFiles = discovery.CandidatePaths()
+	if policy, configured := sellerDraftService.Policy(); configured && policy.Enabled {
+		discoveryManifest.Capabilities = append(discoveryManifest.Capabilities, discovery.Capability{
+			Name: "provider.listing_drafts.mcp.v1", Description: "Discover authorized local seller resources and create private VM, Resources, Endpoint, or API Bridge Listing drafts through MCP. Public Listing actions remain owner-only.",
+		})
+		discoveryManifest.Endpoints["provider.listing_drafts"] = discovery.Endpoint{Method: "MCP", Path: "", Description: "ProviderAgent-scoped seller draft tools; no publish, pause, resume, or retire permission."}
+	}
 
 	if cfg.LegacyMarketEnabled {
 		// Legacy peer chat and account-cache synchronization remain available
@@ -306,6 +325,7 @@ func main() {
 		Handler: server.New(c, chatStore, relay, hub, ring, ipfsClient, pinStore, reviewAgent, productStore, orderStore, resourceStore, delegationStore, leaseStore, selfPubkey, server.RuntimeStores{
 			Endpoints:       endpointStore,
 			EndpointTunnel:  endpointTunnel,
+			SellerDrafts:    sellerDraftService,
 			Wallet:          walletStore,
 			Tasks:           taskStore,
 			Approvals:       approvalStore,
@@ -573,18 +593,19 @@ func runMCPCommand(args []string) error {
 		return err
 	}
 	server := mcp.NewServer(mcp.Options{
-		ConfigPath:     cfgPath,
-		BaseURL:        discovery.BaseURL(cfg.ListenAddr),
-		StartCommand:   startCommand,
-		AgentToken:     mcpToken,
-		ClientCWD:      cwd,
-		ConnectionRole: role,
-		ClientName:     clientName,
-		LegacyMarket:   cfg.LegacyMarketEnabled,
-		AgentSessionID: strings.TrimSpace(os.Getenv("EXORA_AGENT_SESSION_ID")),
-		WorkUID:        strings.TrimSpace(os.Getenv("EXORA_AGENT_WORK_UID")),
-		ProjectPath:    strings.TrimSpace(os.Getenv("EXORA_AGENT_PROJECT_PATH")),
-		TransactionID:  strings.TrimSpace(os.Getenv("EXORA_AGENT_TRANSACTION_ID")),
+		ConfigPath:         cfgPath,
+		BaseURL:            discovery.BaseURL(cfg.ListenAddr),
+		StartCommand:       startCommand,
+		AgentToken:         mcpToken,
+		ProviderAgentToken: loadProviderAgentToken(cfg),
+		ClientCWD:          cwd,
+		ConnectionRole:     role,
+		ClientName:         clientName,
+		LegacyMarket:       cfg.LegacyMarketEnabled,
+		AgentSessionID:     strings.TrimSpace(os.Getenv("EXORA_AGENT_SESSION_ID")),
+		WorkUID:            strings.TrimSpace(os.Getenv("EXORA_AGENT_WORK_UID")),
+		ProjectPath:        strings.TrimSpace(os.Getenv("EXORA_AGENT_PROJECT_PATH")),
+		TransactionID:      strings.TrimSpace(os.Getenv("EXORA_AGENT_TRANSACTION_ID")),
 	})
 	return server.Serve(context.Background(), os.Stdin, os.Stdout)
 }
@@ -634,13 +655,15 @@ func runAuthCommand(args []string) error {
 	}
 	tokens := store.Tokens()
 	return printJSON(map[string]any{
-		"authPath":       store.Path(),
-		"ownerTokenSet":  tokens.OwnerToken != "",
-		"agentTokenSet":  tokens.AgentToken != "",
-		"ownerTokenHint": tokenHint(tokens.OwnerToken),
-		"agentTokenHint": tokenHint(tokens.AgentToken),
-		"createdAt":      tokens.CreatedAt,
-		"updatedAt":      tokens.UpdatedAt,
+		"authPath":               store.Path(),
+		"ownerTokenSet":          tokens.OwnerToken != "",
+		"agentTokenSet":          tokens.AgentToken != "",
+		"providerAgentTokenSet":  tokens.ProviderAgentToken != "",
+		"ownerTokenHint":         tokenHint(tokens.OwnerToken),
+		"agentTokenHint":         tokenHint(tokens.AgentToken),
+		"providerAgentTokenHint": tokenHint(tokens.ProviderAgentToken),
+		"createdAt":              tokens.CreatedAt,
+		"updatedAt":              tokens.UpdatedAt,
 	})
 }
 
@@ -933,6 +956,18 @@ func loadAgentToken(cfg *config.Config) string {
 		return ""
 	}
 	return store.AgentToken()
+}
+
+func loadProviderAgentToken(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	store, err := localauth.LoadOrCreate(cfg.AuthTokenPath)
+	if err != nil {
+		log.Printf("[auth] provider agent token unavailable: %v", err)
+		return ""
+	}
+	return store.ProviderAgentToken()
 }
 
 func loadDaemonToken(manifest discovery.Manifest, scope string) string {
