@@ -1,16 +1,16 @@
-<!-- Source: WHITEPAPER.md; normalized-sha256: 9a83030e8c297069ff60c4a8d33d3f5774bc455be03287f1dfaee0fd346c5578 -->
+<!-- Source: WHITEPAPER.md; normalized-sha256: b7ade609f5e80ef42e58b3c33e184802082861327dbfb2a6f4456b703f6587ce -->
 
 # Exora V3.2 AI-First Resource Market Protocol Whitepaper
 
-**Version: V3.2 Alpha**  
-**Status: Draft protocol specification**  
-**Positioning: an instant resource market primarily searched, purchased, and invoked by AI Agents**
+**Version: V3.2 Alpha**<br>
+**Status: Implemented Alpha protocol with Technical Preview constraints**<br>
+**Positioning: a fast, convenient, Agent-first resource exchange market connected through MCP**
 
-> A provider installs Dock, uploads data, or submits OpenAPI to turn idle capability into revenue. A buyer's AI Agent searches, purchases, and invokes through MCP/API. Human interfaces provide management, approval, and review.
+> Connect an existing Agent to Exora through MCP to buy or sell compute, packaged resources, local Endpoints, and public API Bridges. Dock keeps credentials and execution local; humans retain control of funds, public publishing, approvals, and payout.
 
 ## 1. Abstract
 
-Exora V3.2 turns prepared digital resources into standardized products that an Agent can search, purchase, and invoke. A provider may install Exora Dock to sell an idle Linux host automatically, upload a bundle sold per download, or submit OpenAPI so each operation is normalized and listed. Exora Cloud manages market, purchases, leases, usage, platform ledger, and provider payout. Dock manages local authority, real environments, file transfer, and execution.
+Exora V3.2 turns prepared digital resources into standardized products that an Agent can search, purchase, invoke, or prepare for sale. A provider may use Exora Dock to sell a verified KVM or managed WSL2 environment, package local files as a paid download, expose a private local service as an Endpoint, or connect a public HTTPS service as an API Bridge. Exora Cloud manages the catalog, purchases, leases, usage, balanced ledger, and provider revenue. Dock manages local authority, credentials, runtime validation, file transfer, tunnels, and execution.
 
 The protocol flow is:
 
@@ -22,9 +22,22 @@ The market has three Agent products: `compute` prepurchases an exclusive server 
 
 Compute retains a strict 1:1 model: one physical computer, one `InventorySlot`, and one Consumer VM. Worker detects provider activity and pauses automatically without manual delisting. After the host becomes idle, three full checks restore the Listing. Consumer Agent receives Guest Root; Worker restores a clean VM from signed Golden Image after use.
 
-Exora does not require a provider Agent and does not provide another chat interface. MCP/API is the authoritative market surface. Graphics are optional human aids and cannot be required to understand a product. Companion interfaces provide provider upload, OpenAPI import, pricing, revenue, resource state, approvals, billing, payout, and optional browsing.
+Exora does not require a provider Agent and does not provide another chat interface. A seller may optionally ask their existing Agent to discover only pre-authorized local resources and create private Listing drafts. Seller-Agent tools cannot read arbitrary paths, return secrets, infer commercial terms, or publish. MCP/API is the authoritative market surface. Graphics are optional human aids and cannot be required to understand a product. The Electron companion provides Listings, VM, Resources, Endpoint, API Bridge, approval, billing, and payout workspaces.
 
-This whitepaper specifies the V3.2 target protocol. It does not claim that the repository's current V2 implementation already provides these capabilities.
+### 1.1 Current implementation profile
+
+The Dock daemon, Electron application, and Cloud repository implement the V3 marketplace paths. The public protocol remains Alpha, so this document distinguishes implemented behavior from stricter target guarantees:
+
+| Area | Current implementation | Alpha boundary |
+|---|---|---|
+| Consumer MCP | Search, manifest, estimate, compute purchase/extension, download grant/transfer, operation invocation, lease, usage, and release | The user brings their own MCP Agent; Dock is not a chat Agent |
+| Seller MCP | Authorized discovery and durable private drafts for VM, Resources, Endpoint, and API Bridge | Draft-only; public publishing, seller attestations, credentials, and unsaved commercial decisions remain human-controlled |
+| Compute | Linux KVM and Windows `managed_wsl2_shared_host`; one active Lease per host | KVM is the hardware-isolated path; WSL2 is explicitly disclosed as shared-host isolation and does not claim exclusive GPU passthrough |
+| Resources | Immutable ZIP upload, SHA-256 verification, paid time-limited DownloadGrant, retry and resume | The current Desktop packages one bundle up to its configured upload limit |
+| Endpoint / API Bridge | Dock tunnel for authorized private or loopback services; transparent Gateway for authorized public HTTPS services | Every route is reviewed and metered; arbitrary URLs and undeclared routes are rejected |
+| Billing | Unified reserve, capture, release, refund, balanced journals, 24-hour seller revenue hold, and configured native-USDC deposit/withdrawal rails | Custody and withdrawal readiness depend on production Postgres, SMTP, Solana, and KMS configuration |
+
+The current desktop release is `0.1.0-preview.2`, a Technical Preview for Windows x64, macOS ARM64, and Linux x64 rather than a production release. Windows is not Authenticode-signed, macOS is ad-hoc signed and not notarized, and Linux packages rely on the signed release index. Users must verify the published SHA-256 and should expect platform security prompts appropriate to those signing states.
 
 ## 2. Principles and non-goals
 
@@ -51,13 +64,13 @@ V3.2 Alpha does not:
 - provide a general chat interface;
 - require images, video, or a graphical interface for an Agent to understand a product;
 - support multiple saleable VMs on one Host, shared GPUs, MIG resale, or resource overcommit;
-- initially support Hyper-V, VMware, or Windows Provider Hosts;
+- support Hyper-V or VMware, or represent managed WSL2 as equivalent to KVM hardware isolation;
 - carry large file bodies in MCP messages;
 - infer the semantics of an API without OpenAPI;
 - make meal ordering a fourth product kind or settle external meal, shipping, or merchandise charges;
 - expose Host Root, libvirt socket, Provider SSH, payment credentials, or owner tokens to a Consumer or Agent;
 - treat a cleanup script as equivalent to Golden Image Reset;
-- claim that current code implements this protocol.
+- claim that an Alpha or locally configured deployment has production availability, custody, or security certification.
 
 ## 3. Actors and authority
 
@@ -67,27 +80,28 @@ The Consumer is the human account purchasing resources and owns budgets, payment
 
 ### 3.2 Provider
 
-The Provider uploads data, connects a physical computer, or publishes an API and is responsible for availability, description, price, license, and legality. Providers may self-publish, but a resource that fails automated validation cannot be listed. Identity and payout-account verification are required before first payout where the payment rail requires them.
+The Provider uploads data, connects a physical computer, or publishes an Endpoint or API Bridge and is responsible for availability, description, price, license, routes, credentials, and legality. A Provider may work entirely through the Electron companion or optionally authorize an existing Agent to prepare private drafts. Providers publish from the Listings workspace; a draft or a resource that fails automated validation is never public. Identity and payout-account verification are required before first payout where the payment rail requires them.
 
 ### 3.3 Exora Dock
 
-One Dock program supports two modes that may run together:
+One Dock program supports three capabilities that may run together:
 
 - **Consumer MCP:** exposes Exora tools to the local Agent and enforces local budget and approval policy.
-- **Provider Worker:** runs in the Linux Host control domain, detects hardware, controls KVM/libvirt, maintains the single InventorySlot, fulfills Leases, meters usage, and resets the VM.
+- **Seller Draft MCP:** exposes policy-gated, draft-only tools for authorized roots, registered services, and verified VM runtimes.
+- **Provider Worker:** runs outside the Consumer environment, validates Linux KVM or managed Windows WSL2 capacity, maintains the single InventorySlot, fulfills Leases, meters usage, and resets the environment.
 
 Dock device keys use operating-system secure storage. Worker always runs outside the Consumer VM that it creates and destroys.
 
 ### 3.4 Exora Cloud
 
-Cloud is authoritative for accounts, Resources, Listings, InventorySlot projections, Leases, UsageRecords, the platform ledger, and Settlement. It provides market search, CapacityHold, exclusive leasing, short-lived capabilities, object-store authorization, API Gateway, refunds, and Payout.
+Cloud is authoritative for accounts, Resources, Listings, InventorySlot projections, Leases, UsageRecords, the balanced platform ledger, and Settlement. It provides catalog search, CapacityHold, exclusive leasing, short-lived capabilities, object-store authorization, API Gateway, refunds, a 24-hour provider revenue hold, and configured native-USDC deposits and Solana withdrawals.
 
 ### 3.5 Sources of truth
 
 ```text
 Cloud           directory, leases, budgets, usage aggregation, ledger, settlement
 Provider Worker physical hardware, live capacity, VM lifecycle, execution, reset
-Hypervisor      CPU/memory/device assignment and VM isolation
+Runtime         KVM device isolation or the disclosed managed WSL2 shared-host boundary
 Object Store    hosted file bytes and object versions
 API Gateway     API requests, response status, byte counts, invocation meter
 Payment Rail    deposits, withdrawals, chargebacks, external money movement
@@ -369,13 +383,15 @@ A missing receipt or any failed critical check moves the Slot to `quarantined`.
 
 ## 5. Strict 1:1 compute protocol
 
-### 5.1 Host Control Domain
+### 5.1 Runtime and Host Control Domain
 
-V3.2 Alpha specifies Linux KVM/libvirt only. Host runs Worker, Hypervisor, network controls, metering, and image reset and retains minimal CPU, memory, and disk. The Consumer VM receives the entire listed GPU through PCIe Passthrough and the remaining guaranteed CPU, memory, and workspace disk.
+The hardware-isolated profile uses Linux KVM/libvirt. Host runs Worker, Hypervisor, network controls, metering, and image reset and retains minimal CPU, memory, and disk. The Consumer VM receives the entire listed GPU through PCIe Passthrough and the remaining guaranteed CPU, memory, and workspace disk.
 
-The Agent has Guest Root. It may install software, modify the Guest, run authorized workloads, and reboot the Guest. It cannot access Host Root, management networking, libvirt socket, Worker data, Golden Image, other credentials, or Host meters. Any configuration exposing those boundaries is non-compliant.
+The Windows Technical Preview uses `managed_wsl2_shared_host`. Dock validates a signed managed Linux environment, enforces one active Lease per host, installs the buyer's SSH public key, and exposes the Lease through Cloud reverse SSH when configured. The Manifest and Lease must disclose that CPU and memory are configured caps, the GPU uses the Windows host driver, and hardware-passthrough exclusivity is false. A buyer may reject this isolation class.
 
-“Exclusive host” means exclusive use of all resources promised by the Listing, not the Host Control Domain. Host cannot run undeclared Provider compute during an active Lease.
+The Agent has Guest Root in the leased Linux environment. It may install software, modify the Guest, run authorized workloads, and reboot the Guest. It cannot access Host Root, management networking, libvirt controls, Worker data, Golden Image, other credentials, or Host meters. Any configuration exposing those boundaries is non-compliant.
+
+“Exclusive host” means one active Exora Lease and exclusive use of all resources promised by the Listing, not ownership of the Host Control Domain. Host cannot run undeclared Provider compute during an active Lease.
 
 ### 5.2 Capacity checks and automatic delisting
 
@@ -462,7 +478,7 @@ A cleanup script cannot substitute for Reset. Any failure moves the Slot to `qua
 
 ## 6. File and data product protocol
 
-A Provider uses the human console or Dock/API to upload an AssetBundle containing one or more files, text description, fixed AssetVersion, license, SHA-256, per-download price, and a DownloadGrant duration from one hour to 30 days. Files default to Exora-managed S3-compatible storage. Provider uploads directly with multipart and signed URLs; MCP and Cloud application server do not carry bodies. Completion supplies part manifest, total size, and SHA-256 and passes MIME, malware, duplicate-content, and license validation. Replacement creates a new immutable AssetVersion.
+A Provider uses the Resources workspace or authorized seller-draft MCP to select local files. Dock revalidates the authorized candidates, packages them into one immutable ZIP AssetBundle, computes SHA-256, and uploads it with a text description, fixed AssetVersion, license, per-download price, and a DownloadGrant duration from one hour to 30 days. The current Desktop enforces its configured bundle-size limit. Files default to Exora-managed S3-compatible storage. Provider uploads directly with multipart and signed URLs; MCP and Cloud application server do not carry bodies. Completion supplies part manifest, total size, and SHA-256 and passes MIME, malware, duplicate-content, and license validation. Replacement creates a new immutable AssetVersion.
 
 A Listing selects:
 
@@ -474,17 +490,20 @@ Assets declare license, commercial and derivative rights, attribution, territory
 
 A `download` purchase charges before DownloadGrant issuance. During validity, the same AssetVersion can receive replacement short-lived URLs, HTTP Range resume, and redownload without another charge. Consumer non-use, abandonment, or Grant expiry is not refundable. Corrupt objects, sustained platform failure, or final SHA-256 mismatch are delivery failures and are refunded.
 
-## 7. OpenAPI operation product protocol
+## 7. Endpoint and API Bridge operation protocol
 
-An API Provider runs Dock Provider Mode and supplies verifiable OpenAPI 3.x. Dock and Cloud validate operationId, Schema, TLS, health, request/response bounds, and deterministic meter. An API without OpenAPI cannot be published.
+The Electron application exposes two seller paths that both normalize approved routes as `api_operation` products:
+
+- **Endpoint:** an authorized private or loopback service stays behind Dock. The seller configures the local URL and a local `credentialRef`; Dock performs side-effect-free health and route probes and serves purchased requests through its outbound tunnel. Local URLs and plaintext credentials do not enter the public Listing.
+- **API Bridge:** an authorized public HTTPS service is reached through Exora's transparent Gateway. Import accepts OpenAPI 3.x or a seller-reviewed structured route draft. Dock and Cloud enforce public HTTPS, DNS-rebinding and redirect protection, safe headers, health checks, request/response bounds, and declared metering.
 
 Every approved operation generates an independent ApiOperationProduct and stable Capability. Manifest contains natural-language description, input/output JSON Schema, fixed or metered price, rate, timeout, idempotency, privacy, and side-effect class. One data row, report, query result, file conversion, and meal order are different operation results or effects, not new product kinds.
 
-Consumer Agent calls only Exora API Gateway. Gateway verifies Lease, Schema, rate, budget, and operation before injecting Provider credentials. The Agent never receives origin secrets. Arbitrary URLs, headers, private-network redirects, and undeclared paths are denied by default.
+Consumer Agent calls only the Exora Gateway or Dock's listing-scoped Gateway. The Gateway verifies Lease, Schema, rate, budget, and operation before injecting Provider credentials. The Agent never receives origin secrets. Arbitrary URLs, headers, private-network redirects, and undeclared paths are denied by default.
 
 API pricing may use request, successful request, input/output byte, or a provable business unit. Gateway emits signed UsageRecord. Oversized output becomes a controlled Artifact.
 
-`sideEffect: external_action` returns ApprovalRequest by default and requires human confirmation before execution. It may run automatically only under explicit pre-authorization for operation, merchant scope, and capability-fee budget. Exora does not display, custody, or settle meal, shipping, or other external merchandise amounts.
+`sideEffect: external_action` returns ApprovalRequest by default and requires human confirmation before execution. It may run automatically only under explicit pre-authorization for operation, merchant scope, and capability-fee budget. Exora displays and settles only `capabilityFee`; it does not display, custody, or settle meal, shipping, or other external merchandise amounts.
 
 ## 8. Listing, Lease, and state machines
 
@@ -494,6 +513,8 @@ Listing state:
 draft → validating → published → paused → removed
               ↘ rejected      ↘ suspended
 ```
+
+Electron and Seller Draft MCP first create a private `draft`. Public catalog visibility starts only after the human seller reviews technical details, explicit commercial values, credentials/attestations, and uses a Listings action to publish. No seller Agent tool can execute `publish`, `pause`, or `retire`.
 
 Compute Slot availability:
 
@@ -524,7 +545,7 @@ grant_active → transfer_active → verified
 API state:
 
 ```text
-imported → validating → normalized → published
+draft/imported → validating → normalized → seller_review → published
 invocation_requested → approval_required → authorized → executed
 ```
 
@@ -547,11 +568,13 @@ Compute amount is `durationMinutes × pricePerMinute`. CapacityHold reserves the
 
 DownloadGrant is issued after charge; URL reissue and Range resume during validity are free. ApiOperationProduct writes only capability fee to the Exora ledger. External purchase value enters no Exora account.
 
-Revenue enters a refundable hold before becoming payable. Refunds, chargebacks, and corrections are new reversing entries and never history edits.
+In the implemented Alpha billing engine, VM, Resources, Endpoint, and API Bridge share reserve, capture, release, and refund journals; every journal must balance to zero. Seller revenue remains pending for 24 hours after product completion. Marketplace commission is deducted from the seller rather than added to the buyer's displayed price. Refunds, chargebacks, and corrections are new reversing entries and never history edits.
+
+Native-USDC deposit addresses and Solana withdrawals are available only when the Cloud custody, RPC, price feed, SMTP challenge, and KMS-backed key configuration are enabled. Local-development key fallback and in-memory persistence are not production custody.
 
 ## 10. MCP and interfaces
 
-Consumer Agent uses unified `exora.` MCP tools:
+The implemented marketplace surface exposes these Consumer Agent tools:
 
 | Tool | Purpose |
 |---|---|
@@ -563,16 +586,31 @@ Consumer Agent uses unified `exora.` MCP tools:
 | `purchase_download` | Charge and create DownloadGrant |
 | `create_download_transfer` | Issue a short URL or resume session under a Grant |
 | `invoke_operation` | Invoke a normalized OpenAPI operation |
-| `approve_operation` | Approve an operation with external side effects |
 | `get_lease` | Read state, usage, expiry, and allowed actions |
 | `release_lease` | Stop new actions and begin export, Reset, and Settlement |
-| `run_command` / `get_execution` | Execute and inspect work inside Guest |
-| `stream_logs` / `get_artifacts` | Read logs and artifacts |
 | `get_usage` | Read usage, charge, and remaining budget |
+
+Compute work uses the Lease's disclosed, lease-scoped SSH Capability; the current marketplace MCP surface does not pretend that `run_command`, log streaming, or artifact download are separate registered marketplace tools. Approval decisions are made by the owning human session and then referenced by the Agent when it retries a purchase or invocation.
+
+When the owner enables seller automation and Dock issues a separate Provider Agent token, the same MCP connection may also expose draft-only tools:
+
+| Tool | Purpose and authority limit |
+|---|---|
+| `get_seller_draft_capabilities` | Read enabled kinds, authorized roots/services, safe defaults, host support, and credential metadata; never secrets |
+| `discover_sellable_resources` | Return short-lived candidate IDs only for authorized files, registered services, and verified runtimes |
+| `read_seller_material` | Read a bounded chunk, up to 256 KiB, from an authorized text candidate |
+| `create_vm_listing_draft` | Validate WSL2/KVM, reserve capacity for 24 hours, and create a private compute draft |
+| `create_resource_listing_draft` | Revalidate files, package ZIP, upload, verify SHA-256, and create a private download draft |
+| `create_endpoint_listing_draft` | Probe an authorized private/loopback service and create a private tunnel-backed draft |
+| `create_api_bridge_listing_draft` | Probe protected public HTTPS and create a private transparent-Gateway draft |
+| `get_seller_draft_run` / `list_my_listing_drafts` | Read durable progress and ready-to-publish private results |
+| `resume_seller_draft_run` / `cancel_seller_draft_run` | Continue with seller-supplied values or cooperatively clean up an unfinished run |
+
+Seller discovery never accepts arbitrary filesystem paths from an Agent. Candidate IDs expire, material reads are bounded, `mcpConnectionId` provenance is assigned by Dock, plaintext credentials are never returned, and commercial values are explicit rather than inferred. Public Listing actions remain unavailable.
 
 Tool output grants no extra human authority. Expensive Lease, price-increasing extension, sensitive download, and high-risk action intersect Consumer AutomationPolicy. Required consent returns structured `approval_required`.
 
-Cloud APIs include `/v3/products`, `/v3/resources`, `/v3/inventory-slots`, `/v3/capacity-holds`, `/v3/compute-purchases`, `/v3/leases`, `/v3/asset-bundles`, `/v3/download-grants`, `/v3/transfers`, `/v3/api-operations`, `/v3/approvals`, `/v3/invocations`, `/v3/usage-records`, `/v3/reset-receipts`, `/v3/ledger`, `/v3/settlements`, and `/v3/payouts`.
+Implemented Cloud APIs include public `/v3/catalog/products` and `/v3/catalog/listings`; buyer `/v3/purchase-estimates`, `/v3/compute-purchases`, `/v3/download-grants`, `/v3/invocations`, `/v3/leases`, `/v3/approvals`, and `/v3/ledger`; provider `/v3/provider/products`, `/v3/provider/listings`, `/v3/provider/asset-bundles`, `/v3/provider/api-imports`, `/v3/provider/endpoint-imports`, and `/v3/provider/tunnels/connect`; and billing `/v3/billing/balance`, `/v3/billing/ledger`, deposit-address, deposit, withdrawal-quote, withdrawal-challenge, and withdrawal paths.
 
 Worker uses an outbound persistent connection or long polling; Provider need not expose a management port. Typed messages include `ResourceHeartbeat`, `CapacitySnapshot`, `CreateCapacityHold`, `ProvisionLease`, `RenewLeaseEpoch`, `CancelExecution`, `UsageBatch`, `ResetVM`, and `ResetReceipt`. Each has command ID, epoch, deadline, signature, and persisted deduplication result.
 
@@ -594,9 +632,11 @@ The Cloud application server does not proxy large bodies. A signed URL allows on
 - Provider Host SSH, libvirt, and Golden Image never enter Consumer Agent.
 - Guest does not mount Host Docker socket, management directories, or privileged devices. GPU is delivered only through declared PCIe Passthrough.
 - Provider API secrets are injected by Gateway key management or Provider Dock.
+- Seller MCP can reference only locally stored credential aliases; it cannot retrieve plaintext credentials or place them in a draft.
 - Hosted files are encrypted at rest and in transit. Each VM Lease has an independent disk key.
 - Full prompts, Agent conversations, file bodies, and sensitive API fields are not Cloud events by default.
 - Gateway prevents SSRF, header injection, undeclared redirects, oversized responses, and credential reflection.
+- `managed_wsl2_shared_host` is disclosed as a weaker Preview isolation class; it must never be described as KVM-equivalent GPU passthrough.
 
 Evidence may include Resource checks, CapacitySnapshots, Hold, Lease, heartbeats, UsageRecords, Gateway status, Execution summary, Artifact hashes, Transfer integrity, and ResetReceipt. Parties explicitly select and redact supplemental evidence. Settlement pauses during dispute; decisions create new ledger adjustments.
 
@@ -611,18 +651,20 @@ Evidence may include Resource checks, CapacitySnapshots, Hold, Lease, heartbeats
 - **Reset failure:** Slot becomes `quarantined`, blocks new Lease, and pauses settlement review.
 - **Duplicate message:** Cloud and Worker return the original result without duplicate execution or charge.
 - **Object-store failure:** Transfer resumes with the same idempotency key and is incomplete until verified.
+- **Seller draft interruption:** durable progress moves to `needs_input`, `failed`, or `cancelled`; retry uses optimistic concurrency and the same idempotency key, and no public Listing is created.
 
 ## 14. End-to-end examples
 
-### 14.1 Provider local use and automatic recovery
+### 14.1 Seller Agent creates a private Listing draft
 
 ```text
-1. Provider installs Dock and enables Provider Mode; Worker detects Host, image, disk, and the only Slot.
-2. Successful checks publish the ready Slot without a manual availability switch.
-3. Provider starts a local GPU job; the next light check sees an unknown GPU process or insufficient guaranteed VRAM.
-4. Worker immediately sets provider_busy and pauses Listing without disturbing the local job.
-5. Provider work ends; Worker continues checking but does not relist immediately.
-6. Three consecutive five-minute full checks return Slot to ready and make Listing purchasable.
+1. Seller enables seller automation, chooses allowed resource roots/services, saves commercial defaults, and connects an existing Agent through the Provider Agent token.
+2. Agent reads capabilities and discovers only short-lived candidate IDs inside that policy.
+3. Agent may read bounded authorized text material, but never an arbitrary path or plaintext credential.
+4. Agent starts a VM, Resources, Endpoint, or API Bridge draft run with explicit commercial values.
+5. Dock revalidates the candidate, performs the kind-specific upload/probe/reservation, and saves a durable private Listing draft.
+6. If input is missing, the run stops at needs_input and resumes with version-checked seller values.
+7. Seller reviews the result in Electron Listings and explicitly publishes it. The Agent cannot perform that last action.
 ```
 
 ### 14.2 H100 minute purchase and 1:1 VM
@@ -639,6 +681,8 @@ Evidence may include Resource checks, CapacitySnapshots, Hold, Lease, heartbeats
 9. Agent may release early, but voluntary release does not refund remaining minutes; Worker resets the VM.
 10. Verified ResetReceipt returns Slot to ready; failure moves it to quarantined.
 ```
+
+On a Windows Preview provider, the same purchase path uses one managed WSL2 environment and one active Lease per host. The buyer receives root SSH access, while the Manifest discloses configured CPU/memory caps, shared Windows GPU-driver access, and no hardware-passthrough exclusivity. Release deletes the lease identity and managed environment state, rebuilds it from the selected signed environment, and emits ResetReceipt.
 
 ### 14.3 Time-limited file download
 
@@ -674,8 +718,8 @@ Evidence may include Resource checks, CapacitySnapshots, Hold, Lease, heartbeats
 
 ## 15. V3.2 Alpha commitment
 
-V3.2 Alpha specifies AI-first AgentProductManifest, necessary human companion interfaces, automatic `provider_busy` delisting, approximately 15-minute recovery, integer-minute prepurchase, AssetBundle, time-limited DownloadGrant, normalized ApiOperationProduct, side-effect ApprovalRequest, strict one-Host-one-Slot-one-VM, Golden Image Reset, OpenAPI Gateway, platform ledger, and Provider Payout.
+V3.2 Alpha implements an AI-first AgentProductManifest, BYO-Agent Consumer MCP, optional draft-only Seller MCP, Electron Listings/VM/Resources/Endpoint/API Bridge workspaces, automatic `provider_busy` delisting, approximately 15-minute recovery, integer-minute prepurchase, AssetBundle, time-limited DownloadGrant, normalized ApiOperationProduct, side-effect ApprovalRequest, strict one-Host-one-Slot-one-active-Lease, KVM and disclosed managed WSL2 runtimes, reset receipts, transparent Gateway, balanced journals, revenue hold, and configured Provider Payout.
 
-V3.2 Alpha does not promise multi-tenant VMs, MIG resale, bare Host Root, Hyper-V/VMware, prose-to-API inference, settlement of external merchandise value, decentralized storage, platform inference, a general chat interface, or autonomous dispute verdicts.
+V3.2 Alpha does not promise multi-tenant VMs, MIG resale, bare Host Root, Hyper-V/VMware, KVM-equivalent isolation on WSL2, prose-to-API inference without seller review, settlement of external merchandise value, decentralized storage, platform inference, a general chat interface, autonomous public publishing, or autonomous dispute verdicts. The three-platform Technical Preview and locally configured Cloud are not production availability or custody certifications.
 
-> Exora is not a traditional store built around humans clicking product cards. It is a structured purchasing layer for AI Agents, allowing anyone with a machine, an asset, or an OpenAPI to be discovered, purchased, invoked, and paid.
+> Exora is an MCP-connected, Agent-first exchange: people keep their own Agent, buy or sell verified resources through one structured protocol, and retain control of publishing, money, and sensitive authority.

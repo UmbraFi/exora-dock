@@ -6,7 +6,7 @@ section: default
 priority: optional
 maintainer: Exora Dock <hello@exora.local>
 description: Local/provider capability dock for AI agents.
-homepage: https://exora-dock.github.io/
+homepage: https://exoradock.com/
 license: MIT
 contents:
   - src: ./exora-dock

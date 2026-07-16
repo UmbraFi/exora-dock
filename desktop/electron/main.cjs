@@ -8,6 +8,8 @@ const path = require('node:path')
 const YAML = require('yaml')
 const { autoUpdater } = require('electron-updater')
 const { registerIpcHandlers } = require('./ipc.cjs')
+const { assertDesktopCommandSupported, desktopCapabilities } = require('./platform-capabilities.cjs')
+const { releaseWarningForArtifact, selectReleaseArtifact } = require('./release-manifest.cjs')
 const { createCloudAuth } = require('./cloud-auth.cjs')
 const {
   createAppURLPolicy,
@@ -193,6 +195,7 @@ function updateTrayMenu() {
 function registerIpc() {
   registerIpcHandlers(ipcMain, createIpcHandlerGroups(), {
     validateSender: (event) => isTrustedIpcSender(event, APP_URL_POLICY),
+    authorizeCommand: (command) => assertDesktopCommandSupported(command, process.platform),
   })
 }
 
@@ -273,6 +276,7 @@ function createIpcHandlerGroups() {
       activity_sessions,
       activity_session,
       provider_vm_probe,
+      provider_vm_capacity,
       provider_vm_domains,
       provider_vm_import,
       provider_vm_validate,
@@ -313,6 +317,13 @@ function createIpcHandlerGroups() {
       provider_listings,
       provider_listing_save,
       provider_listing_action,
+      seller_automation_policy_get,
+      seller_automation_policy_save,
+      seller_automation_credentials,
+      seller_automation_credential_save,
+      seller_automation_credential_delete,
+      seller_automation_choose_root,
+      seller_automation_draft_runs,
     },
     walletAndSecurity: {
       wallet_status,
@@ -518,7 +529,7 @@ function releaseVerificationKey() {
 }
 
 async function release_status() {
-  const manifestURL = String(process.env.EXORA_RELEASE_MANIFEST_URL || 'https://github.com/UmbraFi/exora-dock/releases/download/v0.1.0-preview.1/release-manifest.json').trim()
+  const manifestURL = String(process.env.EXORA_RELEASE_MANIFEST_URL || 'https://github.com/UmbraFi/exora-dock/releases/download/v0.1.0-preview.2/release-manifest.json').trim()
   const signatureURL = manifestURL.replace(/release-manifest\.json(?:\?.*)?$/, 'release-manifest.sig')
   const [manifestResponse, signatureResponse] = await Promise.all([fetch(manifestURL), fetch(signatureURL)])
   if (!manifestResponse.ok || !signatureResponse.ok) throw new Error('The signed Technical Preview release manifest is unavailable.')
@@ -530,16 +541,16 @@ async function release_status() {
   const key = crypto.createPublicKey({ key: spki, format: 'der', type: 'spki' })
   if (!crypto.verify(null, encoded, key, signature)) throw new Error('Release manifest signature verification failed.')
   const manifest = JSON.parse(encoded.toString('utf8'))
-  if (manifest.schema !== 'exora.release-manifest.v1' || manifest.platform !== 'windows' || !/^[a-f0-9]{64}$/.test(String(manifest.sha256 || ''))) throw new Error('Release manifest contract is invalid.')
+  const artifact = selectReleaseArtifact(manifest, process.platform, process.arch)
   return {
     currentVersion: String(app.getVersion() || ''),
     latestVersion: String(manifest.version || ''),
     updateAvailable: String(manifest.version || '').replace(/^v/, '') !== String(app.getVersion() || ''),
-    artifact: manifest.artifact,
-    sha256: manifest.sha256,
-    authentiCodeSigned: false,
-    warning: 'Unsigned Technical Preview: Windows may show Unknown publisher or SmartScreen warnings.',
-    downloadURL: new URL(String(manifest.artifact), manifestURL).toString(),
+    artifact: artifact.artifact,
+    sha256: artifact.sha256,
+    authentiCodeSigned: artifact.signing?.scheme === 'authenticode' && artifact.signing?.status === 'signed',
+    warning: releaseWarningForArtifact(artifact),
+    downloadURL: new URL(String(artifact.artifact), manifestURL).toString(),
   }
 }
 
@@ -685,6 +696,7 @@ async function system_settings_status() {
     chromiumVersion: process.versions.chrome,
     platform: process.platform,
     arch: process.arch,
+    capabilities: desktopCapabilities(process.platform),
     packaged: app.isPackaged,
     secureStorageAvailable: safeStorage.isEncryptionAvailable(),
     notificationsSupported: Notification.isSupported(),
@@ -1086,13 +1098,34 @@ function windowsPipeAvailable(pipePath) {
 }
 
 async function ensureLocalLayout(paths) {
-  await fsp.mkdir(paths.dataDir, { recursive: true })
-  await fsp.mkdir(paths.logsDir, { recursive: true })
+	await fsp.mkdir(paths.dataDir, { recursive: true })
+	await fsp.mkdir(paths.logsDir, { recursive: true })
   if (!fs.existsSync(paths.configPath)) {
     await fsp.writeFile(paths.configPath, defaultLocalConfig(paths))
-  } else {
-    await migrateLocalConfig(paths)
-  }
+	} else {
+		await migrateLocalConfig(paths)
+	}
+	await migrateSellerAutomationData(paths)
+}
+
+async function migrateSellerAutomationData(paths) {
+	const root = path.join(paths.dataDir, 'seller-automation', 'imported-v1')
+	const marker = path.join(root, 'migration.json')
+	if (fs.existsSync(marker)) return
+	await fsp.mkdir(root, { recursive: true })
+	const migrated = []
+	for (const [source, name] of [[paths.providerEnvironmentSettingsPath, 'environment-settings.json'], [paths.providerHostSnapshotPath, 'host-snapshot.json']]) {
+		if (!fs.existsSync(source)) continue
+		await fsp.copyFile(source, path.join(root, name))
+		migrated.push(name)
+	}
+	const materialSource = path.join(app.getPath('userData'), 'api-bridge-materials')
+	if (fs.existsSync(materialSource)) {
+		await fsp.cp(materialSource, path.join(root, 'api-materials'), { recursive: true, force: false, errorOnExist: false })
+		migrated.push('api-materials')
+	}
+	// Generated Resource ZIPs are intentionally temporary and are never migrated.
+	await writeJsonAtomic(marker, { schemaVersion: 1, migrated, resourceArchivesMigrated: false, completedAt: new Date().toISOString() })
 }
 
 async function migrateLocalConfig(paths) {
@@ -2342,6 +2375,7 @@ async function v3Worker(command, input = {}) {
   return httpJson('POST', `/v3/provider/worker/${encodeURIComponent(command)}`, input, await localOwnerToken(await dockPaths()), { timeoutMs: 180000 })
 }
 async function provider_vm_probe() { return v3Worker('probe_host') }
+async function provider_vm_capacity() { return v3Worker('capacity_check') }
 async function provider_vm_domains() { return v3Worker('list_domains') }
 async function provider_vm_import(payload = {}) { return v3Worker('import_template', payload.input || {}) }
 async function provider_vm_validate(payload = {}) {
@@ -3008,6 +3042,38 @@ async function provider_listing_save(payload = {}) {
 async function provider_listing_action(payload = {}) {
   const input = payload.input || {}
   return httpJson('POST', `/v3/provider/listings/${encodeURIComponent(String(input.listingId || ''))}/${encodeURIComponent(String(input.action || ''))}`, {}, await localOwnerToken(await dockPaths()))
+}
+
+async function seller_automation_policy_get() {
+  return httpJson('GET', '/v3/local/seller-automation/policy', undefined, await localOwnerToken(await dockPaths()), { timeoutMs: 15000 })
+}
+
+async function seller_automation_policy_save(payload = {}) {
+  return httpJson('PUT', '/v3/local/seller-automation/policy', payload.input || {}, await localOwnerToken(await dockPaths()), { timeoutMs: 20000 })
+}
+
+async function seller_automation_credentials() {
+  return httpJson('GET', '/v3/local/seller-automation/credentials', undefined, await localOwnerToken(await dockPaths()), { timeoutMs: 15000 })
+}
+
+async function seller_automation_credential_save(payload = {}) {
+  return httpJson('POST', '/v3/local/seller-automation/credentials', payload.input || {}, await localOwnerToken(await dockPaths()), { timeoutMs: 15000 })
+}
+
+async function seller_automation_credential_delete(payload = {}) {
+  const ref = String(payload?.input?.credentialRef || '')
+  if (!ref) throw new Error('credentialRef is required')
+  return httpJson('DELETE', `/v3/local/seller-automation/credentials/${encodeURIComponent(ref)}`, undefined, await localOwnerToken(await dockPaths()), { timeoutMs: 15000 })
+}
+
+async function seller_automation_choose_root() {
+  const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory', 'createDirectory'], title: 'Authorize a seller resource folder' })
+  return { canceled: result.canceled, path: result.filePaths[0] || '' }
+}
+
+async function seller_automation_draft_runs(payload = {}) {
+  const limit = Math.max(1, Math.min(100, Number(payload?.input?.limit || 20)))
+  return httpJson('GET', `/v3/provider-agent/draft-runs?limit=${limit}`, undefined, await localOwnerToken(await dockPaths()), { timeoutMs: 15000 })
 }
 
 async function httpJson(method, route, body, token, options = {}) {

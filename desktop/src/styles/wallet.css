@@ -36,7 +36,7 @@
 .wallet-balance-card {
   background:
     radial-gradient(circle at 88% 10%, rgb(184 245 61 / 0.2), transparent 25%),
-    radial-gradient(circle at 7% 100%, rgb(102 92 255 / 0.38), transparent 34%),
+    radial-gradient(circle at 7% 100%, rgb(var(--color-primary-rgb) / 0.38), transparent 34%),
     linear-gradient(135deg, #17182b 0%, #24234a 58%, #343068 100%);
   border: 1px solid rgb(255 255 255 / 0.11);
   border-radius: 18px;
@@ -201,7 +201,7 @@
 }
 
 .wallet-panel {
-  background: #fff;
+  background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 14px;
   box-shadow: 0 8px 24px rgb(var(--color-shadow-rgb) / 0.06);
@@ -362,7 +362,7 @@
 .settings-view .wallet-address-row button,
 .settings-view .wallet-address-row button:hover {
   align-items: center;
-  background: #fff;
+  background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 8px;
   color: var(--color-text-secondary);
@@ -419,9 +419,9 @@
 }
 
 .settings-view .wallet-field input:focus {
-  background: #fff;
+  background: var(--color-surface);
   border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px rgb(102 92 255 / 0.1);
+  box-shadow: 0 0 0 3px rgb(var(--color-primary-rgb) / 0.1);
 }
 
 .wallet-withdraw-fields {
@@ -479,7 +479,7 @@
   background: var(--color-primary);
   border: 1px solid var(--color-primary);
   border-radius: 9px;
-  color: #fff;
+  color: var(--color-on-primary);
   font-size: 9px;
   font-weight: 680;
   height: 34px;
@@ -518,8 +518,8 @@
 
 :root[data-theme="dark"] .profile-icon-button.active,
 :root[data-theme="dark"] .profile-icon-button.active:hover {
-  background: rgb(165 156 255 / 0.14);
-  color: #a59cff;
+  background: rgb(var(--color-primary-rgb) / 0.14);
+  color: var(--color-primary);
 }
 
 :root[data-theme="dark"] .wallet-panel {
@@ -622,8 +622,8 @@ button.wallet-modal-scrim:focus-visible {
 
 .wallet-modal-panel {
   animation: order-search-dialog-in 200ms cubic-bezier(.22, .8, .25, 1) both;
-  background: #fff;
-  border: 1px solid rgb(102 92 255 / .18);
+  background: var(--color-surface);
+  border: 1px solid rgb(var(--color-primary-rgb) / .18);
   border-radius: 15px;
   box-shadow: 0 24px 64px rgb(var(--color-shadow-rgb) / .18), 0 1px 0 rgb(255 255 255 / .78) inset;
   display: grid;
@@ -657,9 +657,9 @@ button.wallet-modal-scrim:focus-visible {
 
 .wallet-modal-head-mark {
   align-items: center;
-  background: linear-gradient(145deg, #5d54ee, #8578ff);
+  background: linear-gradient(145deg, var(--color-primary), var(--color-primary-gradient-end));
   border-radius: 11px;
-  box-shadow: 0 8px 20px rgb(102 92 255 / .22), inset 0 1px 0 rgb(255 255 255 / .24);
+  box-shadow: 0 8px 20px rgb(var(--color-primary-rgb) / .22), inset 0 1px 0 rgb(255 255 255 / .24);
   color: #fff;
   display: flex;
   flex: 0 0 auto;
@@ -728,7 +728,7 @@ button.wallet-modal-scrim:focus-visible {
 
 .wallet-modal-footer {
   align-items: center;
-  background: #fff;
+  background: var(--color-surface);
   border-top: 1px solid var(--color-border);
   color: var(--color-text-tertiary);
   display: flex;
@@ -764,7 +764,7 @@ button.wallet-modal-scrim:focus-visible {
 }
 
 .wallet-modal .wallet-balance-card {
-  background: #fff;
+  background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: 12px;
   box-shadow: none;
@@ -800,7 +800,7 @@ button.wallet-modal-scrim:focus-visible {
 .wallet-modal .wallet-balance-caption i {
   background: var(--color-primary);
   border-radius: 50%;
-  box-shadow: 0 0 0 3px rgb(102 92 255 / .1);
+  box-shadow: 0 0 0 3px rgb(var(--color-primary-rgb) / .1);
   height: 6px;
   width: 6px;
 }
@@ -837,7 +837,7 @@ button.wallet-modal-scrim:focus-visible {
 
 .wallet-modal .wallet-refresh-button:hover {
   background: var(--color-primary-soft);
-  border-color: rgb(102 92 255 / .18);
+  border-color: rgb(var(--color-primary-rgb) / .18);
   color: var(--color-primary);
   transform: none;
 }
@@ -915,8 +915,8 @@ button.wallet-modal-scrim:focus-visible {
 
 .wallet-modal .wallet-panel-tab.active,
 .wallet-modal .wallet-panel-tab.active:hover {
-  background: #fff;
-  box-shadow: 0 2px 8px rgb(var(--color-shadow-rgb) / .08), 0 0 0 1px rgb(102 92 255 / .08);
+  background: var(--color-surface);
+  box-shadow: 0 2px 8px rgb(var(--color-shadow-rgb) / .08), 0 0 0 1px rgb(var(--color-primary-rgb) / .08);
   color: var(--color-primary);
 }
 
@@ -1056,7 +1056,7 @@ button.wallet-modal-scrim:focus-visible {
 .wallet-modal .wallet-receive-body {
   align-content: center;
   background: linear-gradient(145deg, #f4f2ff, #f8f8ff);
-  border: 1px solid rgb(102 92 255 / .1);
+  border: 1px solid rgb(var(--color-primary-rgb) / .1);
   border-radius: 9px;
   min-height: 142px;
   padding: 10px;
@@ -1111,8 +1111,8 @@ button.wallet-modal-scrim:focus-visible {
 
 .wallet-modal .wallet-field input:focus {
   background: var(--color-surface);
-  border-color: rgb(102 92 255 / .44);
-  box-shadow: 0 0 0 3px rgb(102 92 255 / .1);
+  border-color: rgb(var(--color-primary-rgb) / .44);
+  box-shadow: 0 0 0 3px rgb(var(--color-primary-rgb) / .1);
 }
 
 .wallet-modal .wallet-withdraw-form {
@@ -1192,13 +1192,13 @@ button.wallet-modal-scrim:focus-visible {
 }
 
 .wallet-modal .wallet-code-cells > i.active {
-  background: #fff;
+  background: var(--color-surface);
   border-color: var(--color-primary);
-  box-shadow: 0 0 0 2px rgb(102 92 255 / .1);
+  box-shadow: 0 0 0 2px rgb(var(--color-primary-rgb) / .1);
 }
 
 .wallet-modal .wallet-code-control.complete .wallet-code-cells > i {
-  border-color: rgb(102 92 255 / .28);
+  border-color: rgb(var(--color-primary-rgb) / .28);
 }
 
 .wallet-modal .wallet-code-control.disabled {
@@ -1244,7 +1244,7 @@ button.wallet-modal-scrim:focus-visible {
 .wallet-modal .wallet-withdraw-footer button:hover {
   background: var(--color-primary);
   border: 1px solid var(--color-primary);
-  color: #fff;
+  color: var(--color-on-primary);
 }
 
 .wallet-modal .wallet-withdraw-footer button:hover {
@@ -1266,7 +1266,7 @@ button.wallet-modal-scrim:focus-visible {
 
 :root[data-theme="dark"] .wallet-modal-panel {
   background: #17211e;
-  border-color: rgb(165 156 255 / .18);
+  border-color: rgb(var(--color-primary-rgb) / .18);
   box-shadow: 0 24px 72px rgb(0 0 0 / .38);
 }
 
@@ -1278,7 +1278,7 @@ button.wallet-modal-scrim:focus-visible {
 
 :root[data-theme="dark"] .wallet-modal .wallet-balance-card {
   background: #17211e;
-  border-color: rgb(165 156 255 / .18);
+  border-color: rgb(var(--color-primary-rgb) / .18);
   box-shadow: inset 0 1px 0 rgb(255 255 255 / .035);
 }
 
@@ -1292,9 +1292,9 @@ button.wallet-modal-scrim:focus-visible {
 :root[data-theme="dark"] .wallet-modal .wallet-panel-tab.active,
 :root[data-theme="dark"] .wallet-modal .wallet-panel-tab.active:hover {
   background: #17211e;
-  border-color: #a59cff;
+  border-color: var(--color-primary);
   box-shadow: none;
-  color: #a59cff;
+  color: var(--color-primary);
 }
 
 :root[data-theme="dark"] .wallet-modal .wallet-panel-tab strong {
@@ -1323,8 +1323,8 @@ button.wallet-modal-scrim:focus-visible {
 
 :root[data-theme="dark"] .wallet-modal .wallet-code-cells > i.active {
   background: #17211e;
-  border-color: #a59cff;
-  box-shadow: 0 0 0 2px rgb(165 156 255 / .12);
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px rgb(var(--color-primary-rgb) / .12);
 }
 
 :root[data-theme="dark"] .wallet-modal .wallet-code-control.masked .wallet-code-cells > i.filled::after {
@@ -1467,7 +1467,7 @@ button.wallet-modal-scrim:focus-visible {
 
 .wallet-limit-toggle input:checked + span { background: var(--color-primary); }
 .wallet-limit-toggle input:checked + span::after { transform: translateX(16px); }
-.wallet-limit-toggle input:focus-visible + span { box-shadow: 0 0 0 3px rgb(102 92 255 / .18); }
+.wallet-limit-toggle input:focus-visible + span { box-shadow: 0 0 0 3px rgb(var(--color-primary-rgb) / .18); }
 .wallet-limit-toggle input:disabled + span { cursor: wait; opacity: .55; }
 .wallet-limit-toggle strong { color: var(--color-text-secondary); font-size: 9px; }
 
@@ -1545,7 +1545,7 @@ button.wallet-modal-scrim:focus-visible {
   background: var(--color-primary);
   border: 1px solid var(--color-primary);
   border-radius: 8px;
-  color: #fff;
+  color: var(--color-on-primary);
   font-size: 9px;
   font-weight: 700;
   min-height: 34px;

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf16"
 )
 
 type recordingRunner struct{ calls []string }
@@ -23,6 +24,25 @@ func TestHiddenCommandContextSuppressesConsoleWindows(t *testing.T) {
 	}
 	if cmd.SysProcAttr.CreationFlags&createNoWindow == 0 {
 		t.Fatal("provider probes must use CREATE_NO_WINDOW")
+	}
+}
+
+func TestDecodeWindowsOutputUTF16LEStartingWithCJK(t *testing.T) {
+	want := "默认分发: Ubuntu-24.04\r\n默认版本: 2\r\n"
+	words := utf16.Encode([]rune(want))
+	raw := make([]byte, 0, len(words)*2)
+	for _, word := range words {
+		raw = append(raw, byte(word), byte(word>>8))
+	}
+	if got := decodeWindowsOutput(raw); got != want {
+		t.Fatalf("decoded WSL status=%q, want %q", got, want)
+	}
+}
+
+func TestDecodeWindowsOutputPreservesUTF8(t *testing.T) {
+	want := "NVIDIA GeForce RTX 3080"
+	if got := decodeWindowsOutput([]byte(want)); got != want {
+		t.Fatalf("decoded UTF-8 output=%q, want %q", got, want)
 	}
 }
 

@@ -79,6 +79,9 @@ type TunnelClient struct {
 	CloudURL  string
 	TokenPath string
 	Store     *Store
+	// CredentialResolver returns auth metadata and the plaintext only at the
+	// final local forwarding boundary. Callers must never log its return value.
+	CredentialResolver func(string) (authType, apiKeyHeader, secret string, err error)
 
 	writeMu    sync.Mutex
 	stateMu    sync.Mutex
@@ -212,6 +215,16 @@ func (c *TunnelClient) sendRegister(ctx context.Context, conn *websocket.Conn) e
 			probeCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 			status = Probe(probeCtx, ProbeInput{Config: cfg})
 			cancel()
+		} else if c.CredentialResolver != nil && cfg.CredentialRef != "" {
+			authType, header, secret, resolveErr := c.CredentialResolver(cfg.CredentialRef)
+			if resolveErr != nil {
+				status.Healthy = false
+				status.Error = "configured endpoint credential is unavailable"
+			} else {
+				probeCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+				status = Probe(probeCtx, ProbeInput{Config: cfg, AuthType: authType, APIKeyHeader: header, Secret: secret})
+				cancel()
+			}
 		}
 		statuses = append(statuses, TunnelStatus{EndpointID: cfg.EndpointID, Healthy: status.Healthy, RouteFingerprint: cfg.RouteFingerprint, LastSeenAt: status.CheckedAt, Error: status.Error})
 	}
@@ -551,6 +564,16 @@ func (c *TunnelClient) forward(ctx context.Context, conn *websocket.Conn, cfg Co
 		for _, value := range values {
 			request.Header.Add(key, value)
 		}
+	}
+	if cfg.CredentialRef != "" {
+		if c.CredentialResolver == nil {
+			return errors.New("endpoint credential resolver is unavailable")
+		}
+		authType, header, secret, err := c.CredentialResolver(cfg.CredentialRef)
+		if err != nil {
+			return errors.New("configured endpoint credential is unavailable")
+		}
+		applyCredential(request.Header, authType, header, secret)
 	}
 	client := &http.Client{Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	response, err := client.Do(request)

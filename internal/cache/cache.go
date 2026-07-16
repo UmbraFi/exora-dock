@@ -84,6 +84,15 @@ func (c *Cache) Set(key string, value []byte, ttl time.Duration) {
 	})
 }
 
+func (c *Cache) Delete(key string) {
+	c.mu.Lock()
+	if element, ok := c.items[key]; ok {
+		c.removeElement(element)
+	}
+	c.mu.Unlock()
+	_ = c.db.Update(func(txn *badger.Txn) error { return txn.Delete([]byte(key)) })
+}
+
 func (c *Cache) setMemory(key string, value []byte, ttl time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
