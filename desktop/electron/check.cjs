@@ -130,9 +130,6 @@ if (!/\.v3-history-drawer-toggle::before,[\s\S]*?border-top:\s*1px solid var\(--
 for (const marker of ['counterpartyId', 'inFlightCount', 'rebaseFixtureTimestamps', 'local-test-buyer-api-recent']) {
   if (!activityFixtures.includes(marker)) throw new Error(`Local activity lifecycle fixture missing: ${marker}`)
 }
-for (const marker of ['localActivitySessionsForRole', 'localActivityDetailForSession', 'setLocalActivityFixturesEnabled(true)', 'setLocalActivityFixturesEnabled(false)']) {
-  if (!renderer.includes(marker)) throw new Error(`Local activity test mode missing: ${marker}`)
-}
 if ((activityFixtures.match(/role: 'buyer'/g) || []).length < 3 || (activityFixtures.match(/role: 'seller'/g) || []).length < 3) {
   throw new Error('Local activity test mode must include at least three buyer and three seller orders')
 }
@@ -202,8 +199,8 @@ if (!/onAuthenticated:\s*\(state: CloudAuthState\)\s*=>\s*Promise<void>/.test(au
 for (const marker of ['openingWorkspace', 'workspaceUnavailable', 'workspaceTransition', 'workspace-retry']) {
   if (!authUI.includes(marker)) throw new Error(`atomic workspace transition support missing: ${marker}`)
 }
-if (!authUI.includes('const authUITestControlsEnabled = true') || !renderer.includes('const authUITestControlsEnabled = true')) {
-  throw new Error('Authentication test controls must remain available in current builds')
+for (const forbiddenTestControl of ['authUITestControlsEnabled', 'data-auth-action="test-workspace"', 'data-test-auth-view="signin"', 'onTestWorkspace', 'openTestSignIn']) {
+  if (authUI.includes(forbiddenTestControl) || renderer.includes(forbiddenTestControl)) throw new Error(`desktop source contains a login-bypass test control: ${forbiddenTestControl}`)
 }
 const retiredDesktopCapabilities = ['local_agent_', 'bind_local_agent', 'workspace_snapshot', 'buyer_flow_action', 'save_chat_thread', 'archive_chat_threads', 'save_transactions', 'agent_card_', 'market_rail_cards', 'seller_market_status', 'project_folder_status', 'choose_project_folder', 'open_project_folder', 'archive_project_chats', 'stop_work_run', 'release_work_mcp_lease', 'llm_profiles']
 const builtRenderer = fs.existsSync(path.join(__dirname, '..', 'dist', 'assets'))
@@ -212,6 +209,9 @@ const builtRenderer = fs.existsSync(path.join(__dirname, '..', 'dist', 'assets')
     .map((file) => fs.readFileSync(path.join(__dirname, '..', 'dist', 'assets', file), 'utf8'))
     .join('\n')
   : ''
+for (const forbiddenReleaseMarker of ['data-auth-action="test-workspace"', 'data-test-auth-view="signin"', '__local_activity_test__', 'local-test-buyer-api-recent', 'Local test order detail was not found.', 'Open workspace preview']) {
+  if (builtRenderer.includes(forbiddenReleaseMarker)) throw new Error(`production renderer contains test-only UI or order data: ${forbiddenReleaseMarker}`)
+}
 for (const retired of retiredDesktopCapabilities) {
   if (renderer.includes(retired) || electronMain.includes(retired) || preload.includes(retired) || builtRenderer.includes(retired)) {
     throw new Error(`retired desktop capability returned: ${retired}`)
@@ -279,6 +279,9 @@ for (const marker of ['provider_asset_clear_selection', 'asset_packaging', 'appl
 }
 const packageConfig = fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')
 if (!packageConfig.includes('resources/wsl')) throw new Error('Windows installer does not embed the locked WSL Runtime resource')
+for (const exclusion of ['!electron/**/*.test.cjs', '!electron/check.cjs']) {
+  if (!packageConfig.includes(exclusion)) throw new Error(`release package must exclude test-only Electron files: ${exclusion}`)
+}
 const imageFiles = fs.readdirSync(path.join(__dirname, '..', 'resources', 'wsl'))
 if (imageFiles.some((name) => name.endsWith('.wsl'))) throw new Error('Windows installer must not embed a Linux environment image')
 

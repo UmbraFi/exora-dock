@@ -1,6 +1,5 @@
 import { invoke } from './bridge'
 import { createAuthGate, type CloudAuthAccount, type CloudAuthState } from './auth-ui'
-import { localActivityDetailForSession, localActivitySessionsForRole } from './activity-fixtures'
 import {
   htmlLangForLanguage,
   initialI18nLanguage,
@@ -1072,11 +1071,7 @@ const toolbarIcons = {
   monitor: icon(Activity),
   archive: icon(Archive),
   emptyContent: icon(Inbox),
-  authTest: icon(KeyRound),
 }
-
-// Kept available in packaged builds while the authentication/workspace lifecycle is under test.
-const authUITestControlsEnabled = true
 
 const roleTabIcons: Record<OrderSide, string> = {
   buyer: icon(ShoppingCart),
@@ -1201,7 +1196,6 @@ app.innerHTML = `
     <div class="sidebar-chrome">
       <div class="workspace-toolbar" aria-label="Workspace tools">
         <button type="button" data-toolbar-action="toggle-sidebar" aria-label="Toggle sidebar" title="Toggle sidebar">${toolbarIcons.sidebarExpanded}</button>
-        ${authUITestControlsEnabled ? `<button class="workspace-test-auth-button" type="button" data-test-auth-view="signin" aria-label="Test sign-in screen" title="Test sign-in screen">${toolbarIcons.authTest}<span>TEST</span></button>` : ''}
       </div>
     </div>
     <aside class="task-sidebar">
@@ -1973,7 +1967,6 @@ const state: {
   v3ActivityLoaded: Record<OrderSide, boolean>
   v3ActivityLoading: Record<OrderSide, boolean>
   v3ActivityErrors: Partial<Record<OrderSide, string>>
-  localActivityFixturesEnabled: boolean
   v3ActivityBucket: Record<OrderSide, V3ActivityBucket>
   v3ActivityArchiveMarkers: V3ActivityArchiveMarker[]
   v3ActivityArchiveUndo?: { marker: V3ActivityArchiveMarker; side: OrderSide }
@@ -2230,7 +2223,6 @@ const state: {
   v3ActivityLoaded: { buyer: false, seller: false },
   v3ActivityLoading: { buyer: false, seller: false },
   v3ActivityErrors: {},
-  localActivityFixturesEnabled: false,
   v3ActivityBucket: { buyer: 'current', seller: 'current' },
   v3ActivityArchiveMarkers: [],
   v3ActivityArchiveUndo: undefined,
@@ -3874,7 +3866,7 @@ function setTheme(theme: AppTheme) {
 const V3_ACTIVITY_RETENTION_MS = 24 * 60 * 60 * 1000
 
 function v3ActivityAccountScope() {
-  return state.localActivityFixturesEnabled ? '__local_activity_test__' : String(state.authAccount?.accountId || '')
+  return String(state.authAccount?.accountId || '')
 }
 
 function v3HistoryCopy(english: string, chinese: string) {
@@ -8141,35 +8133,7 @@ function v3ConsumerMaxCharge(listing: V3Listing, product: V3Product, quantity = 
   return v3AtomicFromPrice(price, ['amountAtomic', 'fixedAmountAtomic'])
 }
 
-function setLocalActivityFixturesEnabled(enabled: boolean) {
-  state.localActivityFixturesEnabled = enabled
-  if (enabled) {
-    state.v3ActivityArchiveMarkers = state.v3ActivityArchiveMarkers.filter((marker) => !marker.baselines.some((item) => item.sessionId.startsWith('local-test-')))
-    state.v3ActivityArchiveUndo = undefined
-    scheduleSaveAppSettings(0)
-  }
-  for (const side of ['buyer', 'seller'] as const) {
-    state.v3ActivitySessions[side] = enabled ? localActivitySessionsForRole(side) : []
-    state.v3ActivityLoaded[side] = enabled
-    state.v3ActivityLoading[side] = false
-    delete state.v3ActivityErrors[side]
-  }
-  state.selectedV3ActivitySessionId = undefined
-  state.v3ActivityDetail = undefined
-  state.v3ActivityDetailLoading = false
-  state.v3ActivityDetailError = undefined
-}
-
 async function loadV3ActivitySessions(side: OrderSide = state.workOrderSide, force = false) {
-  if (state.localActivityFixturesEnabled) {
-    if (!force && state.v3ActivityLoaded[side]) return
-    state.v3ActivitySessions[side] = localActivitySessionsForRole(side)
-    state.v3ActivityLoaded[side] = true
-    state.v3ActivityLoading[side] = false
-    delete state.v3ActivityErrors[side]
-    if (side === state.workOrderSide) renderLedger()
-    return
-  }
   if (state.v3ActivityLoading[side] || (!force && (state.v3ActivityLoaded[side] || state.v3ActivityErrors[side]))) return
   state.v3ActivityLoading[side] = true
   delete state.v3ActivityErrors[side]
@@ -8188,11 +8152,6 @@ async function loadV3ActivitySessions(side: OrderSide = state.workOrderSide, for
 }
 
 async function fetchV3ActivitySessionDetail(sessionId: string) {
-  if (state.localActivityFixturesEnabled) {
-    const fixture = localActivityDetailForSession(sessionId)
-    if (!fixture) throw new Error('Local test order detail was not found.')
-    return fixture as V3ActivityDetail
-  }
   const response = await invoke<{ session?: V3ActivityDetail }>('activity_session', { input: { id: sessionId } })
   if (!response.session) throw new Error('Order detail was not found.')
   return response.session
@@ -16878,7 +16837,6 @@ const authGate = createAuthGate(app, {
     applyUserPreferences()
   },
   onAuthenticated: async (authState) => {
-    setLocalActivityFixturesEnabled(false)
     await openWorkspace(authState)
   },
   onSignedOut: (authState) => {
@@ -16891,15 +16849,6 @@ const authGate = createAuthGate(app, {
     dismissPINSettingsModal()
     renderProfileSummary()
   },
-  onTestWorkspace: async () => {
-    setLocalActivityFixturesEnabled(true)
-    await openWorkspace()
-  },
-})
-
-app.querySelector<HTMLButtonElement>('[data-test-auth-view="signin"]')?.addEventListener('click', () => {
-  void requestWindowMode('auth').catch((error) => console.warn('Failed to open the authentication preview:', error))
-  authGate.openTestSignIn()
 })
 
 async function bootstrapWorkspace() {

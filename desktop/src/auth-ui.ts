@@ -26,7 +26,6 @@ type AuthGateOptions = {
   onVisibilityChange?: (visible: boolean) => void
   onAuthenticated: (state: CloudAuthState) => Promise<void>
   onSignedOut?: (state: CloudAuthState) => void
-  onTestWorkspace?: () => Promise<void>
 }
 
 type Challenge = {
@@ -48,9 +47,6 @@ const authFeatureImages = [
 
 const authFeaturePlacements = ['bottom-right', 'top-right', 'bottom-right', 'bottom-right', 'top-left'] as const
 const authFeatureAutoAdvanceMs = 6_000
-// Kept available in packaged builds while the authentication/workspace lifecycle is under test.
-const authUITestControlsEnabled = true
-
 export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
   const element = document.createElement('section')
   element.className = 'auth-gate'
@@ -76,7 +72,6 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
   let message = ''
   let messageTone: 'error' | 'info' = 'info'
   let forceOpen = false
-  let testWorkspacePreview = false
   let languageMenuOpen = false
   let activeFeatureIndex = 0
   let featureObserver: IntersectionObserver | undefined
@@ -105,7 +100,7 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
     featureObserver = undefined
     clearFeatureAutoScroll()
     const workspaceSession = status.phase === 'authenticated' || status.phase === 'needs_pin'
-    setAuthGateVisible(!(testWorkspacePreview || (workspaceSession && !forceOpen && !workspaceOpening && !workspaceError)))
+    setAuthGateVisible(!(workspaceSession && !forceOpen && !workspaceOpening && !workspaceError))
     if (workspaceOpening) {
       element.innerHTML = authFrame(`<div class="auth-loading"><span class="auth-spinner"></span><p>${c.openingWorkspace}</p></div>`, c)
       bind()
@@ -244,7 +239,6 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
         <div class="auth-form-row"><span class="auth-session-note">${shieldIcon()} ${c.keepSignedIn}</span><button class="auth-link" type="button" data-auth-action="forgot">${c.forgotPassword}</button></div>
         <button class="auth-primary" type="submit" ${busy ? 'disabled' : ''}>${busy ? c.working : c.signIn}</button>
         <button class="auth-secondary auth-register-button" type="button" data-auth-action="register">${c.createAccount}</button>
-        ${authUITestControlsEnabled ? `<button class="auth-test-switch" type="button" data-auth-action="test-workspace"><strong>TEST</strong><span>${c.testWorkspace}</span></button>` : ''}
       </form>
       ${social.length ? `<div class="auth-divider"><span>${c.orContinue}</span></div><div class="auth-social">${social.map((provider) => `<button type="button" data-auth-social="${escapeAttr(provider.id)}">${escapeHTML(provider.name || provider.id)}</button>`).join('')}</div>` : ''}
       <div class="auth-security-note">${shieldIcon()}<span><strong>${c.securityNoticeTitle}</strong><small>${c.securityNoticeDetail}</small></span></div>
@@ -571,13 +565,9 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
       await enterWorkspace(status)
       return
     }
-    if (action === 'test-workspace' && authUITestControlsEnabled) {
-      await enterWorkspacePreview()
-      return
-    }
     if (action === 'workspace-retry') {
       if (status.phase === 'authenticated' || (status.phase === 'offline' && status.authenticated)) await enterWorkspace(status, true)
-      else await enterWorkspacePreview(true)
+      else { workspaceError = ''; await initialize() }
       return
     }
 	if (action === 'resend') {
@@ -673,7 +663,6 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
 
   async function applyState(next: CloudAuthState) {
     status = next
-    testWorkspacePreview = false
     if (next.phase === 'authenticated' || next.phase === 'needs_pin') {
       await enterWorkspace(next)
       return
@@ -757,44 +746,24 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
     render()
   }
 
-  function openTestSignIn() {
-    if (!authUITestControlsEnabled) return
-    testWorkspacePreview = false
-    forceOpen = true
-    languageMenuOpen = false
-    view = 'login'
-    message = ''
-    render()
-  }
-
   async function enterWorkspace(next: CloudAuthState, retry = false) {
     if (workspaceTransition && !retry) return workspaceTransition
     status = next
     return startWorkspaceTransition(() => options.onAuthenticated(next))
   }
 
-  async function enterWorkspacePreview(retry = false) {
-    if (workspaceTransition && !retry) return workspaceTransition
-    return startWorkspaceTransition(async () => {
-      if (!options.onTestWorkspace) throw new Error(copy().workspaceUnavailable)
-      await options.onTestWorkspace()
-    }, true)
-  }
-
-  function startWorkspaceTransition(task: () => Promise<void>, preview = false) {
+  function startWorkspaceTransition(task: () => Promise<void>) {
     const generation = ++workspaceTransitionGeneration
     workspaceOpening = true
     workspaceError = ''
     message = ''
     forceOpen = false
     languageMenuOpen = false
-    testWorkspacePreview = false
     render()
     const transition = task().then(() => {
       if (generation !== workspaceTransitionGeneration) return
       workspaceOpening = false
       workspaceError = ''
-      testWorkspacePreview = preview
       setAuthGateVisible(false)
       clearFeatureAutoScroll()
     }).catch((error) => {
@@ -817,7 +786,7 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
     workspaceError = ''
   }
 
-  return Object.freeze({ initialize, applyState, refreshLanguage, openPINSettings, openPINReset, openPasswordReset, openTestSignIn, get state() { return status } })
+  return Object.freeze({ initialize, applyState, refreshLanguage, openPINSettings, openPINReset, openPasswordReset, get state() { return status } })
 }
 
 function mailIcon() {
@@ -859,7 +828,6 @@ function escapeAttr(value: unknown) {
 }
 
 const enCopy = {
-  testWorkspace: 'Open workspace preview',
   brandLine: 'Your private agent workspace', connecting: 'Connecting securely…', openingWorkspace: 'Opening your workspace…', workspaceUnavailable: 'Workspace could not open', minimize: 'Minimize', close: 'Close',
   switchLanguage: 'Switch language', featureShowcaseLabel: 'Five ways to use Exora Dock', featureNavigationLabel: 'Feature navigation',
   featureCapabilitiesLabel: 'Core capabilities', featureGoTo: 'Go to feature',
@@ -921,7 +889,6 @@ const enCopy = {
 }
 
 const zhCopy: typeof enCopy = {
-  testWorkspace: '测试：进入主界面',
   brandLine: '你的私有智能体工作空间', connecting: '正在安全连接…', openingWorkspace: '正在进入工作区…', workspaceUnavailable: '工作区暂时无法打开', minimize: '最小化', close: '关闭',
   switchLanguage: '切换语言', featureShowcaseLabel: 'Exora Dock 五项核心能力', featureNavigationLabel: '功能导航',
   featureCapabilitiesLabel: '核心能力', featureGoTo: '前往功能',

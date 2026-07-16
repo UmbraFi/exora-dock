@@ -1,4 +1,4 @@
-<!-- Source: WHITEPAPER.md; normalized-sha256: 0da2912bec00aa0e6cde04659e8ded26eee9c03471fce6458d0c08c4933b0353 -->
+<!-- Source: WHITEPAPER.md; normalized-sha256: b7ade609f5e80ef42e58b3c33e184802082861327dbfb2a6f4456b703f6587ce -->
 
 # Exora V3.2 AI-First Resource Market Protocol Whitepaper
 
@@ -37,7 +37,7 @@ The Dock daemon, Electron application, and Cloud repository implement the V3 mar
 | Endpoint / API Bridge | Dock tunnel for authorized private or loopback services; transparent Gateway for authorized public HTTPS services | Every route is reviewed and metered; arbitrary URLs and undeclared routes are rejected |
 | Billing | Unified reserve, capture, release, refund, balanced journals, 24-hour seller revenue hold, and configured native-USDC deposit/withdrawal rails | Custody and withdrawal readiness depend on production Postgres, SMTP, Solana, and KMS configuration |
 
-The current desktop release is `0.1.0-preview.1`, an unsigned Windows x64 Technical Preview rather than an Authenticode-signed production release. Users must verify the release SHA-256 and should expect Windows SmartScreen or Unknown Publisher warnings.
+The current desktop release is `0.1.0-preview.2`, a Technical Preview for Windows x64, macOS ARM64, and Linux x64 rather than a production release. Windows is not Authenticode-signed, macOS is ad-hoc signed and not notarized, and Linux packages rely on the signed release index. Users must verify the published SHA-256 and should expect platform security prompts appropriate to those signing states.
 
 ## 2. Principles and non-goals
 
@@ -720,6 +720,6 @@ On a Windows Preview provider, the same purchase path uses one managed WSL2 envi
 
 V3.2 Alpha implements an AI-first AgentProductManifest, BYO-Agent Consumer MCP, optional draft-only Seller MCP, Electron Listings/VM/Resources/Endpoint/API Bridge workspaces, automatic `provider_busy` delisting, approximately 15-minute recovery, integer-minute prepurchase, AssetBundle, time-limited DownloadGrant, normalized ApiOperationProduct, side-effect ApprovalRequest, strict one-Host-one-Slot-one-active-Lease, KVM and disclosed managed WSL2 runtimes, reset receipts, transparent Gateway, balanced journals, revenue hold, and configured Provider Payout.
 
-V3.2 Alpha does not promise multi-tenant VMs, MIG resale, bare Host Root, Hyper-V/VMware, KVM-equivalent isolation on WSL2, prose-to-API inference without seller review, settlement of external merchandise value, decentralized storage, platform inference, a general chat interface, autonomous public publishing, or autonomous dispute verdicts. The unsigned Windows Technical Preview and locally configured Cloud are not production availability or custody certifications.
+V3.2 Alpha does not promise multi-tenant VMs, MIG resale, bare Host Root, Hyper-V/VMware, KVM-equivalent isolation on WSL2, prose-to-API inference without seller review, settlement of external merchandise value, decentralized storage, platform inference, a general chat interface, autonomous public publishing, or autonomous dispute verdicts. The three-platform Technical Preview and locally configured Cloud are not production availability or custody certifications.
 
 > Exora is an MCP-connected, Agent-first exchange: people keep their own Agent, buy or sell verified resources through one structured protocol, and retain control of publishing, money, and sensitive authority.
