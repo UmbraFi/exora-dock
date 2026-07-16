@@ -18,9 +18,9 @@
 .app-shell.seller-surface-mode .main-workspace:has(.v3-seller-surface)::after {
   background: linear-gradient(
     to bottom,
-    var(--color-surface) 0,
-    color-mix(in srgb, var(--color-surface) 94%, transparent) 55%,
-    color-mix(in srgb, var(--color-surface) 58%, transparent) 80%,
+    var(--color-window) 0,
+    color-mix(in srgb, var(--color-window) 94%, transparent) 55%,
+    color-mix(in srgb, var(--color-window) 58%, transparent) 80%,
     transparent 100%
   );
   content: '';
@@ -84,8 +84,8 @@
 }
 
 .v3-product-card:hover {
-  border-color: rgb(102 92 255 / 0.4);
-  box-shadow: 0 16px 36px rgb(102 92 255 / 0.1);
+  border-color: rgb(var(--color-primary-rgb) / 0.4);
+  box-shadow: 0 16px 36px rgb(var(--color-primary-rgb) / 0.1);
 }
 
 .v3-kind-chip {
@@ -109,8 +109,8 @@
 .v3-product-hero {
   padding: 28px;
   border-radius: 12px;
-  color: white;
-  background: linear-gradient(125deg, #20213a, #665cff);
+  color: var(--color-on-primary);
+  background: linear-gradient(125deg, color-mix(in srgb, var(--color-primary) 28%, #171815), var(--color-primary));
 }
 .v3-product-hero span { font-size: 10px; font-weight: 800; text-transform: uppercase; }
 .v3-product-hero h2 { margin: 16px 0 7px; font-size: 30px; }
@@ -164,8 +164,8 @@
   border-radius: 999px;
   background: var(--color-primary);
   box-shadow:
-    0 0 13px rgb(102 92 255 / 0.34),
-    0 7px 16px rgb(102 92 255 / 0.14);
+    0 0 13px rgb(var(--color-primary-rgb) / 0.34),
+    0 7px 16px rgb(var(--color-primary-rgb) / 0.14);
   transform: translateX(var(--v3-seller-active-offset, 0));
   transition: transform 240ms cubic-bezier(0.22, 0.61, 0.36, 1);
   pointer-events: none;
@@ -216,10 +216,10 @@
 }
 
 .v3-seller-tabs button.active {
-  border-color: rgb(102 92 255 / 0.6);
+  border-color: rgb(var(--color-primary-rgb) / 0.6);
   color: var(--color-primary);
   background: var(--color-surface-tint);
-  box-shadow: 0 4px 14px rgb(102 92 255 / 0.06);
+  box-shadow: 0 4px 14px rgb(var(--color-primary-rgb) / 0.06);
 }
 .v3-seller-grid { display: grid; grid-template-columns: minmax(280px, .78fr) minmax(430px, 1.22fr); gap: 14px; align-items: start; }
 
@@ -267,7 +267,7 @@
 .v3-api-probe.passed > span { color: #17895c; background: rgb(44 173 121 / .12); }
 .v3-api-probe.failed { border-color: rgb(211 78 92 / .25); background: rgb(211 78 92 / .06); }
 .v3-api-probe.failed > span { color: #c43f51; background: rgb(211 78 92 / .12); }
-.v3-api-probe.checking > span { border: 2px solid rgb(102 92 255 / .18); border-top-color: var(--color-primary); background: transparent; animation: spin 900ms linear infinite; }
+.v3-api-probe.checking > span { border: 2px solid rgb(var(--color-primary-rgb) / .18); border-top-color: var(--color-primary); background: transparent; animation: spin 900ms linear infinite; }
 .v3-api-material-list { display: grid; gap: 8px; margin: 14px 0; }
 .v3-api-material { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--color-border); border-radius: 10px; }
 .v3-api-material > span { font-size: 9px; font-weight: 800; color: var(--color-primary); }
@@ -294,7 +294,7 @@
   transition: background 150ms ease;
 }
 .v3-api-prompt-header::-webkit-details-marker { display: none; }
-.v3-api-prompt-header:hover { background: rgb(102 92 255 / .025); }
+.v3-api-prompt-header:hover { background: rgb(var(--color-primary-rgb) / .025); }
 .v3-api-prompt-disclosure[open] > .v3-api-prompt-header { border-bottom: 1px solid var(--color-border); }
 
 .v3-api-prompt-heading { min-width: 0; }

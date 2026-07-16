@@ -12,6 +12,8 @@ for (const file of electronScripts(__dirname)) {
 }
 
 const renderer = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.ts'), 'utf8')
+const electronMain = fs.readFileSync(path.join(__dirname, 'main.cjs'), 'utf8')
+const electronIpc = fs.readFileSync(path.join(__dirname, 'ipc.cjs'), 'utf8')
 const activityFixtures = fs.readFileSync(path.join(__dirname, '..', 'src', 'activity-fixtures.ts'), 'utf8')
 const viteConfig = fs.readFileSync(path.join(__dirname, '..', 'vite.config.ts'), 'utf8')
 if (!/base:\s*['"]\.\/['"]/.test(viteConfig)) throw new Error('Packaged renderer assets must use file-relative URLs')
@@ -78,6 +80,12 @@ for (const marker of ['function renderV3SellerSurface', "['listings', 'Listings'
 const tabOrder = ["['listings', 'Listings',", "['vm', 'VM',", "['resources', 'Resources',", "['endpoint', 'Endpoint',", "['api_bridge', 'API Bridge',"].map((marker) => renderer.indexOf(marker))
 if (tabOrder.some((index) => index < 0) || tabOrder.some((index, position) => position > 0 && index <= tabOrder[position - 1])) throw new Error('Main workspace tabs must be ordered Listings, VM, Resources, Endpoint, API Bridge')
 if (!renderer.includes("v3SellerTab: 'listings'")) throw new Error('Listings must be the default main workspace tab')
+for (const marker of ['const vmProviderAvailable = !isMacPlatform', "tab === 'vm' ? 'listings' : tab", "vmProviderAvailable || id !== 'vm'", 'const sources = v3ProviderApplicationSources()', "vmProviderAvailable ? renderV3EnvironmentCloudModal() : ''", "vmProviderAvailable || value !== 'vm'"]) {
+  if (!renderer.includes(marker)) throw new Error(`macOS VM provider UI gate missing: ${marker}`)
+}
+if (!rendererStyles.includes("#app[data-vm-provider='false'] .seller-automation-attestations label:has(> [data-seller-auto-install])")) throw new Error('macOS must hide automatic VM image downloads')
+if (!electronMain.includes('authorizeCommand: (command) => assertDesktopCommandSupported(command, process.platform)')) throw new Error('Desktop IPC must apply platform capability authorization')
+if (!electronIpc.includes('await authorizeCommand(command, payload, event)')) throw new Error('IPC authorization must run before command handlers')
 const sideSwitch = renderer.slice(renderer.indexOf('function selectOrderSide('), renderer.indexOf('function sellerMonitorActive('))
 if (!sideSwitch || sideSwitch.includes('v3SellerTab =')) throw new Error('Buyer/Seller history switching must not change the main workspace tab')
 for (const marker of ['function renderV3UnifiedListingsPageV2', "v3ListingMode: 'buyer'", 'data-v3-listing-mode="buyer"', 'data-v3-listing-mode="seller"', 'v3-listing-search-switch', 'v3-listing-agent-hint', 'data-v3-listing-agent-copy', 'v3-listing-agent-details', 'listings.agentPrompt', 'data-listing-owner=', 'data-v3-consumer-form="api"', 'data-v3-consumer-form="compute"', 'data-v3-consumer-action="purchase-download"']) {
@@ -140,7 +148,6 @@ if (!decisionPanel.includes('syncV3SellerTabsVisibility()') || decisionPanel.inc
 }
 const settingsSurface = renderer.slice(renderer.indexOf('function renderSettingsSurface()'), renderer.indexOf('function openSettings('))
 if (!settingsSurface.includes('syncV3SellerTabsVisibility()')) throw new Error('Returning from settings must preserve activity detail tab visibility')
-const electronMain = fs.readFileSync(path.join(__dirname, 'main.cjs'), 'utf8')
 if (!/auth:\s*Object\.freeze\(\{\s*width:\s*1440,\s*height:\s*900,\s*minWidth:\s*560,\s*minHeight:\s*600\s*\}\)/.test(electronMain)) {
   throw new Error('Authentication must open at the normal 1440x900 desktop size')
 }

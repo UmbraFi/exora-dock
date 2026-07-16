@@ -40,6 +40,7 @@ import (
 	"github.com/exora-dock/exora-dock/internal/resource"
 	"github.com/exora-dock/exora-dock/internal/runcapability"
 	"github.com/exora-dock/exora-dock/internal/samplemarket"
+	"github.com/exora-dock/exora-dock/internal/sellerdraft"
 	"github.com/exora-dock/exora-dock/internal/supervisor"
 	"github.com/exora-dock/exora-dock/internal/task"
 	"github.com/exora-dock/exora-dock/internal/wallet"
@@ -79,6 +80,7 @@ type RuntimeStores struct {
 	ConfigPath      string
 	Endpoints       *endpoint.Store
 	EndpointTunnel  *endpoint.TunnelClient
+	SellerDrafts    *sellerdraft.Service
 }
 
 type Handler struct {
@@ -125,6 +127,7 @@ type Handler struct {
 	configPath      string
 	endpoints       *endpoint.Store
 	endpointTunnel  *endpoint.TunnelClient
+	sellerDrafts    *sellerdraft.Service
 	selfPubkey      string
 	startTime       time.Time
 }
@@ -195,6 +198,7 @@ func NewHandler(c *cache.Cache, cs *chat.Store, relay *chat.Relay, hub *chat.Hub
 		configPath:      strings.TrimSpace(stores.ConfigPath),
 		endpoints:       stores.Endpoints,
 		endpointTunnel:  stores.EndpointTunnel,
+		sellerDrafts:    stores.SellerDrafts,
 		selfPubkey:      selfPubkey,
 		startTime:       time.Now(),
 	}
@@ -233,11 +237,34 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) DiscoveryManifest(w http.ResponseWriter, r *http.Request) {
 	if h.discovery != nil {
 		manifest := *h.discovery
+		manifest.Capabilities = append([]discovery.Capability(nil), h.discovery.Capabilities...)
+		sellerEnabled := false
+		if h.sellerDrafts != nil {
+			policy, configured := h.sellerDrafts.Policy()
+			sellerEnabled = configured && policy.Enabled
+		}
+		filtered := manifest.Capabilities[:0]
+		for _, capability := range manifest.Capabilities {
+			if capability.Name != "provider.listing_drafts.mcp.v1" {
+				filtered = append(filtered, capability)
+			}
+		}
+		manifest.Capabilities = filtered
+		if sellerEnabled {
+			manifest.Capabilities = append(manifest.Capabilities, discovery.Capability{Name: "provider.listing_drafts.mcp.v1", Description: "Discover authorized seller resources and create private Listing drafts over ProviderAgent-scoped MCP. Public Listing actions remain owner-only."})
+		}
 		base := strings.TrimRight(requestBaseURL(r), "/")
 		manifest.BaseURL = base
 		manifest.HealthURL = base + "/health"
 		manifest.ManifestURL = base + "/.well-known/exora-dock.json"
 		manifest.Endpoints = maps.Clone(h.discovery.Endpoints)
+		if manifest.Endpoints == nil {
+			manifest.Endpoints = map[string]discovery.Endpoint{}
+		}
+		delete(manifest.Endpoints, "provider.listing_drafts")
+		if sellerEnabled {
+			manifest.Endpoints["provider.listing_drafts"] = discovery.Endpoint{Method: "MCP", Description: "ProviderAgent-scoped private seller draft tools; no publish, pause, resume Listing, or retire permission."}
+		}
 		for key, endpoint := range manifest.Endpoints {
 			if endpoint.Path != "" && endpoint.Method != "STDIO" {
 				endpoint.URL = base + endpoint.Path
@@ -2471,7 +2498,7 @@ func (h *Handler) UpdateOrderStatus(w http.ResponseWriter, r *http.Request) {
 
 // --- Chat endpoints ---
 
-// SendMessage: PWA sends a signed message, miner forwards to responsible peers.
+// SendMessage: a client sends a signed message, and the miner forwards it to responsible peers.
 // POST /v1/chat/send
 func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	var msg chat.Message
@@ -2557,13 +2584,13 @@ func (h *Handler) ExportChat(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-// WebSocket: real-time message push to connected PWA clients.
+// WebSocket: real-time message push to connected web clients.
 // GET /ws
 func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
 	h.hub.HandleWS(w, r)
 }
 
-// LookupMiners: PWA can query which miners are responsible for an order.
+// LookupMiners lets clients query which miners are responsible for an order.
 // GET /v1/chat/lookup/{orderID}
 func (h *Handler) LookupMiners(w http.ResponseWriter, r *http.Request) {
 	orderID := chi.URLParam(r, "orderID")
@@ -2657,7 +2684,7 @@ func (h *Handler) IPFSUnpin(w http.ResponseWriter, r *http.Request) {
 // --- Review endpoints ---
 
 // SubmitReview handles POST /v1/review/submit
-// PWA submits a product for review; this node votes locally and collects peer votes.
+// A client submits a product for review; this node votes locally and collects peer votes.
 func (h *Handler) SubmitReview(w http.ResponseWriter, r *http.Request) {
 	if h.reviewAgent == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "review agent not configured"})

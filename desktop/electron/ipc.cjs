@@ -6,6 +6,9 @@ function registerIpcHandlers(ipcMain, groups, options = {}) {
   const validateSender = typeof options.validateSender === 'function'
     ? options.validateSender
     : () => true
+  const authorizeCommand = typeof options.authorizeCommand === 'function'
+    ? options.authorizeCommand
+    : () => undefined
 
   ipcMain.handle(channel, async (event, command, payload = {}) => {
     if (!validateSender(event)) {
@@ -14,6 +17,7 @@ function registerIpcHandlers(ipcMain, groups, options = {}) {
     if (typeof command !== 'string' || !Object.prototype.hasOwnProperty.call(handlers, command)) {
       throw new Error(`unknown desktop command: ${String(command)}`)
     }
+    await authorizeCommand(command, payload, event)
     return handlers[command](payload, event)
   })
 

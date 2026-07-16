@@ -36,6 +36,7 @@ type Config struct {
 	Routes           []Route   `json:"routes"`
 	RouteFingerprint string    `json:"routeFingerprint"`
 	AuthType         string    `json:"authType"`
+	CredentialRef    string    `json:"credentialRef,omitempty"`
 	LastProbeHealthy bool      `json:"lastProbeHealthy"`
 	LastProbeAt      time.Time `json:"lastProbeAt,omitempty"`
 	LastProbeError   string    `json:"lastProbeError,omitempty"`
@@ -105,6 +106,10 @@ func (s *Store) Save(ctx context.Context, cfg Config) (Config, error) {
 	}
 	cfg.TimeoutSeconds = clamp(cfg.TimeoutSeconds, 1, 300, 120)
 	cfg.Concurrency = clamp(cfg.Concurrency, 1, 64, 1)
+	cfg.CredentialRef = strings.TrimSpace(cfg.CredentialRef)
+	if cfg.AuthType != "" && cfg.AuthType != "none" && cfg.CredentialRef == "" {
+		return Config{}, errors.New("credentialRef is required for an authenticated endpoint")
+	}
 	cfg.RouteFingerprint = RouteFingerprint(cfg.Routes)
 	if previous, found := s.Get(cfg.EndpointID); found {
 		cfg.Version = previous.Version + 1
@@ -158,6 +163,23 @@ func (s *Store) List() []Config {
 		}
 	}
 	return out
+}
+
+func (s *Store) Delete(id string) {
+	if s == nil || s.cache == nil {
+		return
+	}
+	id = strings.TrimSpace(id)
+	s.cache.Delete(endpointKey(id))
+	ids := s.loadIndex()
+	next := ids[:0]
+	for _, candidate := range ids {
+		if candidate != id {
+			next = append(next, candidate)
+		}
+	}
+	raw, _ := json.Marshal(next)
+	s.cache.Set(indexKey, raw, ttl)
 }
 
 func (s *Store) loadIndex() []string {

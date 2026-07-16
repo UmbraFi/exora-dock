@@ -29,19 +29,20 @@ const (
 )
 
 type Options struct {
-	ConfigPath     string
-	BaseURL        string
-	StartCommand   []string
-	AgentToken     string
-	ClientCWD      string
-	ConnectionRole string
-	ClientName     string
-	HTTPClient     *http.Client
-	LegacyMarket   bool
-	AgentSessionID string
-	WorkUID        string
-	ProjectPath    string
-	TransactionID  string
+	ConfigPath         string
+	BaseURL            string
+	StartCommand       []string
+	AgentToken         string
+	ProviderAgentToken string
+	ClientCWD          string
+	ConnectionRole     string
+	ClientName         string
+	HTTPClient         *http.Client
+	LegacyMarket       bool
+	AgentSessionID     string
+	WorkUID            string
+	ProjectPath        string
+	TransactionID      string
 }
 
 type Server struct {
@@ -129,9 +130,12 @@ func (s *Server) handle(ctx context.Context, req rpcRequest) any {
 			if !s.v2Automation() {
 				definitions = append(definitions, marketplaceToolDefinitions()...)
 			}
+			if !s.v2Automation() && s.sellerToolsEnabled(ctx) {
+				definitions = append(definitions, sellerDraftToolDefinitions()...)
+			}
 			return rpcResult(req.ID, map[string]any{"tools": definitions})
 		}
-		return rpcResult(req.ID, map[string]any{"tools": s.toolDefinitions()})
+		return rpcResult(req.ID, map[string]any{"tools": s.toolDefinitions(ctx)})
 	case "tools/call":
 		if isNotification {
 			return nil
@@ -225,6 +229,15 @@ func (s *Server) callToolInner(ctx context.Context, name string, args map[string
 			}
 			return successResult(map[string]any{"recorded": true, "sessionId": s.opts.AgentSessionID, "waitingFor": "plan_review", "plans": plans}), nil
 		}
+	}
+	if isSellerDraftTool(name) {
+		if s.interactiveSession() || s.v2Automation() || strings.TrimSpace(s.opts.ProviderAgentToken) == "" {
+			return errorResult("seller draft tools are unavailable in this bound or restricted MCP session", nil), nil
+		}
+		if !s.sellerToolsEnabled(ctx) {
+			return errorResult("seller draft tools are disabled until the owner completes seller automation setup", nil), nil
+		}
+		return s.callSellerDraftTool(ctx, name, args)
 	}
 	if s.v2Surface() && (!isMarketplaceTool(name) || s.v2Automation()) {
 		if !s.v2Automation() {
@@ -1421,6 +1434,10 @@ func (s *Server) proxy(ctx context.Context, method, path string, query url.Value
 }
 
 func (s *Server) daemonJSON(ctx context.Context, method, path string, query url.Values, body any) (any, error) {
+	return s.daemonJSONWithToken(ctx, method, path, query, body, s.opts.AgentToken)
+}
+
+func (s *Server) daemonJSONWithToken(ctx context.Context, method, path string, query url.Values, body any, token string) (any, error) {
 	baseURL, err := s.resolveDaemon(ctx)
 	if err != nil {
 		return nil, err
@@ -1447,8 +1464,8 @@ func (s *Server) daemonJSON(ctx context.Context, method, path string, query url.
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if strings.TrimSpace(s.opts.AgentToken) != "" {
-		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(s.opts.AgentToken))
+	if strings.TrimSpace(token) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
 	}
 	if s.interactiveSession() {
 		req.Header.Set("X-Exora-Agent-Session", strings.TrimSpace(s.opts.AgentSessionID))
@@ -2232,9 +2249,12 @@ func toolDefinitions() []toolDefinition {
 	}
 }
 
-func (s *Server) toolDefinitions() []toolDefinition {
+func (s *Server) toolDefinitions(ctx context.Context) []toolDefinition {
 	definitions := toolDefinitions()
 	if !s.interactiveSession() {
+		if s.sellerToolsEnabled(ctx) {
+			definitions = append(definitions, sellerDraftToolDefinitions()...)
+		}
 		return definitions
 	}
 	if s.connectionRole() == "buyer" {

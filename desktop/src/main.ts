@@ -99,6 +99,7 @@ import './styles/v3-api.css'
 import './styles/v3-environment.css'
 import './styles/v3-listings.css'
 import './styles/v3-history.css'
+import './styles/v3-activity-detail.css'
 import './styles/v3-buyer.css'
 import './styles/wallet.css'
 import './styles/auth.css'
@@ -167,7 +168,29 @@ type V3Listing = {
   version?: number
   updatedAt?: string
   applicationSource?: 'vm' | 'resources' | 'endpoint' | 'api_bridge' | string
+  creationActor?: 'agent' | 'human' | string
+  draftRunId?: string
+  sourceFingerprint?: string
+  mcpConnection?: string
+  sellerPolicyReceipt?: { policyId: string; version: number; hash: string; approvedAt?: string }
 }
+
+type SellerAutomationPolicy = {
+  policyId?: string
+  version?: number
+  enabled: boolean
+  enabledKinds: string[]
+  allowedRoots: Array<{ id: string; path: string; displayName?: string; kinds?: string[] }>
+  allowedServices: Array<{ id: string; displayName?: string; mode: 'endpoint' | 'api_bridge'; baseUrl: string; credentialRef?: string }>
+  defaults: Record<string, Record<string, unknown>>
+  attestations: { pricing: boolean; rights: boolean; runtime: boolean; apiUsage: boolean }
+  limits: { maxBatch: number; maxFiles: number; maxBundleBytes: number; maxConcurrentRuns: number }
+  autoInstallImages?: boolean
+  hash?: string
+}
+type SellerAutomationCredential = { credentialRef: string; label: string; authType: string; serviceIds?: string[]; apiKeyHeader?: string; updatedAt?: string }
+type SellerDraftRunSummary = { runId: string; kind: string; status: string; progress: number; currentStep?: string; error?: string; missingFields?: string[]; result?: { listingId?: string; readyToPublish?: boolean }; updatedAt?: string }
+type SellerAutomationStatus = { configured: boolean; policy?: SellerAutomationPolicy; credentials: SellerAutomationCredential[]; runs: SellerDraftRunSummary[] }
 
 type V3ReadinessCheck = { id: string; label: string; ready: boolean; detail?: string }
 type V3ListingApplication = {
@@ -259,9 +282,6 @@ type V3ActivityDetail = V3ActivitySession & {
   invocations?: V3ActivityInvocation[]
   events?: Array<{ eventId: string; approvalId?: string; type: string; status: string; title: string; detail: string; occurredAt: string }>
   identifiers?: Record<string, string>
-  delivery?: Record<string, any>
-  purchases?: Array<Record<string, any>>
-  transfers?: Array<Record<string, any>>
 }
 
 type V3ResourceSource = { name: string; sizeBytes: number }
@@ -290,6 +310,7 @@ type DesktopSystemStatus = {
   chromiumVersion?: string
   platform?: string
   arch?: string
+  capabilities?: { vmProvider?: boolean }
   packaged?: boolean
   secureStorageAvailable?: boolean
   notificationsSupported?: boolean
@@ -786,7 +807,13 @@ type WalletWithdrawalChallenge = {
 }
 
 const app = document.querySelector<HTMLDivElement>('#app')!
+let authPresentationActive = true
 const isMacPlatform = /Mac|iPhone|iPad|iPod/.test(navigator.platform)
+const vmProviderAvailable = !isMacPlatform
+const normalizeV3SellerTab = (tab: V3SellerTab): V3SellerTab => !vmProviderAvailable && tab === 'vm' ? 'listings' : tab
+const v3ProviderApplicationSources = (): V3ApplicationSource[] => vmProviderAvailable
+  ? ['vm', 'resources', 'endpoint', 'api_bridge']
+  : ['resources', 'endpoint', 'api_bridge']
 const agentComposerPlaceholder = () => t('agentComposer.placeholder')
 const agentComposerLockedPlaceholder = () => t('agentComposer.lockedPlaceholder')
 const WORK_TASK_STATE_KEY = 'exora.workTaskState.v1'
@@ -805,6 +832,7 @@ const SETTINGS_QR_WIDTH = 236
 const SETTINGS_QR_MARGIN = 1
 const SETTINGS_QR_COLOR = { dark: '#17182b', light: '#ffffff' } as const
 app.dataset.platform = isMacPlatform ? 'mac' : 'windows'
+app.dataset.vmProvider = String(vmProviderAvailable)
 
 const nativeTooltipAriaLabels = new WeakSet<Element>()
 const nativeTooltipAccessibleControlSelector = [
@@ -1611,7 +1639,7 @@ fields.sellerSurfaceTabs.addEventListener('click', (event) => {
   if (!button) return
   event.preventDefault()
   event.stopPropagation()
-  const nextTab = button.dataset.v3SellerTab as V3SellerTab
+  const nextTab = normalizeV3SellerTab(button.dataset.v3SellerTab as V3SellerTab)
   if (!nextTab) return
   state.selectedV3ActivitySessionId = undefined
   state.v3ActivityDetail = undefined
@@ -1811,6 +1839,7 @@ const state: {
   downloadDirectory: string
   notifications: NotificationPreferences
   settingsSystemStatus?: DesktopSystemStatus
+  sellerAutomation?: SellerAutomationStatus
   settingsStatusLoading: boolean
   settingsStatusError?: string
   orderPlans: OrderPlan[]
@@ -2089,6 +2118,7 @@ const state: {
     security: true, sellerOrders: true, sellerListings: true, runtime: true,
   },
   settingsSystemStatus: undefined,
+  sellerAutomation: undefined,
   settingsStatusLoading: false,
   settingsStatusError: undefined,
   orderPlans: [],
@@ -3607,7 +3637,7 @@ function profileInitial(name: string) {
 
 function applyUserPreferences() {
   setI18nLanguage(state.language)
-  document.documentElement.dataset.theme = effectiveTheme()
+  document.documentElement.dataset.theme = authPresentationActive ? 'light' : effectiveTheme()
   document.documentElement.dataset.themePreference = state.theme
   document.documentElement.dataset.language = state.language
   document.documentElement.lang = htmlLangForLanguage(state.language)
@@ -8212,9 +8242,6 @@ function mergeV3ActivityDetails(display: V3ActivityDisplayRecord, details: V3Act
     invocations,
     events,
     identifiers,
-    delivery: details.length === 1 ? first.delivery : undefined,
-    purchases: details.flatMap((item) => item.purchases || []),
-    transfers: details.flatMap((item) => item.transfers || []),
   }
 }
 
@@ -8303,13 +8330,15 @@ async function loadV3Listings() {
   state.v3SellerError = undefined
   renderDecisionPanel()
   try {
-    const [response, local] = await Promise.all([
+    const [response, local, draftRuns] = await Promise.all([
       invoke<{ listings?: V3Listing[]; applications?: V3ListingApplication[]; offline?: boolean }>('provider_listings'),
       invoke<{ endpoints?: V3LocalEndpoint[] }>('provider_endpoint_local_list').catch(() => ({ endpoints: [] })),
+      invoke<{ runs?: SellerDraftRunSummary[] }>('seller_automation_draft_runs', { input: { limit: 20 } }).catch(() => ({ runs: [] })),
     ])
     state.v3Listings = response.listings || []
     state.v3ListingApplications = response.applications || []
     state.v3LocalEndpoints = local.endpoints || []
+    state.sellerAutomation = { ...(state.sellerAutomation || { configured: false, credentials: [] }), runs: draftRuns.runs || [] }
     state.v3ListingsLoaded = true
     state.v3SellerError = undefined
   } catch (error) {
@@ -8359,20 +8388,41 @@ async function loadV3WindowsEnvironments() {
   renderDecisionPanel()
 }
 
+let v3ConsumerBalanceRequest: Promise<void> | undefined
+
+function updateV3ConsumerBalanceLabels() {
+  const balance = state.v3ConsumerBalance
+  const label = balance ? v3AtomicMoney(balance.availableAtomic, balance.asset || 'USDC') : 'Checking balance…'
+  fields.actionView.querySelectorAll<HTMLElement>('[data-v3-consumer-balance]').forEach((element) => { element.textContent = label })
+}
+
+function refreshV3ConsumerBalance() {
+  if (v3ConsumerBalanceRequest) return v3ConsumerBalanceRequest
+  v3ConsumerBalanceRequest = invoke<{ balance?: V3ConsumerBalance }>('consumer_account_balance')
+    .then((response) => {
+      state.v3ConsumerBalance = response.balance
+      updateV3ConsumerBalanceLabels()
+    })
+    .catch(() => undefined)
+    .finally(() => { v3ConsumerBalanceRequest = undefined })
+  return v3ConsumerBalanceRequest
+}
+
 function ensureV3SurfaceData() {
   void loadV3ActivitySessions(state.workOrderSide)
   if (!state.v3CatalogLoading && !state.v3CatalogLoaded && !state.v3CatalogError) void loadV3Catalog()
   if (!state.v3ListingsLoading && !state.v3ListingsLoaded && !state.v3SellerError) void loadV3Listings()
-  if (!state.v3ConsumerBalance) void invoke<{ balance?: V3ConsumerBalance }>('consumer_account_balance').then((response) => { state.v3ConsumerBalance = response.balance; if (state.v3SellerTab === 'listings') renderDecisionPanel() }).catch(() => undefined)
+  if (!state.v3ConsumerBalance) void refreshV3ConsumerBalance()
 }
 
 function v3ActivityUsageLabel(key: string) {
-  const labels: Record<string, string> = {
-    request: 'Requests', successful_request: 'Successful', input_bytes: 'Input', output_bytes: 'Output',
-    execution_second: 'Execution', input_tokens: 'Input tokens', output_tokens: 'Output tokens',
-    duration_minutes: 'Reserved time', transfer_bytes: 'Transferred', downloads: 'Downloads',
+  const labels: Record<string, [string, string]> = {
+    request: ['Requests', '请求'], successful_request: ['Successful', '成功'], input_bytes: ['Input', '输入'], output_bytes: ['Output', '输出'],
+    execution_second: ['Execution', '执行时长'], input_tokens: ['Input tokens', '输入 Token'], output_tokens: ['Output tokens', '输出 Token'],
+    duration_minutes: ['Reserved time', '预留时长'], transfer_bytes: ['Transferred', '传输量'], downloads: ['Downloads', '下载次数'],
   }
-  return labels[key] || key.replaceAll('_', ' ')
+  const label = labels[key]
+  return label ? v3HistoryCopy(label[0], label[1]) : key.replaceAll('_', ' ')
 }
 
 function v3ActivityUsageValue(key: string, value: number) {
@@ -8382,29 +8432,94 @@ function v3ActivityUsageValue(key: string, value: number) {
   return new Intl.NumberFormat().format(value)
 }
 
+function v3ActivityKindName(kind: string) {
+  if (kind === 'compute') return v3HistoryCopy('Compute', '计算')
+  if (kind === 'download') return v3HistoryCopy('Download', '资源下载')
+  if (kind === 'api_operation') return v3HistoryCopy('API operation', 'API 调用')
+  return kind.replaceAll('_', ' ')
+}
+
+function v3ActivitySource(detail: V3ActivityDetail): 'vm' | 'resources' | 'endpoint' | 'api_bridge' {
+  const product = detail.product || {}
+  const manifest = product.manifest || {}
+  const explicitSource = String(product.applicationSource || manifest.applicationSource || '')
+  if (explicitSource === 'vm' || explicitSource === 'resources' || explicitSource === 'endpoint' || explicitSource === 'api_bridge') return explicitSource
+  if (detail.productKind === 'compute') return 'vm'
+  if (detail.productKind === 'download') return 'resources'
+  return manifest.bridgeMode === 'dock_tunnel' ? 'endpoint' : 'api_bridge'
+}
+
+function v3ActivityRoleName(role: OrderSide) {
+  return role === 'seller' ? v3HistoryCopy('Seller', '卖家') : v3HistoryCopy('Buyer', '买家')
+}
+
+function v3ActivityItemLabel(detail: V3ActivitySession) {
+  if (detail.productKind === 'api_operation') return v3HistoryCopy(detail.itemCount === 1 ? 'call' : 'calls', '次调用')
+  return v3HistoryCopy(detail.itemCount === 1 ? 'event' : 'events', '条事件')
+}
+
+function v3ActivityAccessWindow(detail: V3ActivitySession) {
+  if (detail.status === 'active') return v3HistoryCopy('Open while the order is active', '订单进行期间可用')
+  const retainUntil = v3ActivityRetainUntil(detail)
+  if (!retainUntil) return v3HistoryCopy('Closed', '已关闭')
+  return sortTime(retainUntil) > Date.now()
+    ? v3HistoryCopy(`Available until ${compactTimestamp(retainUntil)}`, `可用至 ${compactTimestamp(retainUntil)}`)
+    : v3HistoryCopy(`Ended ${compactTimestamp(retainUntil)}`, `已于 ${compactTimestamp(retainUntil)} 结束`)
+}
+
+function v3ActivityIdentifier(detail: V3ActivityDetail, key: string) {
+  return String(detail.identifiers?.[key] || '')
+}
+
+function renderV3ActivityContextFacts(facts: Array<{ label: string; value: string; mono?: boolean }>) {
+  return `<dl class="v3-activity-context-facts">${facts.filter((fact) => fact.value).map((fact) => `<div><dt>${escapeHTML(fact.label)}</dt><dd class="${fact.mono ? 'mono' : ''}">${escapeHTML(fact.value)}</dd></div>`).join('')}</dl>`
+}
+
 function renderV3ActivityDelivery(detail: V3ActivityDetail) {
   const operations = detail.operations || []
   if (detail.productKind === 'api_operation') {
+    const requestCount = Number(detail.usage?.request || detail.itemCount || 0)
+    const successfulCount = Number(detail.usage?.successful_request || 0)
     return `
-      <section class="v3-activity-panel v3-activity-delivery">
-        <header><span>DELIVERY & USAGE</span><h3>API session</h3></header>
-        <p>${escapeHTML(detail.outcome || 'Invocation activity recorded by Exora Gateway.')}</p>
-        <div class="v3-activity-operation-list">${operations.length ? operations.map((item) => `<span>${escapeHTML(item)}</span>`).join('') : '<span>No operation metadata</span>'}</div>
+      <section class="v3-activity-panel v3-activity-delivery kind-api_operation">
+        <header><span>${escapeHTML(v3HistoryCopy('ORDER CONTEXT', '订单上下文'))}</span><h3>${escapeHTML(v3HistoryCopy('API session', 'API 会话'))}</h3></header>
+        ${renderV3ActivityContextFacts([
+          { label: v3HistoryCopy('Requests', '请求'), value: new Intl.NumberFormat().format(requestCount) },
+          { label: v3HistoryCopy('Successful', '成功'), value: new Intl.NumberFormat().format(successfulCount) },
+          { label: v3HistoryCopy('In flight', '进行中'), value: new Intl.NumberFormat().format(Number(detail.inFlightCount || 0)) },
+          { label: v3HistoryCopy('Order access', '订单访问'), value: v3ActivityAccessWindow(detail) },
+        ])}
+        <div class="v3-activity-subsection-title"><span>${escapeHTML(v3HistoryCopy('Operations used', '已调用操作'))}</span><em>${operations.length}</em></div>
+        <div class="v3-activity-operation-list">${operations.length ? operations.map((item) => `<span>${escapeHTML(item)}</span>`).join('') : `<span>${escapeHTML(v3HistoryCopy('No operation metadata', '暂无操作元数据'))}</span>`}</div>
       </section>
     `
   }
   if (detail.productKind === 'compute') {
+    const leaseId = v3ActivityIdentifier(detail, 'leaseId')
     return `
-      <section class="v3-activity-panel v3-activity-delivery">
-        <header><span>DELIVERY & USAGE</span><h3>Exclusive compute lease</h3></header>
-        <p>Reserved minutes, Guest access, artifacts and Reset receipt stay attached to this Lease session.</p>
+      <section class="v3-activity-panel v3-activity-delivery kind-compute">
+        <header><span>${escapeHTML(v3HistoryCopy('ORDER CONTEXT', '订单上下文'))}</span><h3>${escapeHTML(v3HistoryCopy('Exclusive compute lease', '独占计算租约'))}</h3></header>
+        ${renderV3ActivityContextFacts([
+          { label: v3HistoryCopy('Lease state', '租约状态'), value: v3ActivityStatusLabel(detail.status) },
+          { label: v3HistoryCopy('Reserved', '预留时长'), value: detail.usage?.duration_minutes ? v3ActivityUsageValue('duration_minutes', Number(detail.usage.duration_minutes)) : '—' },
+          { label: v3HistoryCopy('Started', '开始时间'), value: compactTimestamp(detail.startedAt) },
+          { label: detail.endedAt ? v3HistoryCopy('Ended', '结束时间') : v3HistoryCopy('Last heartbeat', '最近心跳'), value: compactTimestamp(detail.endedAt || detail.updatedAt) },
+        ])}
+        ${leaseId ? `<p class="v3-activity-context-note"><span>${escapeHTML(v3HistoryCopy('Lease reference', '租约标识'))}</span><code>${escapeHTML(leaseId)}</code></p>` : ''}
       </section>
     `
   }
+  const grantId = v3ActivityIdentifier(detail, 'grantId')
   return `
-    <section class="v3-activity-panel v3-activity-delivery">
-      <header><span>DELIVERY & USAGE</span><h3>Download grant</h3></header>
-      <p>Grant validity, transfer attempts and SHA-256 verification stay attached to this resource session.</p>
+    <section class="v3-activity-panel v3-activity-delivery kind-download">
+      <header><span>${escapeHTML(v3HistoryCopy('ORDER CONTEXT', '订单上下文'))}</span><h3>${escapeHTML(v3HistoryCopy('Download grant', '下载授权'))}</h3></header>
+      ${renderV3ActivityContextFacts([
+        { label: v3HistoryCopy('Grant state', '授权状态'), value: v3ActivityStatusLabel(detail.status) },
+        { label: v3HistoryCopy('Downloads', '下载次数'), value: new Intl.NumberFormat().format(Number(detail.usage?.downloads || 0)) },
+        { label: v3HistoryCopy('Transferred', '传输量'), value: v3ActivityUsageValue('transfer_bytes', Number(detail.usage?.transfer_bytes || 0)) },
+        { label: v3HistoryCopy('Retry window', '重试窗口'), value: v3ActivityAccessWindow(detail) },
+      ])}
+      ${grantId ? `<p class="v3-activity-context-note"><span>${escapeHTML(v3HistoryCopy('Grant reference', '授权标识'))}</span><code>${escapeHTML(grantId)}</code></p>` : ''}
     </section>
   `
 }
@@ -8415,22 +8530,38 @@ function v3OrderAccessActions(detail: V3ActivityDetail) {
   return ['create_download_transfer', 'get_balance']
 }
 
+function v3OrderAccessActionLabel(action: string) {
+  const labels: Record<string, [string, string]> = {
+    invoke_operation: ['Invoke operation', '调用操作'],
+    get_balance: ['Read balance', '读取余额'],
+    extend_compute_minutes: ['Extend minutes', '延长时长'],
+    get_lease: ['Read lease', '读取租约'],
+    release_lease: ['Release lease', '释放租约'],
+    create_download_transfer: ['Retry download', '重试下载'],
+  }
+  const label = labels[action]
+  return label ? v3HistoryCopy(label[0], label[1]) : action.replaceAll('_', ' ')
+}
+
 function renderV3OrderAccessKey(detail: V3ActivityDetail) {
   if (detail.role !== 'buyer' || !detail.activitySessionId) return ''
   const key = state.v3OrderAccessKeySessionId === detail.activitySessionId ? state.v3OrderAccessKey : undefined
   const expired = Boolean(key?.expiresAt && new Date(key.expiresAt).getTime() <= Date.now())
   const active = key?.status === 'active' && !expired
+  const retainUntil = v3ActivityRetainUntil(detail)
+  const orderAccessOpen = detail.status === 'active' || Boolean(retainUntil && sortTime(retainUntil) > Date.now())
+  if (!orderAccessOpen && !active) return ''
   const busy = state.v3OrderAccessKeyBusy
-  const actionSummary = (key?.allowedActions || v3OrderAccessActions(detail)).map((action) => action.replaceAll('_', ' ')).join(' · ')
+  const actionSummary = (key?.allowedActions || v3OrderAccessActions(detail)).map(v3OrderAccessActionLabel).join(' · ')
   return `<section class="v3-activity-panel v3-order-access-key ${active ? 'is-active' : ''}">
-    <header><span>ORDER ACCESS</span><h3>Agent access key</h3></header>
-    ${busy && !key ? '<div class="v3-order-key-loading"><span class="v3-history-spinner"></span>Checking order access…</div>' : active ? `
-      <div class="v3-order-key-status"><span>${icon(KeyRound)}</span><div><strong>${escapeHTML(key?.maskedKey || 'exa_…')}</strong><small>Scoped to this order and listing only</small></div><em>Active</em></div>
-      <dl><div><dt>Allowed</dt><dd>${escapeHTML(actionSummary)}</dd></div><div><dt>Expires</dt><dd>${key?.expiresAt ? escapeHTML(new Date(key.expiresAt).toLocaleString()) : '24 hours after issue'}</dd></div><div><dt>Last used</dt><dd>${key?.lastUsedAt ? escapeHTML(new Date(key.lastUsedAt).toLocaleString()) : 'Never'}</dd></div></dl>
-      <p>The raw key is shown once by copying it directly to the system clipboard. It is never exposed to the page and the clipboard is cleared after 60 seconds.</p>
-      <div class="v3-order-key-actions"><button type="button" data-v3-order-key-action="rotate" ${busy ? 'disabled' : ''}>Rotate & copy</button><button class="ghost danger" type="button" data-v3-order-key-action="revoke" ${busy ? 'disabled' : ''}>Revoke</button></div>` : `
-      <div class="v3-order-key-empty"><span>${icon(KeyRound)}</span><div><strong>${key ? 'No active key' : 'Create an order-scoped key'}</strong><p>Give an Agent limited access to continue this specific order without revealing an account-wide credential.</p></div></div>
-      <button type="button" data-v3-order-key-action="create" ${busy ? 'disabled' : ''}>${busy ? 'Creating…' : 'Create & copy key'}</button>`}
+    <header><span>${escapeHTML(v3HistoryCopy('ORDER ACCESS', '订单访问'))}</span><h3>${escapeHTML(v3HistoryCopy('Agent access key', 'Agent 访问密钥'))}</h3></header>
+    ${busy && !key ? `<div class="v3-order-key-loading"><span class="v3-history-spinner"></span>${escapeHTML(v3HistoryCopy('Checking order access…', '正在检查订单访问权限…'))}</div>` : active ? `
+      <div class="v3-order-key-status"><span>${icon(KeyRound)}</span><div><strong>${escapeHTML(key?.maskedKey || 'exa_…')}</strong><small>${escapeHTML(v3HistoryCopy('Scoped to this order and listing only', '仅限当前订单与商品'))}</small></div><em>${escapeHTML(v3HistoryCopy('Active', '有效'))}</em></div>
+      <dl><div><dt>${escapeHTML(v3HistoryCopy('Allowed', '允许操作'))}</dt><dd>${escapeHTML(actionSummary)}</dd></div><div><dt>${escapeHTML(v3HistoryCopy('Expires', '有效期至'))}</dt><dd>${key?.expiresAt ? escapeHTML(new Date(key.expiresAt).toLocaleString()) : escapeHTML(v3HistoryCopy('24 hours after issue', '签发后 24 小时'))}</dd></div><div><dt>${escapeHTML(v3HistoryCopy('Last used', '最近使用'))}</dt><dd>${key?.lastUsedAt ? escapeHTML(new Date(key.lastUsedAt).toLocaleString()) : escapeHTML(v3HistoryCopy('Never', '从未使用'))}</dd></div></dl>
+      <p>${escapeHTML(v3HistoryCopy('The raw key is copied directly to the system clipboard, shown only once, and cleared after 60 seconds.', '原始密钥仅会直接复制到系统剪贴板一次，并在 60 秒后清除。'))}</p>
+      <div class="v3-order-key-actions"><button type="button" data-v3-order-key-action="rotate" ${busy || !orderAccessOpen ? 'disabled' : ''}>${escapeHTML(v3HistoryCopy('Rotate & copy', '轮换并复制'))}</button><button class="ghost danger" type="button" data-v3-order-key-action="revoke" ${busy ? 'disabled' : ''}>${escapeHTML(v3HistoryCopy('Revoke', '撤销'))}</button></div>` : `
+      <div class="v3-order-key-empty"><span>${icon(KeyRound)}</span><div><strong>${escapeHTML(v3HistoryCopy(key ? 'No active key' : 'Create an order-scoped key', key ? '当前没有有效密钥' : '创建订单专用密钥'))}</strong><p>${escapeHTML(v3HistoryCopy('Give an Agent limited access to continue this order without exposing an account-wide credential.', '授予 Agent 继续此订单所需的有限权限，无需暴露账户级凭据。'))}</p></div></div>
+      <button type="button" data-v3-order-key-action="create" ${busy ? 'disabled' : ''}>${escapeHTML(busy ? v3HistoryCopy('Creating…', '正在创建…') : v3HistoryCopy('Create & copy key', '创建并复制密钥'))}</button>`}
   </section>`
 }
 
@@ -8439,7 +8570,7 @@ function renderV3ActivityEvents(events: NonNullable<V3ActivityDetail['events']>)
   return events.map((event) => {
     const awaitingDecision = event.type === 'approval_required' && Boolean(event.approvalId) && !decidedApprovals.has(event.approvalId)
     const busy = state.v3ApprovalBusyId === event.approvalId
-    return `<article class="${awaitingDecision ? 'requires-approval' : ''}"><span class="v3-activity-event-dot ${escapeAttr(event.status)}"></span><div><strong>${escapeHTML(event.title)}</strong><small>${escapeHTML(event.detail)}</small>${awaitingDecision ? `<form class="v3-approval-decision" data-v3-approval-form="${escapeAttr(event.approvalId || '')}"><label><span>Payment PIN</span><input name="pin" type="password" inputmode="numeric" autocomplete="off" maxlength="6" pattern="[0-9]{6}" placeholder="Six digits" required /></label><div><button type="submit" name="decision" value="approve" ${busy ? 'disabled' : ''}>${busy ? 'Working…' : 'Approve'}</button><button class="ghost danger" type="submit" name="decision" value="reject" ${busy ? 'disabled' : ''}>Reject</button></div></form>` : ''}</div><time>${escapeHTML(compactTimestamp(event.occurredAt))}</time></article>`
+    return `<article class="${awaitingDecision ? 'requires-approval' : ''}"><span class="v3-activity-event-dot ${escapeAttr(event.status)}"></span><div><strong>${escapeHTML(event.title)}</strong><small>${escapeHTML(event.detail)}</small>${awaitingDecision ? `<form class="v3-approval-decision" data-v3-approval-form="${escapeAttr(event.approvalId || '')}"><label><span>${escapeHTML(v3HistoryCopy('Payment PIN', '支付 PIN'))}</span><input name="pin" type="password" inputmode="numeric" autocomplete="off" maxlength="6" pattern="[0-9]{6}" placeholder="${escapeAttr(v3HistoryCopy('Six digits', '六位数字'))}" required /></label><div><button type="submit" name="decision" value="approve" ${busy ? 'disabled' : ''}>${escapeHTML(busy ? v3HistoryCopy('Working…', '处理中…') : v3HistoryCopy('Approve', '批准'))}</button><button class="ghost danger" type="submit" name="decision" value="reject" ${busy ? 'disabled' : ''}>${escapeHTML(v3HistoryCopy('Reject', '拒绝'))}</button></div></form>` : ''}</div><time>${escapeHTML(compactTimestamp(event.occurredAt))}</time></article>`
   }).join('')
 }
 
@@ -8486,80 +8617,125 @@ async function decideV3Approval(approvalId: string, decision: 'approve' | 'rejec
 
 function renderV3ActivityDetail() {
   if (state.v3ActivityDetailError) {
-    return `<section class="v3-activity-loading error"><span>History detail unavailable</span><p>${escapeHTML(state.v3ActivityDetailError)}</p><div><button class="ghost" type="button" data-v3-action="activity-back">Back</button><button type="button" data-v3-action="activity-refresh">Try again</button></div></section>`
+    return `<section class="v3-activity-loading error"><span>${escapeHTML(v3HistoryCopy('Order detail unavailable', '订单详情不可用'))}</span><p>${escapeHTML(state.v3ActivityDetailError)}</p><div><button class="ghost" type="button" data-v3-action="activity-back">${escapeHTML(v3HistoryCopy('Back', '返回'))}</button><button type="button" data-v3-action="activity-refresh">${escapeHTML(v3HistoryCopy('Try again', '重试'))}</button></div></section>`
   }
   const detail = state.v3ActivityDetail
   if (!detail || state.v3ActivityDetailLoading) {
-    return `<section class="v3-activity-loading"><span class="v3-history-spinner"></span><strong>Loading order detail</strong><p>Reading the authoritative V3 session, usage and ledger projection.</p></section>`
+    return `<section class="v3-activity-loading"><span class="v3-history-spinner"></span><strong>${escapeHTML(v3HistoryCopy('Loading order detail', '正在加载订单详情'))}</strong><p>${escapeHTML(v3HistoryCopy('Reading the authoritative session, usage and ledger projection.', '正在读取权威会话、用量与账本数据。'))}</p></section>`
   }
-  const usage = Object.entries(detail.usage || {}).filter(([, value]) => Number(value) !== 0)
+  const activitySource = v3ActivitySource(detail)
+  const usageOrder = detail.productKind === 'compute'
+    ? ['duration_minutes', 'input_bytes', 'output_bytes']
+    : detail.productKind === 'download'
+      ? ['downloads', 'transfer_bytes']
+      : ['request', 'successful_request', 'input_tokens', 'output_tokens', 'input_bytes', 'output_bytes', 'execution_second']
+  const usage = Object.entries(detail.usage || {})
+    .filter(([key, value]) => Number.isFinite(Number(value)) && (Number(value) !== 0 || (key === 'successful_request' && Number(detail.usage?.request || 0) > 0)))
+    .sort(([left], [right]) => {
+      const leftIndex = usageOrder.indexOf(left)
+      const rightIndex = usageOrder.indexOf(right)
+      return (leftIndex < 0 ? usageOrder.length : leftIndex) - (rightIndex < 0 ? usageOrder.length : rightIndex) || left.localeCompare(right)
+    })
   const invocations = detail.invocations || []
   const events = detail.events || []
   const supplementalEvents = invocations.length ? events.filter((event) => event.type !== 'api_invocation') : events
-  const identifiers = Object.entries(detail.identifiers || {}).filter(([, value]) => Boolean(value))
-  const roleAmountLabel = detail.role === 'seller' ? 'Net revenue' : 'Paid'
+  const identifierOrder = ['sessionId', 'activitySessionId', 'activityBatchId', 'leaseId', 'grantId', 'productId', 'listingId', 'counterpartyId', 'sessionCount']
+  const identifiers = Object.entries(detail.identifiers || {}).filter(([, value]) => Boolean(value)).sort(([left], [right]) => {
+    const leftIndex = identifierOrder.indexOf(left)
+    const rightIndex = identifierOrder.indexOf(right)
+    return (leftIndex < 0 ? identifierOrder.length : leftIndex) - (rightIndex < 0 ? identifierOrder.length : rightIndex) || left.localeCompare(right)
+  })
+  const roleAmountLabel = detail.role === 'seller' ? v3HistoryCopy('Net revenue', '净收入') : v3HistoryCopy('Paid', '已支付')
   const productDescription = String(detail.product?.description || '')
   const updated = detail.updatedAt ? compactTimestamp(detail.updatedAt) : '—'
+  const started = detail.startedAt ? compactTimestamp(detail.startedAt) : '—'
+  const counterpartyRole = detail.role === 'seller' ? v3HistoryCopy('Buyer', '买家') : v3HistoryCopy('Provider', '服务方')
+  const activityLabel = `${detail.itemCount} ${v3ActivityItemLabel(detail)}`
+  const productSnapshotTitle = detail.role === 'seller' ? v3HistoryCopy('Sold resource', '售出资源') : v3HistoryCopy('Purchased resource', '已购资源')
+  const buyerLedger = detail.role === 'buyer'
+  const ledgerRows = buyerLedger
+    ? [
+        [v3HistoryCopy('Order total', '订单总额'), v3AtomicMoney(detail.grossAmountAtomic, detail.asset), ''],
+        [v3HistoryCopy('Platform fee (included)', '平台费（已包含）'), v3AtomicMoney(detail.platformFeeAtomic, detail.asset), ''],
+        [roleAmountLabel, v3AtomicMoney(detail.amountAtomic, detail.asset), 'total'],
+      ]
+    : [
+        [v3HistoryCopy('Buyer paid', '买家支付'), v3AtomicMoney(detail.grossAmountAtomic, detail.asset), ''],
+        [v3HistoryCopy('Platform fee', '平台费'), `− ${v3AtomicMoney(detail.platformFeeAtomic, detail.asset)}`, ''],
+        [roleAmountLabel, v3AtomicMoney(detail.amountAtomic, detail.asset), 'total'],
+      ]
+  const identifierLabels: Record<string, [string, string]> = {
+    sessionId: ['Session', '会话'],
+    activitySessionId: ['Agent task', 'Agent 任务'],
+    activityBatchId: ['Activity batch', '活动批次'],
+    leaseId: ['Lease', '租约'],
+    grantId: ['Download grant', '下载授权'],
+    productId: ['Product', '商品'],
+    listingId: ['Listing', '上架记录'],
+    counterpartyId: ['Counterparty', '交易方'],
+    sessionCount: ['Sessions', '会话数量'],
+  }
   return `
-    <section class="v3-activity-detail" data-v3-activity-detail>
+    <section class="v3-activity-detail" data-v3-activity-detail data-kind="${escapeAttr(detail.productKind)}" data-source="${escapeAttr(activitySource)}" data-status="${escapeAttr(detail.status)}" data-role="${escapeAttr(detail.role)}">
       <nav class="v3-activity-nav">
-        <button class="ghost" type="button" data-v3-action="activity-back">${toolbarIcons.back}<span>Back to ${detail.role === 'seller' ? 'seller' : 'buyer'} workspace</span></button>
-        <button class="ghost" type="button" data-v3-action="activity-refresh">${toolbarIcons.refresh}<span>Refresh</span></button>
+        <button type="button" data-v3-action="activity-back">${toolbarIcons.back}<span>${escapeHTML(v3HistoryCopy(`Back to ${detail.role === 'seller' ? 'seller' : 'buyer'} workspace`, `返回${detail.role === 'seller' ? '卖家' : '买家'}工作区`))}</span></button>
+        <button type="button" data-v3-action="activity-refresh">${toolbarIcons.refresh}<span>${escapeHTML(v3HistoryCopy('Refresh', '刷新'))}</span></button>
       </nav>
       <header class="v3-activity-hero">
         <div class="v3-activity-hero-mark kind-${escapeAttr(detail.productKind)}">${v3ActivityKindLabel(detail.productKind)}</div>
-        <div>
-          <span>${escapeHTML(detail.productKind.replaceAll('_', ' '))} · ${escapeHTML(detail.role)}</span>
+        <div class="v3-activity-hero-copy">
+          <span>${escapeHTML(v3ActivityKindName(detail.productKind))} · ${escapeHTML(v3ActivityRoleName(detail.role))}</span>
           <h2>${escapeHTML(detail.productTitle || 'Resource session')}</h2>
-          <p>${escapeHTML(detail.outcome || 'Authoritative V3 activity session.')} · ${escapeHTML(detail.counterpartyLabel || 'Counterparty')}</p>
+          <p>${escapeHTML(detail.outcome || v3HistoryCopy('Authoritative activity session.', '权威交易活动会话。'))}</p>
+          <div class="v3-activity-hero-meta"><span><b>${escapeHTML(counterpartyRole)}</b>${escapeHTML(detail.counterpartyLabel || v3HistoryCopy('Counterparty', '交易方'))}</span><span><b>${escapeHTML(v3HistoryCopy('Started', '开始'))}</b>${escapeHTML(started)}</span></div>
         </div>
         <em class="v3-activity-state ${escapeAttr(detail.status)}"><i></i>${escapeHTML(v3ActivityStatusLabel(detail.status))}</em>
       </header>
-      ${detail.attentionRequired ? `<div class="v3-activity-attention"><strong>Review required</strong><span>One or more operations failed or could not be metered. No history was rewritten; the original evidence remains below.</span></div>` : ''}
+      ${detail.attentionRequired ? `<div class="v3-activity-attention">${icon(ShieldAlert)}<div><strong>${escapeHTML(v3HistoryCopy('Review required', '需要检查'))}</strong><span>${escapeHTML(v3HistoryCopy('One or more operations failed or could not be metered. The original evidence remains unchanged below.', '一个或多个操作失败或无法计量；原始证据保持不变并列于下方。'))}</span></div></div>` : ''}
       <section class="v3-activity-summary">
-        <div class="v3-activity-total"><span>${roleAmountLabel}</span><strong>${escapeHTML(v3AtomicMoney(detail.amountAtomic, detail.asset))}</strong><small>${detail.role === 'seller' ? 'After platform fee' : 'Across this resource session'}</small></div>
+        <div class="v3-activity-total"><span>${roleAmountLabel}</span><strong>${escapeHTML(v3AtomicMoney(detail.amountAtomic, detail.asset))}</strong><small>${escapeHTML(detail.role === 'seller' ? v3HistoryCopy('After platform fee', '扣除平台费后') : v3HistoryCopy('Across this resource session', '此资源会话累计'))}</small></div>
         <dl>
-          <div><dt>Status</dt><dd>${escapeHTML(v3ActivityStatusLabel(detail.status))}</dd></div>
-          <div><dt>Activity</dt><dd>${detail.itemCount} ${detail.productKind === 'api_operation' ? 'calls' : 'records'}</dd></div>
-          <div><dt>Counterparty</dt><dd>${escapeHTML(detail.counterpartyLabel || '—')}</dd></div>
-          <div><dt>Last update</dt><dd>${escapeHTML(updated)}</dd></div>
+          <div><dt>${escapeHTML(v3HistoryCopy('Status', '状态'))}</dt><dd><span class="v3-summary-status ${escapeAttr(detail.status)}"><i></i>${escapeHTML(v3ActivityStatusLabel(detail.status))}</span></dd></div>
+          <div><dt>${escapeHTML(v3HistoryCopy('Activity', '活动'))}</dt><dd>${escapeHTML(activityLabel)}</dd></div>
+          <div><dt>${escapeHTML(counterpartyRole)}</dt><dd title="${escapeAttr(detail.counterpartyLabel || '')}">${escapeHTML(detail.counterpartyLabel || '—')}</dd></div>
+          <div><dt>${escapeHTML(v3HistoryCopy('Last update', '最近更新'))}</dt><dd>${escapeHTML(updated)}</dd></div>
         </dl>
       </section>
       <div class="v3-activity-grid">
         <div class="v3-activity-main-column">
           ${renderV3ActivityDelivery(detail)}
           <section class="v3-activity-panel">
-            <header><span>MEASURED FACTS</span><h3>Usage</h3></header>
-            ${usage.length ? `<div class="v3-activity-usage">${usage.map(([key, value]) => `<div><span>${escapeHTML(v3ActivityUsageLabel(key))}</span><strong>${escapeHTML(v3ActivityUsageValue(key, Number(value)))}</strong></div>`).join('')}</div>` : '<p class="v3-activity-empty">No metered usage has been attached to this session.</p>'}
+            <header><span>${escapeHTML(v3HistoryCopy('MEASURED FACTS', '计量数据'))}</span><h3>${escapeHTML(v3HistoryCopy('Usage', '用量'))}</h3></header>
+            ${usage.length ? `<div class="v3-activity-usage">${usage.map(([key, value]) => `<div><span>${escapeHTML(v3ActivityUsageLabel(key))}</span><strong>${escapeHTML(v3ActivityUsageValue(key, Number(value)))}</strong></div>`).join('')}</div>` : `<p class="v3-activity-empty">${escapeHTML(v3HistoryCopy('No metered usage has been attached to this session.', '此会话尚未附加计量用量。'))}</p>`}
           </section>
           <section class="v3-activity-panel">
-            <header><span>SESSION ACTIVITY</span><h3>${detail.productKind === 'api_operation' ? 'Invocations' : 'Events'}</h3></header>
-            ${invocations.length ? `<div class="v3-activity-invocations">${invocations.map((item) => `<article><span class="v3-activity-event-dot ${escapeAttr(item.status)}"></span><div><strong>${escapeHTML(item.operationId || 'API invocation')}</strong><small>${escapeHTML(compactTimestamp(item.completedAt || item.startedAt))} · ${escapeHTML(item.invocationId)}</small></div><em>${escapeHTML(v3AtomicMoney(item.chargedAtomic, detail.asset))}</em><b>${escapeHTML(item.status.replaceAll('_', ' '))}</b></article>`).join('')}</div>` : ''}
+            <header class="v3-activity-section-heading"><div><span>${escapeHTML(v3HistoryCopy('SESSION ACTIVITY', '会话活动'))}</span><h3>${escapeHTML(detail.productKind === 'api_operation' ? v3HistoryCopy('Invocations', '调用记录') : v3HistoryCopy('Timeline', '事件时间线'))}</h3></div><em>${detail.productKind === 'api_operation' ? invocations.length : supplementalEvents.length}</em></header>
+            ${invocations.length ? `<div class="v3-activity-invocations">${invocations.map((item) => `<article><span class="v3-activity-event-dot ${escapeAttr(item.status)}"></span><div><strong>${escapeHTML(item.operationId || v3HistoryCopy('API invocation', 'API 调用'))}</strong><small>${escapeHTML(compactTimestamp(item.completedAt || item.startedAt))} · ${escapeHTML(item.invocationId)}</small></div><em>${escapeHTML(v3AtomicMoney(item.chargedAtomic, detail.asset))}</em><b class="status-${escapeAttr(item.status)}">${escapeHTML(v3ActivityStatusLabel(item.status))}</b></article>`).join('')}</div>` : ''}
             ${supplementalEvents.length ? `<div class="v3-activity-events">${renderV3ActivityEvents(supplementalEvents)}</div>` : ''}
-            ${!invocations.length && !supplementalEvents.length ? '<p class="v3-activity-empty">No activity events have been recorded yet.</p>' : ''}
+            ${!invocations.length && !supplementalEvents.length ? `<p class="v3-activity-empty">${escapeHTML(v3HistoryCopy('No activity events have been recorded yet.', '尚未记录活动事件。'))}</p>` : ''}
           </section>
         </div>
         <aside class="v3-activity-side-column">
           ${renderV3OrderAccessKey(detail)}
           <section class="v3-activity-panel v3-activity-money">
-            <header><span>MONEY</span><h3>Ledger summary</h3></header>
-            <dl>
-              <div><dt>Gross charge</dt><dd>${escapeHTML(v3AtomicMoney(detail.grossAmountAtomic, detail.asset))}</dd></div>
-              <div><dt>Platform fee</dt><dd>${escapeHTML(v3AtomicMoney(detail.platformFeeAtomic, detail.asset))}</dd></div>
-              <div class="total"><dt>${roleAmountLabel}</dt><dd>${escapeHTML(v3AtomicMoney(detail.amountAtomic, detail.asset))}</dd></div>
-            </dl>
-            <p>Refunds and corrections appear as new reversing entries; prior history is never edited.</p>
+            <header><span>${escapeHTML(v3HistoryCopy('MONEY', '资金'))}</span><h3>${escapeHTML(v3HistoryCopy('Ledger summary', '账本摘要'))}</h3></header>
+            <dl>${ledgerRows.map(([label, value, className]) => `<div class="${className}"><dt>${escapeHTML(label)}</dt><dd>${escapeHTML(value)}</dd></div>`).join('')}</dl>
+            <p>${escapeHTML(v3HistoryCopy('Refunds and corrections appear as new reversing entries; prior history is never edited.', '退款和更正会作为新的冲正分录出现，既有历史不会被改写。'))}</p>
           </section>
           <section class="v3-activity-panel v3-activity-product">
-            <header><span>PRODUCT SNAPSHOT</span><h3>Purchased resource</h3></header>
+            <header><span>${escapeHTML(v3HistoryCopy('PRODUCT SNAPSHOT', '商品快照'))}</span><h3>${escapeHTML(productSnapshotTitle)}</h3></header>
             <strong>${escapeHTML(detail.productTitle)}</strong>
             ${productDescription ? `<p>${escapeHTML(productDescription)}</p>` : ''}
-            <div><span>Version</span><b>${escapeHTML(String(detail.product?.version || '—'))}</b></div>
+            <div><span>${escapeHTML(v3HistoryCopy('Type', '类型'))}</span><b>${escapeHTML(v3ActivityKindName(detail.productKind))}</b></div>
+            <div><span>${escapeHTML(v3HistoryCopy('Version', '版本'))}</span><b>${escapeHTML(String(detail.product?.version ?? '—'))}</b></div>
           </section>
-          <section class="v3-activity-panel v3-activity-identifiers">
-            <header><span>AUDIT REFERENCES</span><h3>Identifiers</h3></header>
-            ${identifiers.map(([label, value]) => `<button type="button" data-copy-v3-identifier="${escapeAttr(value)}"><span>${escapeHTML(label.replace(/([A-Z])/g, ' $1'))}</span><code>${escapeHTML(value)}</code>${toolbarIcons.copy}</button>`).join('')}
-          </section>
+          ${identifiers.length ? `<section class="v3-activity-panel v3-activity-identifiers">
+            <header><span>${escapeHTML(v3HistoryCopy('AUDIT REFERENCES', '审计引用'))}</span><h3>${escapeHTML(v3HistoryCopy('Identifiers', '标识符'))}</h3></header>
+            ${identifiers.map(([label, value]) => {
+              const displayLabel = identifierLabels[label]
+              return `<button type="button" data-copy-v3-identifier="${escapeAttr(value)}"><span>${escapeHTML(displayLabel ? v3HistoryCopy(displayLabel[0], displayLabel[1]) : label.replace(/([A-Z])/g, ' $1'))}</span><code>${escapeHTML(value)}</code>${toolbarIcons.copy}</button>`
+            }).join('')}
+          </section>` : ''}
         </aside>
       </div>
     </section>
@@ -8597,14 +8773,16 @@ function renderV3BuyerSurface() {
 }
 
 function renderV3SellerTabs() {
+  state.v3SellerTab = normalizeV3SellerTab(state.v3SellerTab)
   const applicationCount = state.v3ListingApplications.filter(({ listing }) => ['draft', 'unhealthy', 'provider_busy', 'capacity_insufficient'].includes(listing.status)).length
-  const tabs: Array<[V3SellerTab, string, IconNode]> = [
+  const allTabs: Array<[V3SellerTab, string, IconNode]> = [
     ['listings', 'Listings', SquareKanban],
     ['vm', 'VM', Activity],
     ['resources', 'Resources', Folder],
     ['endpoint', 'Endpoint', BrainCircuit],
     ['api_bridge', 'API Bridge', Network],
   ]
+  const tabs = allTabs.filter(([id]) => vmProviderAvailable || id !== 'vm')
   const activeIndex = Math.max(0, tabs.findIndex(([id]) => state.v3SellerTab === id))
   return `<nav class="v3-seller-tabs" role="tablist" aria-label="Main workspace" style="--v3-seller-active-offset: ${activeIndex * 124}px">
     <span class="v3-seller-active-bar" aria-hidden="true"></span>
@@ -8613,6 +8791,7 @@ function renderV3SellerTabs() {
 }
 
 function syncV3SellerTabs() {
+  state.v3SellerTab = normalizeV3SellerTab(state.v3SellerTab)
   if (!fields.sellerSurfaceTabs.querySelector('.v3-seller-tabs')) {
     fields.sellerSurfaceTabs.innerHTML = renderV3SellerTabs()
   }
@@ -9421,7 +9600,7 @@ function v3ListingStatusMeta(status: string) {
 }
 
 function renderV3ListingEmptyState() {
-  const sources = ['vm', 'resources', 'endpoint', 'api_bridge']
+  const sources = v3ProviderApplicationSources()
   return `<section class="v3-listing-empty v3-console-panel">
     <div class="v3-listing-empty-mark">${icon(SquareKanban)}</div>
     <span>LISTING PIPELINE</span>
@@ -9449,25 +9628,26 @@ function renderV3ListingApplicationsPage() {
     const expanded = state.v3ExpandedListingId === listing.listingId
     const confirming = state.v3PublishConfirmListingId === listing.listingId
     const readiness = application?.readiness
+    const localProviderSupported = source !== 'vm' || vmProviderAvailable
     const checks = readiness?.checks || []
     const passedChecks = checks.filter((check) => check.ready).length
     const manifest = product?.manifest || {}
     const price = v3ListingPriceLabel(listing.price || {})
     const runtime = application?.runtime
     const updated = listing.updatedAt ? new Date(listing.updatedAt).toLocaleString() : 'Just now'
-    const searchable = [listing.listingId, listing.productId, product?.title, sourceMeta.label, sourceMeta.shortLabel, statusMeta.label, price].filter(Boolean).join(' ').toLocaleLowerCase()
-    const actions = `${listing.status === 'draft' ? (confirming ? `<span class="v3-inline-confirm"><small>Cloud will recalculate readiness now.</small><button type="button" data-v3-listing-action="publish" data-listing-id="${escapeAttr(listing.listingId)}">Confirm publish</button><button class="ghost" type="button" data-v3-publish-cancel>Cancel</button></span>` : `<button type="button" data-v3-publish-request="${escapeAttr(listing.listingId)}" ${readiness?.ready ? '' : 'disabled'}>Publish</button>`) : ''}${listing.status === 'published' ? `<button class="ghost" type="button" data-v3-listing-action="pause" data-listing-id="${escapeAttr(listing.listingId)}">Pause</button>` : ''}${['paused', 'unhealthy', 'provider_busy', 'capacity_insufficient'].includes(listing.status) ? `<button type="button" data-v3-listing-action="resume" data-listing-id="${escapeAttr(listing.listingId)}" ${readiness?.ready ? '' : 'disabled'}>Resume</button>` : ''}${listing.status !== 'retired' ? `<button class="danger ghost" type="button" data-v3-listing-action="retire" data-listing-id="${escapeAttr(listing.listingId)}">Retire</button>` : `<button class="ghost" type="button" data-v3-recreate-source="${escapeAttr(source)}">Create replacement</button>`}`
+    const searchable = [listing.listingId, listing.productId, product?.title, sourceMeta.label, sourceMeta.shortLabel, statusMeta.label, price, listing.creationActor, listing.draftRunId, listing.sourceFingerprint].filter(Boolean).join(' ').toLocaleLowerCase()
+    const actions = `${listing.status === 'draft' && localProviderSupported ? (confirming ? `<span class="v3-inline-confirm"><small>Cloud will recalculate readiness now.</small><button type="button" data-v3-listing-action="publish" data-listing-id="${escapeAttr(listing.listingId)}">Confirm publish</button><button class="ghost" type="button" data-v3-publish-cancel>Cancel</button></span>` : `<button type="button" data-v3-publish-request="${escapeAttr(listing.listingId)}" ${readiness?.ready ? '' : 'disabled'}>Publish</button>`) : ''}${listing.status === 'published' ? `<button class="ghost" type="button" data-v3-listing-action="pause" data-listing-id="${escapeAttr(listing.listingId)}">Pause</button>` : ''}${['paused', 'unhealthy', 'provider_busy', 'capacity_insufficient'].includes(listing.status) && localProviderSupported ? `<button type="button" data-v3-listing-action="resume" data-listing-id="${escapeAttr(listing.listingId)}" ${readiness?.ready ? '' : 'disabled'}>Resume</button>` : ''}${listing.status !== 'retired' ? `<button class="danger ghost" type="button" data-v3-listing-action="retire" data-listing-id="${escapeAttr(listing.listingId)}">Retire</button>` : localProviderSupported ? `<button class="ghost" type="button" data-v3-recreate-source="${escapeAttr(source)}">Create replacement</button>` : ''}`
     return `<article class="v3-listing-application ${expanded ? 'expanded' : ''} ${listing.listingId === state.v3HighlightedListingId ? 'highlighted' : ''}" data-listing-row="${escapeAttr(listing.listingId)}" data-listing-source="${escapeAttr(source)}" data-listing-status="${escapeAttr(listing.status)}" data-listing-ready="${String(Boolean(readiness?.ready))}" data-listing-attention="${String(attentionStatuses.includes(listing.status))}" data-listing-search="${escapeAttr(searchable)}">
       <button type="button" class="v3-listing-summary" data-v3-listing-expand="${escapeAttr(listing.listingId)}" aria-expanded="${String(expanded)}">
         <span class="v3-listing-source-icon source-${escapeAttr(source)}">${icon(sourceMeta.icon)}</span>
-        <span class="v3-listing-primary"><strong>${escapeHTML(product?.title || listing.productId)}</strong><small><em class="v3-source-badge source-${escapeAttr(source)}">${escapeHTML(sourceMeta.shortLabel)}</em><span>Updated ${escapeHTML(updated)}</span></small></span>
+        <span class="v3-listing-primary"><strong>${escapeHTML(product?.title || listing.productId)}</strong><small><em class="v3-source-badge source-${escapeAttr(source)}">${escapeHTML(sourceMeta.shortLabel)}</em>${listing.creationActor === 'agent' ? '<em class="v3-source-badge agent-created">Agent created</em>' : ''}<span>Updated ${escapeHTML(updated)}</span></small></span>
         <span class="v3-listing-summary-metrics"><span><small>Price</small><strong>${escapeHTML(price)}</strong></span><span><small>Readiness</small><strong>${checks.length ? `${passedChecks}/${checks.length} checks` : readiness?.ready ? 'Ready' : 'Pending'}</strong></span></span>
         <span class="v3-listing-state-pill tone-${escapeAttr(statusMeta.tone)}"><i></i>${escapeHTML(statusMeta.label)}</span>
         <span class="v3-listing-chevron">${toolbarIcons.disclosure}</span>
       </button>
       ${expanded ? `<div class="v3-listing-application-body">
         <div class="v3-listing-detail-head"><div><small>${escapeHTML(sourceMeta.label.toUpperCase())} APPLICATION</small><strong>Review before this offer reaches the market</strong></div><span class="${readiness?.ready ? 'ready' : 'blocked'}">${readiness?.ready ? `${icon(BadgeCheck)} Ready to publish` : `${icon(ShieldAlert)} Action required`}</span></div>
-        <section class="v3-listing-detail-section"><header><span>APPLICATION SNAPSHOT</span><strong>Offer and availability</strong></header><dl class="detail-grid v3-listing-facts"><div><dt>Listing</dt><dd>${escapeHTML(listing.listingId)}</dd></div><div><dt>Product</dt><dd>${escapeHTML(listing.productId)}</dd></div><div><dt>Price</dt><dd>${escapeHTML(price)}</dd></div><div><dt>Availability</dt><dd>${listing.availability?.availableNow === true ? 'Public' : 'Private'}</dd></div>${source === 'endpoint' ? `<div><dt>Dock tunnel</dt><dd>${runtime?.tunnelOnline ? 'Online' : 'Offline'}</dd></div><div><dt>Local health</dt><dd>${runtime?.endpointHealthy ? 'Healthy' : 'Unavailable'}${runtime?.lastSeenAt ? ` · ${escapeHTML(new Date(runtime.lastSeenAt).toLocaleString())}` : ''}</dd></div>` : ''}</dl></section>
+        <section class="v3-listing-detail-section"><header><span>APPLICATION SNAPSHOT</span><strong>Offer and availability</strong></header><dl class="detail-grid v3-listing-facts"><div><dt>Listing</dt><dd>${escapeHTML(listing.listingId)}</dd></div><div><dt>Product</dt><dd>${escapeHTML(listing.productId)}</dd></div><div><dt>Price</dt><dd>${escapeHTML(price)}</dd></div><div><dt>Availability</dt><dd>${listing.availability?.availableNow === true ? 'Public' : 'Private'}</dd></div>${listing.creationActor === 'agent' ? `<div><dt>Creation actor</dt><dd>Agent created</dd></div><div><dt>Draft run</dt><dd>${escapeHTML(listing.draftRunId || 'Not recorded')}</dd></div><div><dt>Source fingerprint</dt><dd>${escapeHTML((listing.sourceFingerprint || '').slice(0, 24) || 'Not recorded')}</dd></div><div><dt>Seller policy</dt><dd>${escapeHTML(listing.sellerPolicyReceipt ? `${listing.sellerPolicyReceipt.policyId} v${listing.sellerPolicyReceipt.version}` : 'Not recorded')}</dd></div>` : ''}${source === 'endpoint' ? `<div><dt>Dock tunnel</dt><dd>${runtime?.tunnelOnline ? 'Online' : 'Offline'}</dd></div><div><dt>Local health</dt><dd>${runtime?.endpointHealthy ? 'Healthy' : 'Unavailable'}${runtime?.lastSeenAt ? ` · ${escapeHTML(new Date(runtime.lastSeenAt).toLocaleString())}` : ''}</dd></div>` : ''}</dl></section>
         <section class="v3-listing-detail-section"><header><span>PRODUCT MANIFEST</span><strong>Submitted configuration</strong></header>${renderV3ApplicationManifest(source, manifest)}</section>
         <section class="v3-listing-detail-section"><header><span>PUBLISH READINESS</span><strong>${checks.length ? `${passedChecks} of ${checks.length} checks passed` : 'Waiting for Cloud checks'}</strong></header><div class="v3-listing-checks">${checks.length ? checks.map((check) => `<div class="${check.ready ? 'passed' : 'failed'}"><span>${check.ready ? '✓' : '!'}</span><div><strong>${escapeHTML(check.label)}</strong><small>${escapeHTML(check.detail || '')}</small></div></div>`).join('') : '<div class="failed"><span>!</span><div><strong>No readiness report</strong><small>Refresh this application to request the latest Cloud checks.</small></div></div>'}</div></section>
         <div class="v3-listing-actions"><span><strong>Market controls</strong><small>Publishing changes public availability. Application fields remain read-only.</small></span>${actions}</div>
@@ -9546,7 +9726,7 @@ function renderV3APIConsumerPanel(item: V3UnifiedListingItem, operations: Array<
   const curl = `curl -X POST "$EXORA_CLOUD_URL/v3/invocations" \\\n+  -H "Authorization: Bearer $EXORA_API_KEY" \\\n+  -H "Content-Type: application/json" \\\n+  -d '${payload}'`
   const javascript = `const response = await fetch(process.env.EXORA_CLOUD_URL + "/v3/invocations", {\n  method: "POST",\n  headers: { Authorization: "Bearer " + process.env.EXORA_API_KEY, "Content-Type": "application/json" },\n  body: JSON.stringify(${payload})\n});\nconsole.log(await response.json());`
   const python = `import os, requests\nresponse = requests.post(\n    os.environ["EXORA_CLOUD_URL"] + "/v3/invocations",\n    headers={"Authorization": "Bearer " + os.environ["EXORA_API_KEY"]},\n    json={"listingId": "${listing.listingId}", "operationId": "${operationId}", "idempotencyKey": "YOUR_STABLE_KEY", "maxChargeAtomic": ${maxCharge}, "body": {}}\n)\nprint(response.json())`
-  return `<section class="v3-consumer-panel"><header><div><span>MANUAL API CLIENT</span><strong>Invoke this operation</strong></div><em>${escapeHTML(balanceLabel)}</em></header>${error}<form data-v3-consumer-form="api" data-listing-id="${escapeAttr(listing.listingId)}"><label>Operation<select name="operationId" data-v3-consumer-operation>${operationOptions}</select></label>${parameterFields ? `<fieldset class="v3-consumer-parameters"><legend>Manifest parameters</legend>${parameterFields}</fieldset>` : ''}<label>JSON request body<textarea name="body" spellcheck="false">${escapeHTML(state.v3ConsumerRequestBody)}</textarea></label><div class="v3-consumer-charge"><span>Maximum charge</span><strong>${escapeHTML(v3AtomicMoney(maxCharge, 'USDC'))}</strong></div><button type="submit" ${configured && !state.v3ConsumerBusy ? '' : 'disabled'}>${state.v3ConsumerBusy ? 'Invoking...' : 'Invoke operation'}</button>${keyAction}</form><details class="v3-consumer-code"><summary>curl</summary><pre>${escapeHTML(curl)}</pre></details><details class="v3-consumer-code"><summary>JavaScript</summary><pre>${escapeHTML(javascript)}</pre></details><details class="v3-consumer-code"><summary>Python</summary><pre>${escapeHTML(python)}</pre></details>${result}</section>`
+  return `<section class="v3-consumer-panel"><header><div><span>MANUAL API CLIENT</span><strong>Invoke this operation</strong></div><em data-v3-consumer-balance>${escapeHTML(balanceLabel)}</em></header>${error}<form data-v3-consumer-form="api" data-listing-id="${escapeAttr(listing.listingId)}"><label>Operation<select name="operationId" data-v3-consumer-operation>${operationOptions}</select></label>${parameterFields ? `<fieldset class="v3-consumer-parameters"><legend>Manifest parameters</legend>${parameterFields}</fieldset>` : ''}<label>JSON request body<textarea name="body" spellcheck="false">${escapeHTML(state.v3ConsumerRequestBody)}</textarea></label><div class="v3-consumer-charge"><span>Maximum charge</span><strong>${escapeHTML(v3AtomicMoney(maxCharge, 'USDC'))}</strong></div><button type="submit" ${configured && !state.v3ConsumerBusy ? '' : 'disabled'}>${state.v3ConsumerBusy ? 'Invoking...' : 'Invoke operation'}</button>${keyAction}</form><details class="v3-consumer-code"><summary>curl</summary><pre>${escapeHTML(curl)}</pre></details><details class="v3-consumer-code"><summary>JavaScript</summary><pre>${escapeHTML(javascript)}</pre></details><details class="v3-consumer-code"><summary>Python</summary><pre>${escapeHTML(python)}</pre></details>${result}</section>`
 }
 
 function renderV3ConsumerPanel(item: V3UnifiedListingItem) {
@@ -9570,14 +9750,14 @@ function renderV3ConsumerPanel(item: V3UnifiedListingItem) {
     return renderV3APIConsumerPanel(item, operations, configured, balanceLabel, maxCharge, keyAction, error, result)
     const operationOptions = operations.length ? operations.map((operation) => `<option value="${escapeAttr(String(operation.operationId || ''))}">${escapeHTML(`${String(operation.method || 'POST').toUpperCase()} ${operation.path || '/'} · ${operation.title || operation.operationId}`)}</option>`).join('') : '<option value="default">Default operation</option>'
     const curl = `curl -X POST "$EXORA_CLOUD_URL/v3/invocations" \\\n  -H "Authorization: Bearer $EXORA_API_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{"listingId":"${listing.listingId}","operationId":"${String((operations[0] || {}).operationId || 'default')}","idempotencyKey":"YOUR_STABLE_KEY","maxChargeAtomic":${maxCharge},"body":{}}'`
-    return `<section class="v3-consumer-panel">${disclosure}<header><div><span>MANUAL API CLIENT</span><strong>Invoke this operation</strong></div><em>${escapeHTML(balanceLabel)}</em></header>${error}<form data-v3-consumer-form="api" data-listing-id="${escapeAttr(listing.listingId)}"><label>Operation<select name="operationId">${operationOptions}</select></label><label>JSON request body<textarea name="body" spellcheck="false">${escapeHTML(state.v3ConsumerRequestBody)}</textarea></label><div class="v3-consumer-charge"><span>Maximum charge</span><strong>${escapeHTML(v3AtomicMoney(maxCharge, 'USDC'))}</strong></div><button type="submit" ${configured && !state.v3ConsumerBusy ? '' : 'disabled'}>${state.v3ConsumerBusy ? 'Invoking…' : 'Invoke operation'}</button>${keyAction}</form><details class="v3-consumer-code"><summary>Use in your own code</summary><pre>${escapeHTML(curl)}</pre></details>${result}</section>`
+    return `<section class="v3-consumer-panel">${disclosure}<header><div><span>MANUAL API CLIENT</span><strong>Invoke this operation</strong></div><em data-v3-consumer-balance>${escapeHTML(balanceLabel)}</em></header>${error}<form data-v3-consumer-form="api" data-listing-id="${escapeAttr(listing.listingId)}"><label>Operation<select name="operationId">${operationOptions}</select></label><label>JSON request body<textarea name="body" spellcheck="false">${escapeHTML(state.v3ConsumerRequestBody)}</textarea></label><div class="v3-consumer-charge"><span>Maximum charge</span><strong>${escapeHTML(v3AtomicMoney(maxCharge, 'USDC'))}</strong></div><button type="submit" ${configured && !state.v3ConsumerBusy ? '' : 'disabled'}>${state.v3ConsumerBusy ? 'Invoking…' : 'Invoke operation'}</button>${keyAction}</form><details class="v3-consumer-code"><summary>Use in your own code</summary><pre>${escapeHTML(curl)}</pre></details>${result}</section>`
   }
   if (product.productKind === 'download') {
     const manifest = product.manifest || {}
-    return `<section class="v3-consumer-panel">${disclosure}<header><div><span>LICENSED DOWNLOAD</span><strong>Purchase this fixed version</strong></div><em>${escapeHTML(balanceLabel)}</em></header>${error}<dl class="detail-grid"><div><dt>Version</dt><dd>${escapeHTML(String(manifest.version || 'fixed'))}</dd></div><div><dt>License</dt><dd>${escapeHTML(String(manifest.license || 'declared by provider'))}</dd></div><div><dt>Package</dt><dd>${escapeHTML(v3FormatBytes(Number((manifest.archive as Record<string, any> | undefined)?.sizeBytes || 0)))}</dd></div><div><dt>SHA-256</dt><dd>Verified before delivery</dd></div></dl><div class="v3-consumer-charge"><span>One-time grant</span><strong>${escapeHTML(v3AtomicMoney(maxCharge, 'USDC'))}</strong></div><div class="v3-consumer-actions"><button type="button" data-v3-consumer-action="purchase-download" data-listing-id="${escapeAttr(listing.listingId)}" ${configured && !state.v3ConsumerBusy ? '' : 'disabled'}>${state.v3ConsumerBusy ? 'Purchasing…' : 'Purchase download'}</button>${state.v3ConsumerGrant ? `<button class="ghost" type="button" data-v3-consumer-action="create-transfer" data-grant-id="${escapeAttr(String(state.v3ConsumerGrant.grantId || ''))}">Open resumable download</button>` : ''}${keyAction}</div>${result}</section>`
+    return `<section class="v3-consumer-panel">${disclosure}<header><div><span>LICENSED DOWNLOAD</span><strong>Purchase this fixed version</strong></div><em data-v3-consumer-balance>${escapeHTML(balanceLabel)}</em></header>${error}<dl class="detail-grid"><div><dt>Version</dt><dd>${escapeHTML(String(manifest.version || 'fixed'))}</dd></div><div><dt>License</dt><dd>${escapeHTML(String(manifest.license || 'declared by provider'))}</dd></div><div><dt>Package</dt><dd>${escapeHTML(v3FormatBytes(Number((manifest.archive as Record<string, any> | undefined)?.sizeBytes || 0)))}</dd></div><div><dt>SHA-256</dt><dd>Verified before delivery</dd></div></dl><div class="v3-consumer-charge"><span>One-time grant</span><strong>${escapeHTML(v3AtomicMoney(maxCharge, 'USDC'))}</strong></div><div class="v3-consumer-actions"><button type="button" data-v3-consumer-action="purchase-download" data-listing-id="${escapeAttr(listing.listingId)}" ${configured && !state.v3ConsumerBusy ? '' : 'disabled'}>${state.v3ConsumerBusy ? 'Purchasing…' : 'Purchase download'}</button>${state.v3ConsumerGrant ? `<button class="ghost" type="button" data-v3-consumer-action="create-transfer" data-grant-id="${escapeAttr(String(state.v3ConsumerGrant.grantId || ''))}">Open resumable download</button>` : ''}${keyAction}</div>${result}</section>`
   }
   const lease = state.v3ConsumerLease
-  return `<section class="v3-consumer-panel">${disclosure}<header><div><span>COMPUTE PURCHASE</span><strong>Reserve whole minutes</strong></div><em>${escapeHTML(balanceLabel)}</em></header>${error}<form data-v3-consumer-form="compute" data-listing-id="${escapeAttr(listing.listingId)}"><label>Duration in minutes<input name="durationMinutes" type="number" min="1" step="1" value="${state.v3ConsumerMinutes}"/></label><div class="v3-consumer-charge"><span>Current estimate</span><strong>${escapeHTML(v3AtomicMoney(maxCharge, 'USDC'))}</strong></div><button type="submit" ${configured && !state.v3ConsumerBusy ? '' : 'disabled'}>${state.v3ConsumerBusy ? 'Provisioning…' : 'Purchase and provision'}</button>${keyAction}</form>${lease ? `<section class="v3-consumer-lease"><header><strong>Lease ${escapeHTML(String(lease.leaseId || ''))}</strong><span>${escapeHTML(String(lease.status || ''))}</span></header><dl class="detail-grid"><div><dt>Backend</dt><dd>${escapeHTML(String(lease.backend || ''))}</dd></div><div><dt>Expires</dt><dd>${escapeHTML(lease.expiresAt ? new Date(String(lease.expiresAt)).toLocaleString() : 'Provisioning')}</dd></div></dl><pre>${escapeHTML(v3RedactedConsumerJSON(lease.capability || {}))}</pre><div class="v3-consumer-actions"><button class="ghost" type="button" data-v3-consumer-action="extend-compute" data-purchase-id="${escapeAttr(String(state.v3ConsumerPurchase?.purchaseId || ''))}">Extend ${state.v3ConsumerMinutes} min</button><button class="danger ghost" type="button" data-v3-consumer-action="release-lease" data-lease-id="${escapeAttr(String(lease.leaseId || ''))}">Release lease</button></div></section>` : ''}${result}</section>`
+  return `<section class="v3-consumer-panel">${disclosure}<header><div><span>COMPUTE PURCHASE</span><strong>Reserve whole minutes</strong></div><em data-v3-consumer-balance>${escapeHTML(balanceLabel)}</em></header>${error}<form data-v3-consumer-form="compute" data-listing-id="${escapeAttr(listing.listingId)}"><label>Duration in minutes<input name="durationMinutes" type="number" min="1" step="1" value="${state.v3ConsumerMinutes}"/></label><div class="v3-consumer-charge"><span>Current estimate</span><strong>${escapeHTML(v3AtomicMoney(maxCharge, 'USDC'))}</strong></div><button type="submit" ${configured && !state.v3ConsumerBusy ? '' : 'disabled'}>${state.v3ConsumerBusy ? 'Provisioning…' : 'Purchase and provision'}</button>${keyAction}</form>${lease ? `<section class="v3-consumer-lease"><header><strong>Lease ${escapeHTML(String(lease.leaseId || ''))}</strong><span>${escapeHTML(String(lease.status || ''))}</span></header><dl class="detail-grid"><div><dt>Backend</dt><dd>${escapeHTML(String(lease.backend || ''))}</dd></div><div><dt>Expires</dt><dd>${escapeHTML(lease.expiresAt ? new Date(String(lease.expiresAt)).toLocaleString() : 'Provisioning')}</dd></div></dl><pre>${escapeHTML(v3RedactedConsumerJSON(lease.capability || {}))}</pre><div class="v3-consumer-actions"><button class="ghost" type="button" data-v3-consumer-action="extend-compute" data-purchase-id="${escapeAttr(String(state.v3ConsumerPurchase?.purchaseId || ''))}">Extend ${state.v3ConsumerMinutes} min</button><button class="danger ghost" type="button" data-v3-consumer-action="release-lease" data-lease-id="${escapeAttr(String(lease.leaseId || ''))}">Release lease</button></div></section>` : ''}${result}</section>`
 }
 
 function renderV3UnifiedListingsPage() {
@@ -9619,15 +9799,16 @@ function renderV3UnifiedListingRow(item: V3UnifiedListingItem) {
     ['paused', 'unhealthy', 'provider_busy', 'capacity_insufficient'].includes(listing.status) ? `<button type="button" data-v3-listing-action="resume" data-listing-id="${escapeAttr(listing.listingId)}" ${readiness?.ready ? '' : 'disabled'}>Resume</button>` : '',
     listing.status !== 'retired' ? `<button class="danger ghost" type="button" data-v3-listing-action="retire" data-listing-id="${escapeAttr(listing.listingId)}">Retire</button>` : '',
   ].join('')
+  const agentProvenance = listing.creationActor === 'agent' ? `<section class="v3-listing-detail-section v3-agent-provenance"><header><span>AGENT SOURCE</span><strong>Created by Dock seller automation</strong></header><dl class="detail-grid"><div><dt>Draft run</dt><dd>${escapeHTML(listing.draftRunId || 'Not recorded')}</dd></div><div><dt>Source fingerprint</dt><dd>${escapeHTML((listing.sourceFingerprint || '').slice(0, 32) || 'Not recorded')}</dd></div><div><dt>MCP connection</dt><dd>${escapeHTML(listing.mcpConnection || 'Local Agent')}</dd></div><div><dt>Seller policy</dt><dd>${escapeHTML(listing.sellerPolicyReceipt ? `${listing.sellerPolicyReceipt.policyId} v${listing.sellerPolicyReceipt.version}` : 'Not recorded')}</dd></div></dl></section>` : ''
   const readinessPanel = `<section class="v3-listing-detail-section"><header><span>PUBLISH READINESS</span><strong>${checks.length ? `${passedChecks} of ${checks.length} checks passed` : 'Waiting for Cloud checks'}</strong></header><div class="v3-listing-checks">${checks.map((check) => `<div class="${check.ready ? 'passed' : 'failed'}"><span>${check.ready ? '&#10003;' : '!'}</span><div><strong>${escapeHTML(check.label)}</strong><small>${escapeHTML(check.detail || '')}</small></div></div>`).join('') || '<div class="failed"><span>!</span><div><strong>No readiness report</strong><small>Refresh to request current checks.</small></div></div>'}</div></section>`
   return `<article class="v3-listing-application ${expanded ? 'expanded' : ''}" data-listing-row="${escapeAttr(listing.listingId)}" data-listing-source="${escapeAttr(source)}" data-listing-kind="${escapeAttr(product.productKind)}" data-listing-status="${escapeAttr(listing.status)}" data-listing-ready="${String(Boolean(readiness?.ready))}" data-listing-attention="${String(attention)}" data-listing-owner="${String(isOwner)}" data-listing-search="${escapeAttr(searchable)}">
     <button type="button" class="v3-listing-summary" data-v3-listing-expand="${escapeAttr(listing.listingId)}" aria-expanded="${String(expanded)}">
       <span class="v3-listing-source-icon source-${escapeAttr(source)}">${icon(sourceMeta.icon)}</span>
-      <span class="v3-listing-primary"><strong>${escapeHTML(product.title || listing.productId)}</strong><small><em class="v3-source-badge source-${escapeAttr(source)}">${escapeHTML(sourceMeta.shortLabel)}</em><em class="v3-owner-badge ${isOwner ? 'owner' : 'market'}">${isOwner ? 'Owner' : 'Marketplace'}</em><span>${escapeHTML(product.providerDockId || listing.listingId)}</span></small></span>
+      <span class="v3-listing-primary"><strong>${escapeHTML(product.title || listing.productId)}</strong><small><em class="v3-source-badge source-${escapeAttr(source)}">${escapeHTML(sourceMeta.shortLabel)}</em><em class="v3-owner-badge ${isOwner ? 'owner' : 'market'}">${isOwner ? 'Owner' : 'Marketplace'}</em>${listing.creationActor === 'agent' ? '<em class="v3-source-badge agent-created">Agent created</em>' : ''}<span>${escapeHTML(product.providerDockId || listing.listingId)}</span></small></span>
       <span class="v3-listing-summary-metrics"><span><small>Price</small><strong>${escapeHTML(v3ListingPriceLabel(listing.price || {}))}</strong></span><span><small>${isOwner ? 'Readiness' : 'Availability'}</small><strong>${isOwner ? checks.length ? `${passedChecks}/${checks.length} checks` : readiness?.ready ? 'Ready' : 'Pending' : listing.availability?.availableNow === false ? 'Unavailable' : 'Available now'}</strong></span></span>
       <span class="v3-listing-state-pill tone-${escapeAttr(statusMeta.tone)}"><i></i>${escapeHTML(statusMeta.label)}</span><span class="v3-listing-chevron">${toolbarIcons.disclosure}</span>
     </button>
-    ${expanded ? `<div class="v3-listing-application-body"><div class="v3-listing-detail-head"><div><small>${isOwner ? 'YOUR LISTING' : 'MARKETPLACE OFFER'}</small><strong>${isOwner ? 'Manage this offer without leaving the market' : 'Review the manifest and use this product manually'}</strong></div><span class="${isOwner ? 'ready' : 'market'}">${isOwner ? `${icon(ShieldCheck)} Owner controls` : `${icon(BadgeCheck)} Public listing`}</span></div><section class="v3-listing-detail-section"><header><span>PRODUCT MANIFEST</span><strong>${escapeHTML(product.description || 'Machine-readable Exora product')}</strong></header>${renderV3ApplicationManifest(source, product.manifest || {})}</section>${isOwner ? `${readinessPanel}<div class="v3-listing-actions"><span><strong>Owner controls</strong><small>You cannot purchase your own listing.</small></span>${ownerActions}</div>` : renderV3ConsumerPanel(item)}</div>` : ''}
+    ${expanded ? `<div class="v3-listing-application-body"><div class="v3-listing-detail-head"><div><small>${isOwner ? 'YOUR LISTING' : 'MARKETPLACE OFFER'}</small><strong>${isOwner ? 'Manage this offer without leaving the market' : 'Review the manifest and use this product manually'}</strong></div><span class="${isOwner ? 'ready' : 'market'}">${isOwner ? `${icon(ShieldCheck)} Owner controls` : `${icon(BadgeCheck)} Public listing`}</span></div>${agentProvenance}<section class="v3-listing-detail-section"><header><span>PRODUCT MANIFEST</span><strong>${escapeHTML(product.description || 'Machine-readable Exora product')}</strong></header>${renderV3ApplicationManifest(source, product.manifest || {})}</section>${isOwner ? `${readinessPanel}<div class="v3-listing-actions"><span><strong>Owner controls</strong><small>You cannot purchase your own listing.</small></span>${ownerActions}</div>` : renderV3ConsumerPanel(item)}</div>` : ''}
   </article>`
 }
 
@@ -9642,6 +9823,8 @@ function renderV3UnifiedListingsPageV2() {
   const buyerEmpty = '<div class="v3-marketplace-empty"><span>' + icon(Search) + '</span><strong>No marketplace listings found</strong><small>Published products from other sellers will appear here.</small></div>'
   const empty = !rows && !sourceLoading && (!isBuyer || !sourceError) ? (isBuyer ? buyerEmpty : renderV3ListingEmptyState()) : ''
   const placeholder = isBuyer ? 'Search the marketplace' : 'Search your listings and applications'
+  const activeRuns = (state.sellerAutomation?.runs || []).filter((run) => !['completed', 'cancelled'].includes(run.status)).slice(0, 5)
+  const runPanel = !isBuyer && activeRuns.length ? `<section class="v3-agent-draft-runs"><header><span>${icon(BrainCircuit)}</span><div><strong>Agent draft runs</strong><small>Dock-owned progress before a private Listing exists</small></div></header>${activeRuns.map((run) => `<article class="status-${escapeAttr(run.status)}"><span>${escapeHTML(run.kind)}</span><div><strong>${escapeHTML(run.status.replaceAll('_', ' '))}</strong><progress max="100" value="${Math.max(0, Math.min(100, Number(run.progress || 0)))}"></progress><small>${escapeHTML(run.error || (run.missingFields || []).join(', ') || run.currentStep || '')}</small></div><em>${Math.max(0, Math.min(100, Number(run.progress || 0)))}%</em></article>`).join('')}</section>` : ''
   return `<section class="v3-listings-page">
     <header class="v3-listing-fixed-header">
       <section class="v3-listing-search-switch">
@@ -9653,11 +9836,12 @@ function renderV3UnifiedListingsPageV2() {
       </section>
       ${isBuyer ? `<div class="v3-listing-agent-hint">${icon(MessagesSquare)}<span>${escapeHTML(t('listings.agentHint'))}</span><span class="v3-listing-agent-actions"><button type="button" data-v3-listing-agent-copy aria-label="${escapeAttr(t('listings.agentCopy'))}" title="${escapeAttr(t('listings.agentCopy'))}">${icon(Copy)}</button><button type="button" data-v3-listing-agent-details aria-label="${escapeAttr(t('listings.agentDetails'))}" title="${escapeAttr(t('listings.agentDetails'))}">${icon(Info)}</button></span></div>` : ''}
     </header>
-    <section class="v3-listing-workspace v3-listing-${state.v3ListingMode}-view scroll-area">${sourceError ? `<div class="v3-market-view-error">${escapeHTML(sourceError)}</div>` : ''}${rows ? `<div class="v3-listing-list">${rows}</div>` : ''}${initialLoading}${empty}<div class="v3-listing-no-results hidden"><strong>No matching listings</strong><small>Try a different search.</small></div></section>
+    <section class="v3-listing-workspace v3-listing-${state.v3ListingMode}-view scroll-area">${sourceError ? `<div class="v3-market-view-error">${escapeHTML(sourceError)}</div>` : ''}${runPanel}${rows ? `<div class="v3-listing-list">${rows}</div>` : ''}${initialLoading}${empty}<div class="v3-listing-no-results hidden"><strong>No matching listings</strong><small>Try a different search.</small></div></section>
   </section>`
 }
 
 function renderV3SellerSurface() {
+  state.v3SellerTab = normalizeV3SellerTab(state.v3SellerTab)
   const page = state.v3SellerTab === 'vm' ? renderV3VMPage() : state.v3SellerTab === 'resources' ? renderV3ResourcesPage() : state.v3SellerTab === 'endpoint' ? renderV3EndpointAgentPage() : state.v3SellerTab === 'api_bridge' || state.v3SellerTab === 'openapi' ? renderV3APIBridgePage() : renderV3UnifiedListingsPageV2()
   const headings: Record<V3SellerTab, { kicker: string; title: string; description: string }> = {
     vm: { kicker: 'COMPUTE SUPPLY', title: 'List this computer', description: 'Measure this PC, install a disposable Linux environment, reserve capacity, then submit a private Listing draft.' },
@@ -9669,7 +9853,7 @@ function renderV3SellerSurface() {
   }
   const heading = headings[state.v3SellerTab]
   const surfaceHeading = state.v3SellerTab === 'listings' ? '' : `<div class="v3-surface-heading"><div><span>${escapeHTML(heading.kicker)}</span><h2>${escapeHTML(heading.title)}</h2><p>${escapeHTML(heading.description)}</p></div></div>`
-  return `<section class="v3-market-surface v3-seller-surface">${surfaceHeading}${state.v3SellerTab !== 'listings' && state.v3SellerError ? `<div class="v3-error">${escapeHTML(state.v3SellerError)}</div>` : ''}<div class="v3-seller-page">${page}</div></section>${renderV3EnvironmentCloudModal()}`
+  return `<section class="v3-market-surface v3-seller-surface">${surfaceHeading}${state.v3SellerTab !== 'listings' && state.v3SellerError ? `<div class="v3-error">${escapeHTML(state.v3SellerError)}</div>` : ''}<div class="v3-seller-page">${page}</div></section>${vmProviderAvailable ? renderV3EnvironmentCloudModal() : ''}`
 }
 
 type V3ApplicationSource = 'vm' | 'resources' | 'endpoint' | 'api_bridge'
@@ -9808,6 +9992,43 @@ function attachV3ResourceSelectHandlers() {
       })
     })
   })
+}
+
+function v3ListingBody(listingId: string | undefined) {
+  if (!listingId) return null
+  return fields.actionView.querySelector<HTMLElement>(`[data-listing-row="${CSS.escape(listingId)}"] .v3-listing-application-body`)
+}
+
+function animateV3ListingExpansion(listingId: string | undefined) {
+  const body = v3ListingBody(listingId)
+  if (!body || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+  body.classList.add('is-animating')
+  const animation = body.animate([
+    { height: '0px', opacity: 0 },
+    { height: `${body.scrollHeight}px`, opacity: 1 },
+  ], { duration: 240, easing: 'cubic-bezier(.2, .8, .2, 1)' })
+  const cleanup = () => body.classList.remove('is-animating')
+  animation.addEventListener('finish', cleanup, { once: true })
+  animation.addEventListener('cancel', cleanup, { once: true })
+}
+
+function animateV3ListingCollapse(listingId: string | undefined, complete: () => void) {
+  const body = v3ListingBody(listingId)
+  if (!body || window.matchMedia('(prefers-reduced-motion: reduce)').matches) { complete(); return }
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-listing-expand]').forEach((button) => { button.disabled = true })
+  body.classList.add('is-animating')
+  let completed = false
+  const finish = () => {
+    if (completed) return
+    completed = true
+    complete()
+  }
+  const animation = body.animate([
+    { height: `${body.scrollHeight}px`, opacity: 1 },
+    { height: '0px', opacity: 0 },
+  ], { duration: 190, easing: 'cubic-bezier(.4, 0, 1, 1)' })
+  animation.addEventListener('finish', finish, { once: true })
+  animation.addEventListener('cancel', finish, { once: true })
 }
 
 function attachV3SurfaceHandlers() {
@@ -9975,8 +10196,13 @@ function attachV3SurfaceHandlers() {
         const reviewReceipt = endpointReviewIDs().map((id) => ({ id, fingerprint: endpointReviewFingerprint(id) }))
         const attemptFingerprint = JSON.stringify({ draftId: draft.draftId, draftVersion: draft.version, reviewReceipt, localBaseUrl: state.v3EndpointLocalURL, healthPath: draft.healthPath, authType: state.v3EndpointAuthType, apiKeyHeader: state.v3EndpointAPIKeyHeader, timeoutSeconds: state.v3EndpointTimeout, concurrency: state.v3EndpointConcurrency })
         state.v3EndpointSaveAttemptKey = v3StableApplicationAttempt('endpoint', attemptFingerprint)
-        await invoke('provider_endpoint_local_save', { input: { endpointId, localBaseUrl: state.v3EndpointLocalURL, healthPath: draft.healthPath, routes, authType: state.v3EndpointAuthType, lastProbeHealthy: true, lastProbeAt: state.v3EndpointProbe.checkedAt, timeoutSeconds: state.v3EndpointTimeout, concurrency: state.v3EndpointConcurrency } })
-        const imported = await invoke<{ product: V3Product; listing: V3Listing }>('provider_endpoint_import', { input: { idempotencyKey: state.v3EndpointSaveAttemptKey, endpointId, draftId: draft.draftId, draftVersion: draft.version, reviewReceipt, authType: state.v3EndpointAuthType, apiKeyHeader: state.v3EndpointAPIKeyHeader, secret: endpointCredentialSecret(), price: { model: 'metered', currency: 'USDC' }, limits: { timeoutSeconds: state.v3EndpointTimeout, concurrency: state.v3EndpointConcurrency }, localConnectivityPassed: true, sellerAttestationConfirmed: true } })
+        let credentialRef = ''
+        if (state.v3EndpointAuthType !== 'none') {
+          const savedCredential = await invoke<{ credential: SellerAutomationCredential }>('seller_automation_credential_save', { input: { label: `Endpoint ${draft.title || endpointId}`, authType: state.v3EndpointAuthType, apiKeyHeader: state.v3EndpointAPIKeyHeader, serviceIds: [], secret: endpointCredentialSecret() } })
+          credentialRef = savedCredential.credential.credentialRef
+        }
+        await invoke('provider_endpoint_local_save', { input: { endpointId, localBaseUrl: state.v3EndpointLocalURL, healthPath: draft.healthPath, routes, authType: state.v3EndpointAuthType, credentialRef, lastProbeHealthy: true, lastProbeAt: state.v3EndpointProbe.checkedAt, timeoutSeconds: state.v3EndpointTimeout, concurrency: state.v3EndpointConcurrency } })
+        const imported = await invoke<{ product: V3Product; listing: V3Listing }>('provider_endpoint_import', { input: { idempotencyKey: state.v3EndpointSaveAttemptKey, endpointId, draftId: draft.draftId, draftVersion: draft.version, reviewReceipt, authType: 'none', price: { model: 'metered', currency: 'USDC' }, limits: { timeoutSeconds: state.v3EndpointTimeout, concurrency: state.v3EndpointConcurrency }, localConnectivityPassed: true, sellerAttestationConfirmed: true } })
         state.v3HighlightedListingId = imported.listing.listingId
         state.v3ExpandedListingId = imported.listing.listingId
         state.v3SellerTab = 'listings'
@@ -10518,23 +10744,29 @@ function attachV3SurfaceHandlers() {
   fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-listing-expand]').forEach((button) => button.addEventListener('click', () => {
     const id = button.dataset.v3ListingExpand
     const changed = state.v3ExpandedListingId !== id
-    state.v3ExpandedListingId = changed ? id : undefined
-    state.v3PublishConfirmListingId = undefined
-    if (changed) {
-      state.v3SelectedCatalogListingId = id
-      state.v3ConsumerResponse = undefined
-      state.v3ConsumerError = undefined
-      state.v3ConsumerOperationId = ''
-      state.v3ConsumerParameters = {}
-      state.v3ConsumerGrant = undefined
-      state.v3ConsumerTransferProgress = undefined
-      state.v3ConsumerPurchase = undefined
-      state.v3ConsumerLease = undefined
-      void invoke<{ balance?: V3ConsumerBalance }>('consumer_account_balance').then((response) => { state.v3ConsumerBalance = response.balance; renderDecisionPanel() }).catch(() => undefined)
+    const previousId = state.v3ExpandedListingId
+    const commit = () => {
+      state.v3ExpandedListingId = changed ? id : undefined
+      state.v3PublishConfirmListingId = undefined
+      if (changed) {
+        state.v3SelectedCatalogListingId = id
+        state.v3ConsumerResponse = undefined
+        state.v3ConsumerError = undefined
+        state.v3ConsumerOperationId = ''
+        state.v3ConsumerParameters = {}
+        state.v3ConsumerGrant = undefined
+        state.v3ConsumerTransferProgress = undefined
+        state.v3ConsumerPurchase = undefined
+        state.v3ConsumerLease = undefined
+        void refreshV3ConsumerBalance()
+      }
+      renderDecisionPanel()
+      if (changed) animateV3ListingExpansion(id)
     }
-    renderDecisionPanel()
+    if (previousId) animateV3ListingCollapse(previousId, commit)
+    else commit()
   }))
-  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-listing-source]').forEach((button) => button.addEventListener('click', () => { state.v3SellerTab = (button.dataset.v3ListingSource || 'vm') as V3SellerTab; renderDecisionPanel() }))
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-listing-source]').forEach((button) => button.addEventListener('click', () => { state.v3SellerTab = normalizeV3SellerTab((button.dataset.v3ListingSource || 'vm') as V3SellerTab); renderDecisionPanel() }))
   const listingSearch = fields.actionView.querySelector<HTMLInputElement>('[data-v3-listing-search]')
   const applyListingFilters = () => {
     const query = listingSearch?.value.trim().toLocaleLowerCase() || ''
@@ -10671,13 +10903,26 @@ function attachV3SurfaceHandlers() {
     clearV3ApplicationAttempt(source)
     if (source === 'endpoint') state.v3EndpointSubmitting = false
     if (source === 'api_bridge') state.v3APISavingListing = false
-    state.v3SellerTab = source
+    state.v3SellerTab = normalizeV3SellerTab(source)
     state.v3HighlightedListingId = undefined
     state.v3ExpandedListingId = undefined
     showToast(t('toast.listingReplacementStarted'))
     renderDecisionPanel()
   }))
-  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-listing-action]').forEach((button) => button.addEventListener('click', () => void run(async () => { await invoke('provider_listing_action', { input: { listingId: button.dataset.listingId, action: button.dataset.v3ListingAction } }); state.v3PublishConfirmListingId = undefined; state.v3ListingsLoaded = false; state.v3CatalogLoaded = false; await Promise.all([loadV3Listings(), loadV3Catalog()]) })))
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-listing-action]').forEach((button) => button.addEventListener('click', () => void run(async () => {
+    const listingId = String(button.dataset.listingId || '')
+    const listingAction = String(button.dataset.v3ListingAction || '')
+    const application = state.v3ListingApplications.find((item) => item.listing.listingId === listingId)
+    if (listingAction === 'publish' && application?.source === 'vm') {
+      const capacity = await invoke<{ result?: { providerBusy?: boolean } }>('provider_vm_capacity')
+      if (capacity.result?.providerBusy) throw new Error('VM capacity changed and the provider is currently busy. Recheck or recreate the draft before publishing.')
+    }
+    await invoke('provider_listing_action', { input: { listingId, action: listingAction } })
+    state.v3PublishConfirmListingId = undefined
+    state.v3ListingsLoaded = false
+    state.v3CatalogLoaded = false
+    await Promise.all([loadV3Listings(), loadV3Catalog()])
+  })))
 }
 
 function renderDecisionPanel() {
@@ -13166,6 +13411,14 @@ function v3ActivityStatusLabel(status: string) {
   if (status === 'active') return v3HistoryCopy('Active', '进行中')
   if (status === 'needs_attention') return v3HistoryCopy('Needs review', '需要检查')
   if (status === 'completed') return v3HistoryCopy('Completed', '已完成')
+  if (status === 'pending') return v3HistoryCopy('Pending', '等待中')
+  if (status === 'provisioning') return v3HistoryCopy('Provisioning', '正在配置')
+  if (status === 'upstream_error') return v3HistoryCopy('Upstream error', '上游错误')
+  if (status === 'meter_failed') return v3HistoryCopy('Metering failed', '计量失败')
+  if (status === 'settlement_failed') return v3HistoryCopy('Settlement failed', '结算失败')
+  if (status === 'failed') return v3HistoryCopy('Failed', '失败')
+  if (status === 'degraded') return v3HistoryCopy('Degraded', '服务降级')
+  if (status === 'revoked') return v3HistoryCopy('Revoked', '已撤销')
   return status.replaceAll('_', ' ')
 }
 
@@ -14954,6 +15207,44 @@ function renderAgentSettings() {
   ].join('')
   return settingsSection(sx('CONNECTION', '连接'), sx('Dock & MCP', 'Dock 与 MCP'), sx('Dock publishes one local connection surface for supported Agent clients.', 'Dock 为受支持的 Agent 客户端提供统一的本地连接入口。'), connectionRows)
     + settingsSection(sx('BOUNDARIES', '边界'), sx('Approval & spending', '审批与消费'), sx('Wallet remains the source of truth for balances and spending limits.', '余额与消费限额仍以 Wallet 为唯一事实来源。'), permissionRows)
+    + renderSellerAutomationSettings()
+}
+
+function defaultSellerAutomationPolicy(): SellerAutomationPolicy {
+  return {
+    enabled: false,
+    enabledKinds: v3ProviderApplicationSources(),
+    allowedRoots: [], allowedServices: [], defaults: {},
+    attestations: { pricing: false, rights: false, runtime: false, apiUsage: false },
+    limits: { maxBatch: 10, maxFiles: 200, maxBundleBytes: 1024 ** 3, maxConcurrentRuns: 1 },
+    autoInstallImages: false,
+  }
+}
+
+function renderSellerAutomationSettings() {
+  const automation = state.sellerAutomation
+  const policy = automation?.policy || defaultSellerAutomationPolicy()
+  const credentials = automation?.credentials || []
+  const runs = automation?.runs || []
+  const allKinds: Array<[string, string]> = [['vm', 'VM'], ['resources', 'Resources'], ['endpoint', 'Endpoint'], ['api_bridge', 'API Bridge']]
+  const kinds = allKinds.filter(([value]) => vmProviderAvailable || value !== 'vm')
+  const roots = policy.allowedRoots.length
+    ? policy.allowedRoots.map((root) => `<div class="seller-automation-root"><input data-seller-root-id="${escapeAttr(root.id)}" value="${escapeAttr(root.path)}" readonly><button type="button" class="app-setting-button outline" data-settings-action="seller-root-remove" data-seller-root-remove="${escapeAttr(root.id)}">${escapeHTML(sx('Remove', '移除'))}</button></div>`).join('')
+    : `<small>${escapeHTML(sx('No folder is authorized. The Agent cannot scan the computer.', '尚未授权目录，Agent 无法扫描电脑。'))}</small>`
+  const credentialRows = credentials.length
+    ? credentials.map((credential) => `<span class="seller-automation-chip"><strong>${escapeHTML(credential.label)}</strong><small>${escapeHTML(credential.authType)} · ${escapeHTML((credential.serviceIds || []).join(', ') || sx('Any authorized service', '任一授权服务'))}</small><button type="button" data-settings-action="seller-credential-delete" data-credential-ref="${escapeAttr(credential.credentialRef)}">×</button></span>`).join('')
+    : `<small>${escapeHTML(sx('No credential aliases saved.', '尚未保存凭据别名。'))}</small>`
+  const runRows = runs.slice(0, 5).map((run) => `<div class="seller-automation-run"><span>${escapeHTML(run.kind)}</span><strong>${escapeHTML(run.status)} · ${Math.max(0, Math.min(100, Number(run.progress || 0)))}%</strong><small>${escapeHTML(run.result?.listingId || (run.missingFields || []).join(', ') || run.error || run.currentStep || '')}</small></div>`).join('') || `<small>${escapeHTML(sx('No Agent draft runs yet.', '尚无 Agent 草稿运行记录。'))}</small>`
+  const status = policy.enabled ? settingStatus(sx('Enabled', '已启用'), 'success') : settingStatus(sx('Setup required', '需要配置'), 'warning')
+  return `<section class="app-settings-section seller-automation-settings"><div class="app-settings-section-head"><span>SELLER AUTOMATION</span><h2>${escapeHTML(sx('One-command private Listing drafts', '一句指令创建私有 Listing 草稿'))}</h2><p>${escapeHTML(sx('Authorize only the folders and services an Agent may inspect. MCP can create private drafts, but can never publish, pause, resume, or retire a Listing.', '仅授权 Agent 可检查的目录与服务。MCP 可以创建私有草稿，但永远不能发布、暂停、恢复或退役 Listing。'))}</p></div><div class="app-setting-list"><div class="app-setting-row seller-automation-summary"><span class="app-setting-icon">${icon(ShieldCheck)}</span><div class="app-setting-copy"><strong>${escapeHTML(sx('ProviderAgent boundary', 'ProviderAgent 权限边界'))}</strong><p>${escapeHTML(policy.policyId ? `Policy v${policy.version || 1} · ${String(policy.hash || '').slice(0, 12)}` : sx('Complete the setup once before using Agent commands.', '首次使用前完成一次配置。'))}</p></div><div class="app-setting-control">${status}</div></div><div class="seller-automation-form" data-seller-automation-form>
+    <fieldset><legend>${escapeHTML(sx('1. Resource types and authorized folders', '1. 资源类型与授权目录'))}</legend><div class="seller-automation-kinds">${kinds.map(([value, label]) => `<label><input type="checkbox" data-seller-kind="${value}" ${policy.enabledKinds.includes(value) ? 'checked' : ''}>${label}</label>`).join('')}</div><div class="seller-automation-roots">${roots}</div><button type="button" class="app-setting-button soft" data-settings-action="seller-root-add">${escapeHTML(sx('Authorize folder', '授权目录'))}</button></fieldset>
+    <fieldset><legend>${escapeHTML(sx('2. Authorized services', '2. 授权服务'))}</legend><p>${escapeHTML(sx('Endpoint accepts loopback/private URLs; API Bridge accepts public HTTPS only.', 'Endpoint 仅允许回环/私网 URL；API Bridge 仅允许公网 HTTPS。'))}</p><textarea data-seller-services rows="5" spellcheck="false">${escapeHTML(JSON.stringify(policy.allowedServices, null, 2))}</textarea></fieldset>
+    <fieldset><legend>${escapeHTML(sx('3. Four commercial default templates', '3. 四类商业默认模板'))}</legend><p>${escapeHTML(sx('Agent uses these only for missing fields. Explicit values in your instruction override them; the Agent must not invent overrides.', 'Agent 仅用它们补齐缺失字段。指令中的明确值会覆盖默认值；Agent 不得自行推断覆盖值。'))}</p><textarea data-seller-defaults rows="9" spellcheck="false">${escapeHTML(JSON.stringify(policy.defaults, null, 2))}</textarea></fieldset>
+    <fieldset><legend>${escapeHTML(sx('4. Limits and responsibility confirmation', '4. 限制与责任确认'))}</legend><div class="seller-automation-limits"><label>Batch<input type="number" min="1" max="10" data-seller-limit="maxBatch" value="${policy.limits.maxBatch}"></label><label>Files<input type="number" min="1" max="1000" data-seller-limit="maxFiles" value="${policy.limits.maxFiles}"></label><label>Concurrent<input type="number" min="1" max="4" data-seller-limit="maxConcurrentRuns" value="${policy.limits.maxConcurrentRuns}"></label></div><div class="seller-automation-attestations"><label><input type="checkbox" data-seller-attestation="pricing" ${policy.attestations.pricing ? 'checked' : ''}>${escapeHTML(sx('I accept responsibility for saved and explicit pricing.', '我对保存和明确给出的定价负责。'))}</label><label><input type="checkbox" data-seller-attestation="rights" ${policy.attestations.rights ? 'checked' : ''}>${escapeHTML(sx('I have the right to sell these resources.', '我有权出售这些资源。'))}</label><label><input type="checkbox" data-seller-attestation="runtime" ${policy.attestations.runtime ? 'checked' : ''}>${escapeHTML(sx('I accept runtime and availability responsibility.', '我承担运行与可用性责任。'))}</label><label><input type="checkbox" data-seller-attestation="apiUsage" ${policy.attestations.apiUsage ? 'checked' : ''}>${escapeHTML(sx('I accept API usage and metering responsibility.', '我承担 API 用量与计量责任。'))}</label><label><input type="checkbox" data-seller-auto-install ${policy.autoInstallImages ? 'checked' : ''}>${escapeHTML(sx('Allow automatic large VM image downloads', '允许自动下载大型 VM 镜像'))}</label></div></fieldset>
+    <fieldset><legend>${escapeHTML(sx('Credential aliases', '凭据别名'))}</legend><div class="seller-automation-credentials">${credentialRows}</div><button type="button" class="app-setting-button outline" data-settings-action="seller-credential-add">${escapeHTML(sx('Add credential alias', '添加凭据别名'))}</button></fieldset>
+    <div class="seller-automation-actions"><label><input type="checkbox" data-seller-enabled ${policy.enabled ? 'checked' : ''}>${escapeHTML(sx('Enable seller MCP tools after saving', '保存后启用卖家 MCP 工具'))}</label><button type="button" class="app-setting-button primary" data-settings-action="seller-automation-save">${escapeHTML(sx('Save seller automation policy', '保存卖家自动化策略'))}</button></div>
+    <fieldset><legend>${escapeHTML(sx('Recent Agent draft runs', '最近的 Agent 草稿运行'))}</legend><div class="seller-automation-runs">${runRows}</div></fieldset>
+  </div></div></section>`
 }
 
 function renderNotificationSettings() {
@@ -15587,8 +15878,19 @@ async function refreshSettingsStatus() {
   state.settingsStatusError = undefined
   if (state.settingsOpen) renderSettingsPanel()
   try {
-    if (hasDesktopBridge()) state.settingsSystemStatus = await invoke<DesktopSystemStatus>('system_settings_status')
-    else state.settingsSystemStatus = previewSystemSettingsStatus()
+    if (hasDesktopBridge()) {
+      const [system, policy, credentials, runs] = await Promise.all([
+        invoke<DesktopSystemStatus>('system_settings_status'),
+        invoke<{ configured?: boolean; policy?: SellerAutomationPolicy }>('seller_automation_policy_get').catch(() => ({ configured: false, policy: undefined })),
+        invoke<{ credentials?: SellerAutomationCredential[] }>('seller_automation_credentials').catch(() => ({ credentials: [] })),
+        invoke<{ runs?: SellerDraftRunSummary[] }>('seller_automation_draft_runs', { input: { limit: 20 } }).catch(() => ({ runs: [] })),
+      ])
+      state.settingsSystemStatus = system
+      state.sellerAutomation = { configured: Boolean(policy.configured), policy: policy.policy, credentials: credentials.credentials || [], runs: runs.runs || [] }
+    } else {
+      state.settingsSystemStatus = previewSystemSettingsStatus()
+      state.sellerAutomation = { configured: false, credentials: [], runs: [] }
+    }
     if (state.settingsSystemStatus.runtime) state.appStatus = state.settingsSystemStatus.runtime
   } catch (error) {
     state.settingsStatusError = humanizeError(error)
@@ -16069,6 +16371,52 @@ async function handleSettingsAction(action: string, button: HTMLButtonElement) {
   }
   try {
     if (action === 'refresh-status') return void refreshSettingsStatus()
+    if (action === 'seller-root-add') {
+      const draft = readSellerAutomationPolicyForm()
+      const result = await invokeAction<{ canceled?: boolean; path?: string }>('seller_automation_choose_root')
+      if (!result.canceled && result.path) {
+        draft.allowedRoots.push({ id: `root_${Date.now()}`, path: result.path, displayName: result.path.split(/[\\/]/).filter(Boolean).pop() || result.path, kinds: ['resources', 'endpoint', 'api_bridge'] })
+        state.sellerAutomation = { ...(state.sellerAutomation || { configured: false, credentials: [], runs: [] }), policy: draft }
+        renderSettingsPanel()
+      }
+      return
+    }
+    if (action === 'seller-root-remove') {
+      const draft = readSellerAutomationPolicyForm()
+      draft.allowedRoots = draft.allowedRoots.filter((root) => root.id !== button.dataset.sellerRootRemove)
+      state.sellerAutomation = { ...(state.sellerAutomation || { configured: false, credentials: [], runs: [] }), policy: draft }
+      renderSettingsPanel()
+      return
+    }
+    if (action === 'seller-credential-add') {
+      const label = window.prompt(sx('Credential alias label', '凭据别名名称'))?.trim()
+      if (!label) return
+      const authType = (window.prompt(sx('Authentication type: bearer, api_key, or basic', '认证类型：bearer、api_key 或 basic'), 'bearer') || '').trim()
+      if (!['bearer', 'api_key', 'basic'].includes(authType)) throw new Error('Authentication type must be bearer, api_key, or basic.')
+      const serviceIds = (window.prompt(sx('Authorized service IDs, comma separated (blank for any authorized service)', '适用服务 ID，逗号分隔（留空表示任一已授权服务）'), '') || '').split(',').map((value) => value.trim()).filter(Boolean)
+      const apiKeyHeader = authType === 'api_key' ? (window.prompt(sx('API key header', 'API Key Header'), 'X-API-Key') || 'X-API-Key').trim() : ''
+      const secret = window.prompt(sx('Credential value (stored encrypted locally and never returned)', '凭据内容（本地加密保存，永不返回）')) || ''
+      if (!secret) return
+      await invokeAction('seller_automation_credential_save', { input: { label, authType, serviceIds, apiKeyHeader, secret } })
+      showToast(sx('Credential alias saved.', '凭据别名已保存。'))
+      await refreshSettingsStatus()
+      return
+    }
+    if (action === 'seller-credential-delete') {
+      const credentialRef = button.dataset.credentialRef || ''
+      if (!credentialRef || !window.confirm(sx('Delete this local credential alias?', '删除这个本地凭据别名吗？'))) return
+      await invokeAction('seller_automation_credential_delete', { input: { credentialRef } })
+      await refreshSettingsStatus()
+      return
+    }
+    if (action === 'seller-automation-save') {
+      const policy = readSellerAutomationPolicyForm()
+      const response = await invokeAction<{ policy?: SellerAutomationPolicy }>('seller_automation_policy_save', { input: policy as unknown as Record<string, unknown> })
+      state.sellerAutomation = { ...(state.sellerAutomation || { configured: false, credentials: [], runs: [] }), configured: true, policy: response.policy || policy }
+      showToast(policy.enabled ? sx('Seller Agent draft tools are enabled.', '卖家 Agent 草稿工具已启用。') : sx('Seller automation policy saved but remains disabled.', '卖家自动化策略已保存但仍未启用。'))
+      await refreshSettingsStatus()
+      return
+    }
     if (action === 'change-pin') { openPINSettingsModal(); return }
     if (action === 'reset-pin') {
       returnFromSettings()
@@ -16167,6 +16515,33 @@ async function handleSettingsAction(action: string, button: HTMLButtonElement) {
     }
   } catch (error) {
     showToast(humanizeError(error))
+  }
+}
+
+function readSellerAutomationPolicyForm(): SellerAutomationPolicy {
+  const container = fields.settingsView.querySelector<HTMLElement>('[data-seller-automation-form]')
+  const prior = state.sellerAutomation?.policy || defaultSellerAutomationPolicy()
+  if (!container) return structuredClone(prior)
+  const servicesText = container.querySelector<HTMLTextAreaElement>('[data-seller-services]')?.value || '[]'
+  const defaultsText = container.querySelector<HTMLTextAreaElement>('[data-seller-defaults]')?.value || '{}'
+  let allowedServices: SellerAutomationPolicy['allowedServices']
+  let defaults: SellerAutomationPolicy['defaults']
+  try { allowedServices = JSON.parse(servicesText) } catch { throw new Error(sx('Authorized services must be valid JSON.', '授权服务必须是有效 JSON。')) }
+  try { defaults = JSON.parse(defaultsText) } catch { throw new Error(sx('Commercial defaults must be valid JSON.', '商业默认模板必须是有效 JSON。')) }
+  if (!Array.isArray(allowedServices) || !defaults || Array.isArray(defaults) || typeof defaults !== 'object') throw new Error(sx('Seller automation JSON fields have the wrong shape.', '卖家自动化 JSON 字段格式错误。'))
+  const limit = (key: keyof SellerAutomationPolicy['limits'], fallback: number) => Number(container.querySelector<HTMLInputElement>(`[data-seller-limit="${key}"]`)?.value || fallback)
+  const attestation = (key: keyof SellerAutomationPolicy['attestations']) => Boolean(container.querySelector<HTMLInputElement>(`[data-seller-attestation="${key}"]`)?.checked)
+  const roots = [...container.querySelectorAll<HTMLInputElement>('[data-seller-root-id]')].map((input) => prior.allowedRoots.find((root) => root.id === input.dataset.sellerRootId) || { id: input.dataset.sellerRootId || `root_${Date.now()}`, path: input.value, kinds: ['resources', 'endpoint', 'api_bridge'] })
+  return {
+    ...prior,
+    enabled: Boolean(container.querySelector<HTMLInputElement>('[data-seller-enabled]')?.checked),
+    enabledKinds: [...container.querySelectorAll<HTMLInputElement>('[data-seller-kind]:checked')].map((input) => input.dataset.sellerKind || '').filter(Boolean),
+    allowedRoots: roots,
+    allowedServices,
+    defaults,
+    attestations: { pricing: attestation('pricing'), rights: attestation('rights'), runtime: attestation('runtime'), apiUsage: attestation('apiUsage') },
+    limits: { maxBatch: limit('maxBatch', 10), maxFiles: limit('maxFiles', 200), maxBundleBytes: prior.limits?.maxBundleBytes || 1024 ** 3, maxConcurrentRuns: limit('maxConcurrentRuns', 1) },
+    autoInstallImages: vmProviderAvailable && Boolean(container.querySelector<HTMLInputElement>('[data-seller-auto-install]')?.checked),
   }
 }
 
@@ -16498,6 +16873,10 @@ const authGate = createAuthGate(app, {
   invoke,
   language: () => state.language,
   setLanguage,
+  onVisibilityChange: (visible) => {
+    authPresentationActive = visible
+    applyUserPreferences()
+  },
   onAuthenticated: async (authState) => {
     setLocalActivityFixturesEnabled(false)
     await openWorkspace(authState)

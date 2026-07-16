@@ -23,6 +23,7 @@ type AuthGateOptions = {
   invoke: Invoke
   language: () => 'en' | 'zh'
   setLanguage?: (language: 'en' | 'zh') => void
+  onVisibilityChange?: (visible: boolean) => void
   onAuthenticated: (state: CloudAuthState) => Promise<void>
   onSignedOut?: (state: CloudAuthState) => void
   onTestWorkspace?: () => Promise<void>
@@ -54,6 +55,16 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
   const element = document.createElement('section')
   element.className = 'auth-gate'
   element.setAttribute('aria-live', 'polite')
+  let authGateVisible: boolean | undefined
+
+  function setAuthGateVisible(visible: boolean) {
+    if (authGateVisible === visible) return
+    options.onVisibilityChange?.(visible)
+    element.classList.toggle('hidden', !visible)
+    authGateVisible = visible
+  }
+
+  setAuthGateVisible(true)
   root.append(element)
 
   let view: AuthView = 'login'
@@ -94,7 +105,7 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
     featureObserver = undefined
     clearFeatureAutoScroll()
     const workspaceSession = status.phase === 'authenticated' || status.phase === 'needs_pin'
-    element.classList.toggle('hidden', testWorkspacePreview || (workspaceSession && !forceOpen && !workspaceOpening && !workspaceError))
+    setAuthGateVisible(!(testWorkspacePreview || (workspaceSession && !forceOpen && !workspaceOpening && !workspaceError)))
     if (workspaceOpening) {
       element.innerHTML = authFrame(`<div class="auth-loading"><span class="auth-spinner"></span><p>${c.openingWorkspace}</p></div>`, c)
       bind()
@@ -784,7 +795,7 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
       workspaceOpening = false
       workspaceError = ''
       testWorkspacePreview = preview
-      element.classList.add('hidden')
+      setAuthGateVisible(false)
       clearFeatureAutoScroll()
     }).catch((error) => {
       if (generation !== workspaceTransitionGeneration) return
