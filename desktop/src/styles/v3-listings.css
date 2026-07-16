@@ -202,7 +202,15 @@
 .v3-shared-file-name strong,
 .v3-shared-file-name small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v3-shared-file-name small { margin-top: 3px; color: var(--color-text-tertiary); font-size: 9px; }
-.v3-shared-file-row > button { justify-self: end; }
+.v3-shared-file-row > button {
+  justify-self: end;
+  height: 30px;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 9px;
+  line-height: 1;
+}
 
 @media (max-width: 1100px) {
   .v3-seller-grid,

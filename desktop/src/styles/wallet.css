@@ -724,6 +724,7 @@ button.wallet-modal-scrim:focus-visible {
   min-height: 0;
   overflow: auto;
   padding: 0 18px 16px;
+  scrollbar-gutter: stable;
 }
 
 .wallet-modal-footer {

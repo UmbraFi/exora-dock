@@ -28,6 +28,16 @@
 .v3-api-review-form .v3-api-route-row.editable { grid-template-columns: 86px minmax(0, 1fr) auto; }
 .v3-api-review-form .v3-api-route-row.editable > span { grid-template-columns: minmax(140px, .65fr) minmax(160px, 1fr); }
 .v3-api-review-form .v3-api-route-row.editable > span > input:last-child { grid-column: 1 / -1; }
+.v3-api-review-form .v3-api-route-row.editable > button,
+.v3-api-price-component > button,
+.v3-api-price-row > button {
+  height: 30px;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 9px;
+  line-height: 1;
+}
 .v3-api-review-warning { display: grid; gap: 4px; margin: 0 16px 16px; padding: 11px 12px; border: 1px solid rgb(226 154 50 / .24); border-radius: 10px; color: #a86714; background: rgb(226 154 50 / .07); }
 .v3-api-review-warning span { font: 9px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; }
 .v3-api-review-warning small { color: var(--color-text-tertiary); }
@@ -187,6 +197,8 @@
 .v3-api-route-row.editable > span { display: grid; grid-template-columns: minmax(120px, .7fr) minmax(160px, 1fr); gap: 7px; }
 .v3-api-route-row.editable input { padding: 8px 9px; }
 .v3-api-route-row.editable > button { padding: 7px 10px; }
+.v3-api-pricing-list { display: grid; gap: 8px; }
+.v3-api-price-row { display: grid; grid-template-columns: repeat(2, minmax(100px, .8fr)) repeat(2, minmax(130px, 1fr)) minmax(110px, .8fr) minmax(130px, 1fr) auto; gap: 8px; align-items: center; }
 .v3-api-method { display: inline-grid; place-items: center; min-width: 50px; height: 24px; padding: 0 6px; border-radius: 6px; color: var(--color-primary); background: rgb(var(--color-primary-rgb) / .1); font-size: 8px; font-weight: 850; letter-spacing: .04em; }
 .v3-api-method.method-get { color: #167b58; background: rgb(32 159 109 / .1); }
 .v3-api-method.method-delete { color: #bb3548; background: rgb(211 78 92 / .1); }

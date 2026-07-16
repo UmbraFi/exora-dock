@@ -13,6 +13,7 @@ for (const file of electronScripts(__dirname)) {
 
 const renderer = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.ts'), 'utf8')
 const electronMain = fs.readFileSync(path.join(__dirname, 'main.cjs'), 'utf8')
+const electronCloudAuth = fs.readFileSync(path.join(__dirname, 'cloud-auth.cjs'), 'utf8')
 const electronIpc = fs.readFileSync(path.join(__dirname, 'ipc.cjs'), 'utf8')
 const activityFixtures = fs.readFileSync(path.join(__dirname, '..', 'src', 'activity-fixtures.ts'), 'utf8')
 const viteConfig = fs.readFileSync(path.join(__dirname, '..', 'vite.config.ts'), 'utf8')
@@ -80,7 +81,9 @@ for (const marker of ['function renderV3SellerSurface', "['listings', 'Listings'
 for (const marker of ['function renderV3HostScanButton', 'async function runV3WindowsHostScan()', "state.v3HostScanProgress = { phase: 'hardware', percent: 0 }", 'state.v3HostScanProgress = undefined']) {
   if (!renderer.includes(marker)) throw new Error(`Recoverable host scan UI missing: ${marker}`)
 }
-if (!renderer.includes('if (agentQuery) agentQuery.disabled = state.busy || builtInBuyerInputLocked()')) throw new Error('Busy state must tolerate the retired Agent composer without locking global controls')
+for (const retiredMarker of ['type ChatThread', 'type WorkRun', 'type OrderPlan', 'agentQuery', 'market-rail-card', 'transaction-detail-sidebar', 'project-folder-menu', 'legacy_market_enabled']) {
+  if (renderer.includes(retiredMarker) || rendererI18n.includes(retiredMarker) || rendererStyles.includes(retiredMarker)) throw new Error(`Retired Desktop feature returned: ${retiredMarker}`)
+}
 if (!electronMain.includes("new RequestTimeoutError('Hardware scan timed out after 60 seconds.")) throw new Error('Host scan must have an overall timeout')
 if (!electronMain.includes('fetchAndReadWithTimeout(target, requestOptions, 15000')) throw new Error('Host bandwidth probes must time out while reading response bodies')
 const tabOrder = ["['listings', 'Listings',", "['vm', 'VM',", "['resources', 'Resources',", "['endpoint', 'Endpoint',", "['api_bridge', 'API Bridge',"].map((marker) => renderer.indexOf(marker))
@@ -92,7 +95,9 @@ for (const marker of ['const vmProviderAvailable = !isMacPlatform', "tab === 'vm
 if (!rendererStyles.includes("#app[data-vm-provider='false'] .seller-automation-attestations label:has(> [data-seller-auto-install])")) throw new Error('macOS must hide automatic VM image downloads')
 if (!electronMain.includes('authorizeCommand: (command) => assertDesktopCommandSupported(command, process.platform)')) throw new Error('Desktop IPC must apply platform capability authorization')
 if (!electronIpc.includes('await authorizeCommand(command, payload, event)')) throw new Error('IPC authorization must run before command handlers')
-const sideSwitch = renderer.slice(renderer.indexOf('function selectOrderSide('), renderer.indexOf('function sellerMonitorActive('))
+const sideSwitchStart = renderer.indexOf('function selectOrderSide(')
+const sideSwitchEnd = renderer.indexOf("app.querySelectorAll<HTMLButtonElement>('[data-order-side-tab]')", sideSwitchStart)
+const sideSwitch = renderer.slice(sideSwitchStart, sideSwitchEnd)
 if (!sideSwitch || sideSwitch.includes('v3SellerTab =')) throw new Error('Buyer/Seller history switching must not change the main workspace tab')
 for (const marker of ['function renderV3UnifiedListingsPageV2', "v3ListingMode: 'buyer'", 'data-v3-listing-mode="buyer"', 'data-v3-listing-mode="seller"', 'v3-listing-search-switch', 'v3-listing-agent-hint', 'data-v3-listing-agent-copy', 'v3-listing-agent-details', 'listings.agentPrompt', 'data-listing-owner=', 'data-v3-consumer-form="api"', 'data-v3-consumer-form="compute"', 'data-v3-consumer-action="purchase-download"']) {
   if (!renderer.includes(marker)) throw new Error(`Unified marketplace surface missing: ${marker}`)
@@ -122,7 +127,7 @@ if (!listingStyles || listingStyles.includes('linear-gradient')) throw new Error
 for (const marker of ['function renderV3HistoryRow', 'function renderV3ActivityDetail', 'data-v3-history-record', 'data-v3-activity-detail']) {
   if (!renderer.includes(marker)) throw new Error(`V3 history surface missing: ${marker}`)
 }
-for (const marker of ['type V3ActivityBucket', 'V3_ACTIVITY_RETENTION_MS', 'function v3ActivityDisplayRecords', 'function archiveV3ActivityDisplay', 'data-v3-history-toggle', 'data-v3-active-order-list', 'v3-history-pull-drawer', 'v3-history-drawer-label', 'activityArchiveMarkers']) {
+for (const marker of ['type V3ActivityBucket', 'V3_ACTIVITY_RETENTION_MS', 'function v3ActivityDisplayRecords', 'data-v3-history-toggle', 'data-v3-active-order-list', 'v3-history-pull-drawer', 'v3-history-drawer-label', 'activityArchiveMarkers']) {
   if (!renderer.includes(marker)) throw new Error(`V3 current/history lifecycle missing: ${marker}`)
 }
 for (const retiredMarker of ['data-v3-history-bucket=', 'data-v3-history-drop-target', 'v3-history-bucket-switch']) {
@@ -152,7 +157,7 @@ for (const marker of ["productKind: 'compute'", "productKind: 'download'", "prod
 for (const marker of ['function syncV3SellerTabsVisibility()', 'state.settingsOpen || Boolean(state.selectedV3ActivitySessionId)']) {
   if (!renderer.includes(marker)) throw new Error(`V3 activity detail tab visibility missing: ${marker}`)
 }
-const decisionPanel = renderer.slice(renderer.indexOf('function renderDecisionPanel()'), renderer.indexOf('function renderOrderPlanDecision('))
+const decisionPanel = renderer.slice(renderer.indexOf('function renderDecisionPanel()'), renderer.indexOf('function renderViewTabs()'))
 if (!decisionPanel.includes('syncV3SellerTabsVisibility()') || decisionPanel.includes("fields.sellerSurfaceTabs.classList.remove('hidden')")) {
   throw new Error('Activity detail rendering must hide the main workspace tabs')
 }
@@ -284,7 +289,7 @@ for (const marker of ['provider_environment_catalog', 'provider_environment_down
   if (!renderer.includes(marker) && !fs.readFileSync(path.join(__dirname, 'main.cjs'), 'utf8').includes(marker)) throw new Error(`Windows WSL provider surface missing: ${marker}`)
 }
 for (const marker of ['safeStorage.encryptString', 'safeStorage.decryptString']) {
-	if (!electronMain.includes(marker)) throw new Error(`secure Cloud session support missing: ${marker}`)
+	if (!electronCloudAuth.includes(marker)) throw new Error(`secure Cloud session support missing: ${marker}`)
 }
 for (const marker of ['account_key_status', 'account_key_save', 'account_key_delete', 'payload?.input?.key']) {
 	if (electronMain.includes(marker)) throw new Error(`retired account-wide key support remains: ${marker}`)

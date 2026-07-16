@@ -7,13 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/exora-dock/exora-dock/internal/wallet"
 )
 
 type TokenFile struct {
@@ -48,60 +45,6 @@ type DeviceTokenResult struct {
 	ClientKind string `json:"clientKind,omitempty"`
 	CloudToken string `json:"cloudToken"`
 	ExpiresAt  string `json:"expiresAt"`
-}
-
-type AccountWallet struct {
-	ID              string                 `json:"accountWalletId,omitempty"`
-	AccountID       string                 `json:"accountId,omitempty"`
-	Chain           string                 `json:"chain"`
-	Address         string                 `json:"address"`
-	EncryptedBackup wallet.EncryptedBackup `json:"encryptedBackup,omitempty"`
-	Version         int                    `json:"version,omitempty"`
-	BackedUpAt      string                 `json:"backedUpAt,omitempty"`
-	UpdatedAt       string                 `json:"updatedAt,omitempty"`
-}
-
-func PutAccountWallet(ctx context.Context, cloudURL, tokenPath, dockID string, backup wallet.EncryptedBackup, client *http.Client) (AccountWallet, error) {
-	cloudURL = strings.TrimRight(strings.TrimSpace(cloudURL), "/")
-	dockID = strings.TrimSpace(dockID)
-	if cloudURL == "" || dockID == "" {
-		return AccountWallet{}, fmt.Errorf("cloud_url and dock_id required")
-	}
-	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
-	}
-	token, err := LoadToken(tokenPath)
-	if err != nil {
-		return AccountWallet{}, err
-	}
-	var wrapped struct {
-		AccountWallet AccountWallet `json:"accountWallet"`
-	}
-	err = doJSON(ctx, client, http.MethodPut, cloudURL+"/v1/docks/"+url.PathEscape(dockID)+"/account-wallet", token.CloudToken, map[string]any{
-		"chain": "solana", "address": backup.PublicKey, "encryptedBackup": backup,
-		"kdf": backup.KDF, "version": backup.Version,
-	}, &wrapped)
-	return wrapped.AccountWallet, err
-}
-
-func GetAccountWallet(ctx context.Context, cloudURL, tokenPath, dockID string, client *http.Client) (AccountWallet, error) {
-	cloudURL = strings.TrimRight(strings.TrimSpace(cloudURL), "/")
-	dockID = strings.TrimSpace(dockID)
-	if cloudURL == "" || dockID == "" {
-		return AccountWallet{}, fmt.Errorf("cloud_url and dock_id required")
-	}
-	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
-	}
-	token, err := LoadToken(tokenPath)
-	if err != nil {
-		return AccountWallet{}, err
-	}
-	var wrapped struct {
-		AccountWallet AccountWallet `json:"accountWallet"`
-	}
-	err = doJSON(ctx, client, http.MethodGet, cloudURL+"/v1/docks/"+url.PathEscape(dockID)+"/account-wallet", token.CloudToken, nil, &wrapped)
-	return wrapped.AccountWallet, err
 }
 
 func Link(ctx context.Context, cloudURL, tokenPath string, req DeviceLinkRequest, wait time.Duration, client *http.Client) (DeviceLinkResult, DeviceTokenResult, error) {

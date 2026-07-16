@@ -8,14 +8,14 @@ const {
   cleanupLegacyFrontendData,
 } = require('./legacy-frontend-cleanup.cjs')
 
-test('permanently removes only retired frontend data and preserves account and V3 state', async (t) => {
+test('retires frontend references without deleting local user data', async (t) => {
   const fixture = await createFixture(t)
   await cleanupLegacyFrontendData(fixture.options)
 
-  await assert.rejects(fs.access(fixture.paths.legacyConversationsRoot))
-  await assert.rejects(fs.access(fixture.paths.legacyTransactionsRoot))
-  await assert.rejects(fs.access(fixture.paths.localAgentBindingPath))
-  await assert.rejects(fs.access(fixture.paths.localAgentScanPath))
+  await fs.access(fixture.paths.legacyConversationsRoot)
+  await fs.access(fixture.paths.legacyTransactionsRoot)
+  await fs.access(fixture.paths.localAgentBindingPath)
+  await fs.access(fixture.paths.localAgentScanPath)
   await fs.access(fixture.userProjectFile)
   await fs.access(fixture.paths.providerEnvironmentSettingsPath)
 
@@ -42,24 +42,6 @@ test('is idempotent after the completion marker is written', async (t) => {
   const second = await cleanupLegacyFrontendData(fixture.options)
   assert.equal(first.migrated, true)
   assert.deepEqual(second, { migrated: false, alreadyComplete: true })
-})
-
-test('does not write the completion marker when a removal fails', async (t) => {
-  const fixture = await createFixture(t)
-  let calls = 0
-  await assert.rejects(cleanupLegacyFrontendData({
-    ...fixture.options,
-    remove: async (target, options) => {
-      calls += 1
-      if (calls === 2) throw new Error('locked legacy directory')
-      await fs.rm(target, options)
-    },
-  }), /locked legacy directory/)
-  const desktop = await readJson(fixture.paths.desktopStatePath, {})
-  assert.equal(desktop.migrations?.[LEGACY_FRONTEND_CLEANUP_MARKER], undefined)
-
-  const retry = await cleanupLegacyFrontendData(fixture.options)
-  assert.equal(retry.migrated, true)
 })
 
 async function createFixture(t) {

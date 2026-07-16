@@ -44,7 +44,6 @@ type Capability struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 }
-
 type Endpoint struct {
 	Method      string            `json:"method"`
 	Path        string            `json:"path"`
@@ -53,323 +52,54 @@ type Endpoint struct {
 	Query       map[string]string `json:"query,omitempty"`
 }
 
-func Build(listenAddr string, dockID string) Manifest {
-	return buildWithBaseURL(BaseURL(listenAddr), dockID, false)
-}
+func Build(listenAddr, dockID string) Manifest { return BuildWithBaseURL(BaseURL(listenAddr), dockID) }
 
-func BuildLegacy(listenAddr string, dockID string) Manifest {
-	return buildWithBaseURL(BaseURL(listenAddr), dockID, true)
-}
-
-func BuildWithBaseURL(baseURL string, dockID string) Manifest {
-	return buildWithBaseURL(baseURL, dockID, false)
-}
-
-func buildWithBaseURL(baseURL string, dockID string, legacyMarket bool) Manifest {
+func BuildWithBaseURL(baseURL, dockID string) Manifest {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
 		baseURL = "http://127.0.0.1:8080"
 	}
-	executable, _ := os.Executable()
 	if strings.TrimSpace(dockID) == "" {
 		dockID = "local"
 	}
+	executable, _ := os.Executable()
 	mcp := mcpCommand(executable)
-
-	manifest := Manifest{
-		Schema:          SchemaURL,
-		ProtocolVersion: ProtocolVersion,
-		Name:            "Exora Dock",
-		Kind:            "local-capability-dock",
-		DockID:          dockID,
-		BaseURL:         baseURL,
-		HealthURL:       baseURL + "/health",
-		ManifestURL:     baseURL + "/.well-known/exora-dock.json",
-		ProcessID:       os.Getpid(),
-		ExecutablePath:  executable,
-		StartCommand:    startCommand(executable),
-		MCPCommand:      mcp,
-		AgentPrompt:     agentPrompt(legacyMarket),
-		OpenCodeConfig:  OpenCodeConfig(mcp),
-		RESTFallback:    RESTFallback(baseURL),
+	return Manifest{
+		Schema: SchemaURL, ProtocolVersion: ProtocolVersion, Name: "Exora Dock", Kind: "local-capability-dock",
+		DockID: dockID, BaseURL: baseURL, HealthURL: baseURL + "/health", ManifestURL: baseURL + "/.well-known/exora-dock.json",
+		ProcessID: os.Getpid(), ExecutablePath: executable, StartCommand: startCommand(executable), MCPCommand: mcp,
+		AgentPrompt: AgentPrompt(), OpenCodeConfig: OpenCodeConfig(mcp), RESTFallback: RESTFallback(baseURL),
 		Capabilities: []Capability{
-			{
-				Name:        "mcp.stdio",
-				Description: "Default local agent entrypoint. Launch this Dock as a stdio MCP server with exora-dock mcp.",
-			},
-			{
-				Name:        "resources.search",
-				Description: "Search local Exora Dock resource listings for rentable compute, GPU, VPS, datasets, repositories, projects, and storage.",
-			},
-			{
-				Name:        "task_flow.server_to_docker",
-				Description: "Start and resume end-to-end server-to-Docker flows with realtime provider quote requests, user approval, Docker execution, and artifacts.",
-			},
-			{
-				Name:        "automation.codex",
-				Description: "Supervise buyer, seller, and verifier AutomationRuns through a locally installed Codex app-server and narrowly scoped run capabilities.",
-			},
-			{
-				Name:        "automation.wake.v2",
-				Description: "Claim typed Cloud WakeJobs without accepting arbitrary remote methods, paths, or owner credentials.",
-			},
-			{
-				Name:        "agent_cards.search",
-				Description: "Read local Agent Cards and search published Exora Agent Cards without exposing Dock credentials.",
-			},
-			{
-				Name:        "provider.docker",
-				Description: "Provider-side Docker quote and job protocol. Docker execution is disabled until the provider explicitly enables a white-listed image policy.",
-			},
-			{
-				Name:        "tasks.create",
-				Description: "Create capability task drafts that can move through quote, approval, execution, artifact, and resume states.",
-			},
-			{
-				Name:        "approvals.queue",
-				Description: "Create and inspect human approval requests for sensitive agent actions.",
-			},
-			{
-				Name:        "delegations.create",
-				Description: "Create bounded authority for an agent to lease resources under user limits.",
-			},
-			{
-				Name:        "leases.create",
-				Description: "Create and inspect leases for approved resources.",
-			},
+			{Name: "mcp.stdio", Description: "Authoritative MCP entrypoint for the four V3 marketplace categories."},
+			{Name: "marketplace.vm.ssh", Description: "Purchase exclusive VM minutes and transfer code or results through lease-scoped SSH, SFTP, or rsync."},
+			{Name: "marketplace.resources.s3", Description: "Purchase immutable Resources and receive a time-limited S3-compatible DownloadGrant."},
+			{Name: "marketplace.endpoint.tunnel", Description: "Invoke seller-authorized private services through an online Dock tunnel."},
+			{Name: "marketplace.api_bridge.cloud", Description: "Invoke declared public HTTPS APIs through the Cloud Gateway without requiring Dock online."},
 		},
 		Endpoints: map[string]Endpoint{
-			"health": {
-				Method:      "GET",
-				Path:        "/health",
-				URL:         baseURL + "/health",
-				Description: "Check whether this local Exora Dock is online.",
-			},
-			"manifest": {
-				Method:      "GET",
-				Path:        "/.well-known/exora-dock.json",
-				URL:         baseURL + "/.well-known/exora-dock.json",
-				Description: "Fetch this machine-readable discovery manifest.",
-			},
-			"mcp.stdio": {
-				Method:      "STDIO",
-				Path:        "",
-				URL:         "",
-				Description: "Launch the MCP server with the manifest mcpCommand. REST endpoints are fallback/debug surfaces.",
-			},
-			"resources.search": {
-				Method:      "GET",
-				Path:        "/v1/resources",
-				URL:         baseURL + "/v1/resources",
-				Description: "Search agent-leaseable resources. For GPU VRAM searches, use type=gpu&minVramGb=<GB>.",
-				Query: map[string]string{
-					"type":        "Optional resource type: vps, gpu, dataset, repository, project, or storage.",
-					"q":           "Optional free-text query across name, summary, description, tags, provider, and specs.",
-					"provider":    "Optional provider public key or provider id.",
-					"region":      "Optional region filter matching spec.region.",
-					"minVramGb":   "Optional integer minimum GPU VRAM in GB.",
-					"minGpuCount": "Optional integer minimum GPU count.",
-				},
-			},
-			"resource.detail": {
-				Method:      "GET",
-				Path:        "/v1/resources/{id}",
-				URL:         baseURL + "/v1/resources/{id}",
-				Description: "Fetch a single resource listing by id.",
-			},
-			"tasks.create": {
-				Method:      "POST",
-				Path:        "/v1/tasks",
-				URL:         baseURL + "/v1/tasks",
-				Description: "Create a task draft for a remote capability job.",
-			},
-			"task_flow.start": {
-				Method:      "POST",
-				Path:        "/v1/agent/search-sellers",
-				URL:         baseURL + "/v1/agent/search-sellers",
-				Description: "Start a task flow by posting requireRealtimeQuotes=true, createSelectionRequest=true, and a taskTemplate with Docker settings under requirements.docker.",
-			},
-			"automation_runs.list": {
-				Method:      "GET",
-				Path:        "/v1/automation-runs",
-				URL:         baseURL + "/v1/automation-runs",
-				Description: "List durable Codex AutomationRuns. Owner authorization is required.",
-			},
-			"local_agents.list": {
-				Method:      "GET",
-				Path:        "/v1/local-agents",
-				URL:         baseURL + "/v1/local-agents",
-				Description: "Inspect safe local Codex installation, authentication, roles, workspace, and automation settings.",
-			},
-			"negotiations.create": {
-				Method:      "POST",
-				Path:        "/v1/negotiations",
-				URL:         baseURL + "/v1/negotiations",
-				Description: "Start signed buyer-to-seller discussion requests so seller agents can quote or reject before an order is created.",
-			},
-			"negotiations.list": {
-				Method:      "GET",
-				Path:        "/v1/negotiations",
-				URL:         baseURL + "/v1/negotiations",
-				Description: "List pre-order seller negotiations and their quote/rejection status.",
-			},
-			"order_plans.from_negotiations": {
-				Method:      "POST",
-				Path:        "/v1/order-plans/from-negotiations",
-				URL:         baseURL + "/v1/order-plans/from-negotiations",
-				Description: "Create a pending seller-selection order plan from quoted negotiations. This does not select, approve, or pay.",
-			},
-			"agent_cards.mine": {
-				Method:      "GET",
-				Path:        "/v1/agent-cards/mine",
-				URL:         baseURL + "/v1/agent-cards/mine",
-				Description: "Read local buyer/seller Agent Cards and safe diagnostics summary.",
-			},
-			"agent_cards.search": {
-				Method:      "GET",
-				Path:        "/v1/agent-cards/search",
-				URL:         baseURL + "/v1/agent-cards/search",
-				Description: "Search published Agent Cards through Cloud when configured, with local fallback.",
-			},
-			"order_plans.list": {
-				Method:      "GET",
-				Path:        "/v1/order-plans",
-				URL:         baseURL + "/v1/order-plans",
-				Description: "List durable task-flow/order-plan records, including realtime candidate states and progress events.",
-			},
-			"order_plans.detail": {
-				Method:      "GET",
-				Path:        "/v1/order-plans/{id}",
-				URL:         baseURL + "/v1/order-plans/{id}",
-				Description: "Fetch one task-flow/order-plan record.",
-			},
-			"provider.quote_requests": {
-				Method:      "POST",
-				Path:        "/v1/provider/quote-requests",
-				URL:         baseURL + "/v1/provider/quote-requests",
-				Description: "Provider endpoint for signed realtime Docker quote requests from buyer Docks.",
-			},
-			"provider.negotiations": {
-				Method:      "POST",
-				Path:        "/v1/provider/negotiations",
-				URL:         baseURL + "/v1/provider/negotiations",
-				Description: "Provider endpoint for signed buyer discussion requests that seller agents can quote or reject.",
-			},
-			"provider.jobs": {
-				Method:      "POST",
-				Path:        "/v1/provider/jobs",
-				URL:         baseURL + "/v1/provider/jobs",
-				Description: "Provider endpoint for signed approved Docker job submissions.",
-			},
-			"provider.job_status": {
-				Method:      "GET",
-				Path:        "/v1/provider/jobs/{id}",
-				URL:         baseURL + "/v1/provider/jobs/{id}",
-				Description: "Read provider-side Docker job status.",
-			},
-			"tasks.status": {
-				Method:      "GET",
-				Path:        "/v1/tasks/{id}",
-				URL:         baseURL + "/v1/tasks/{id}",
-				Description: "Read a task/order ledger entry for status and resume context.",
-			},
-			"tasks.artifact_manifest": {
-				Method:      "GET",
-				Path:        "/v1/tasks/{id}/artifacts",
-				URL:         baseURL + "/v1/tasks/{id}/artifacts",
-				Description: "Fetch artifact metadata for a completed task.",
-			},
-			"approvals.create": {
-				Method:      "POST",
-				Path:        "/v1/approvals",
-				URL:         baseURL + "/v1/approvals",
-				Description: "Create a human approval request for a task action.",
-			},
-			"approvals.list": {
-				Method:      "GET",
-				Path:        "/v1/approvals",
-				URL:         baseURL + "/v1/approvals",
-				Description: "List approval requests, optionally filtered by status, user, agent, or task.",
-			},
-			"delegations.create": {
-				Method:      "POST",
-				Path:        "/v1/delegations",
-				URL:         baseURL + "/v1/delegations",
-				Description: "Create a user-approved delegation envelope for an agent.",
-			},
-			"leases.create": {
-				Method:      "POST",
-				Path:        "/v1/leases",
-				URL:         baseURL + "/v1/leases",
-				Description: "Lease a resource under an existing delegation envelope.",
-			},
+			"health":    {Method: "GET", Path: "/health", URL: baseURL + "/health", Description: "Check whether this Dock is online."},
+			"manifest":  {Method: "GET", Path: "/.well-known/exora-dock.json", URL: baseURL + "/.well-known/exora-dock.json", Description: "Read this discovery manifest."},
+			"mcp.stdio": {Method: "STDIO", Description: "Launch the MCP server with mcpCommand."},
+			"catalog":   {Method: "GET", Path: "/v3/catalog/listings", URL: baseURL + "/v3/catalog/listings", Description: "Search the four authoritative marketplace categories."},
+			"gateway":   {Method: "POST", Path: "/v3/gateway/{listingId}/{route}", URL: baseURL + "/v3/gateway/{listingId}/{route}", Description: "Invoke a declared Endpoint or API Bridge route."},
 		},
 		LastSeen: time.Now().UTC().Format(time.RFC3339),
 	}
-	if !legacyMarket {
-		stripLegacyMarketDiscovery(&manifest)
-	}
-	return manifest
 }
 
 func AgentPrompt() string {
-	return agentPrompt(false)
-}
-
-func agentPrompt(legacyMarket bool) string {
-	if legacyMarket {
-		return "Find my local Exora Dock by reading %LOCALAPPDATA%\\ExoraDock\\agent-discovery.json, start the stdio MCP server from mcpCommand, then use its Exora tools instead of guessing HTTP endpoints. Never approve, select, pay, reveal credentials, or call Docker directly. Use baseUrl REST only as fallback."
-	}
-	return "Find my local Exora Dock by reading %LOCALAPPDATA%\\ExoraDock\\agent-discovery.json and start the stdio MCP server from mcpCommand. Transaction AutomationRuns expose only the typed Exora V2 run tools authorized by their run capability. Read transaction state and allowed actions before proposing a mutation. Never approve, move funds, reveal credentials, expand workspace access, or call arbitrary local routes."
-}
-
-func stripLegacyMarketDiscovery(manifest *Manifest) {
-	if manifest == nil {
-		return
-	}
-	legacyCapabilities := map[string]bool{
-		"resources.search": true, "task_flow.server_to_docker": true,
-		"delegations.create": true, "leases.create": true,
-	}
-	capabilities := make([]Capability, 0, len(manifest.Capabilities))
-	for _, capability := range manifest.Capabilities {
-		if !legacyCapabilities[capability.Name] {
-			capabilities = append(capabilities, capability)
-		}
-	}
-	manifest.Capabilities = capabilities
-	for _, name := range []string{
-		"resources.search", "resource.detail", "task_flow.start", "negotiations.create", "negotiations.list",
-		"order_plans.from_negotiations", "order_plans.list", "order_plans.detail", "provider.negotiations",
-		"delegations.create", "leases.create",
-	} {
-		delete(manifest.Endpoints, name)
-	}
+	return "Read the local Exora Dock discovery manifest and start its stdio MCP server. Use only vm, resources, endpoint, and api_bridge. VM files move through SSH/SFTP/rsync; Resources use DownloadGrants. Never publish a seller draft, reveal credentials, or invent a category."
 }
 
 func OpenCodeConfig(command []string) map[string]any {
-	return map[string]any{
-		"$schema": "https://opencode.ai/config.json",
-		"mcp": map[string]any{
-			"exora": map[string]any{
-				"type":    "local",
-				"command": command,
-				"enabled": true,
-			},
-		},
-	}
+	return map[string]any{"$schema": "https://opencode.ai/config.json", "mcp": map[string]any{"exora": map[string]any{"type": "local", "command": command, "enabled": true}}}
 }
-
 func RESTFallback(baseURL string) map[string]any {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
 		baseURL = "http://127.0.0.1:8080"
 	}
-	return map[string]any{
-		"baseUrl":  baseURL,
-		"health":   baseURL + "/health",
-		"manifest": baseURL + "/.well-known/exora-dock.json",
-	}
+	return map[string]any{"baseUrl": baseURL, "health": baseURL + "/health", "manifest": baseURL + "/.well-known/exora-dock.json"}
 }
 
 func BaseURL(listenAddr string) string {
@@ -383,8 +113,7 @@ func BaseURL(listenAddr string) string {
 	if !strings.Contains(listenAddr, ":") {
 		return "http://127.0.0.1:" + listenAddr
 	}
-	host, port, err := net.SplitHostPort(listenAddr)
-	if err == nil {
+	if host, port, err := net.SplitHostPort(listenAddr); err == nil {
 		return fmt.Sprintf("http://%s:%s", localHost(host), port)
 	}
 	if strings.HasPrefix(listenAddr, ":") {
@@ -394,11 +123,10 @@ func BaseURL(listenAddr string) string {
 }
 
 func CandidatePaths() []string {
-	var paths []string
+	paths := []string{}
 	if explicit := strings.TrimSpace(os.Getenv("EXORA_DOCK_DISCOVERY_PATH")); explicit != "" {
 		paths = append(paths, explicit)
 	}
-
 	home, _ := os.UserHomeDir()
 	switch runtime.GOOS {
 	case "windows":
@@ -430,7 +158,6 @@ func CandidatePaths() []string {
 	if home != "" {
 		paths = append(paths, filepath.Join(home, ".exora-dock", FileName))
 	}
-
 	return unique(paths)
 }
 
@@ -444,9 +171,8 @@ func Write(manifest Manifest) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	var written []string
-	var failures []string
+	written := []string{}
+	failures := []string{}
 	for _, path := range paths {
 		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", path, err))
@@ -478,7 +204,6 @@ func ReadFirst() (Manifest, string, error) {
 	}
 	return Manifest{}, "", fmt.Errorf("no Exora Dock discovery manifest found")
 }
-
 func localHost(host string) string {
 	host = strings.Trim(strings.TrimSpace(host), "[]")
 	switch host {
@@ -490,31 +215,27 @@ func localHost(host string) string {
 		return host
 	}
 }
-
 func startCommand(executable string) []string {
 	if strings.TrimSpace(executable) == "" {
 		return nil
 	}
 	return []string{executable}
 }
-
 func mcpCommand(executable string) []string {
 	if strings.TrimSpace(executable) == "" {
 		return nil
 	}
 	return []string{executable, "mcp"}
 }
-
 func unique(values []string) []string {
 	seen := map[string]bool{}
-	out := make([]string, 0, len(values))
+	out := []string{}
 	for _, value := range values {
 		value = strings.TrimSpace(value)
-		if value == "" || seen[value] {
-			continue
+		if value != "" && !seen[value] {
+			seen[value] = true
+			out = append(out, value)
 		}
-		seen[value] = true
-		out = append(out, value)
 	}
 	return out
 }
