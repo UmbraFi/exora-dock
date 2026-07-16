@@ -17,6 +17,7 @@ const {
   isTrustedIpcSender,
 } = require('./security.cjs')
 const { cleanupLegacyFrontendData } = require('./legacy-frontend-cleanup.cjs')
+const { RequestTimeoutError, fetchAndReadWithTimeout } = require('./network-timeout.cjs')
 const { SETTINGS_VERSION, normalizeAppSettingsV3, redactDiagnostics } = require('./app-settings.cjs')
 const {
   MAX_RESOURCE_ARCHIVE_BYTES,
@@ -2371,8 +2372,9 @@ async function activity_session(payload = {}) {
   return httpJson('GET', `/v3/activity-sessions/${encodeURIComponent(id)}`, undefined, await localOwnerToken(await dockPaths()))
 }
 
-async function v3Worker(command, input = {}) {
-  return httpJson('POST', `/v3/provider/worker/${encodeURIComponent(command)}`, input, await localOwnerToken(await dockPaths()), { timeoutMs: 180000 })
+async function v3Worker(command, input = {}, options = {}) {
+  const timeoutMs = Number.isFinite(Number(options.timeoutMs)) ? Number(options.timeoutMs) : 180000
+  return httpJson('POST', `/v3/provider/worker/${encodeURIComponent(command)}`, input, await localOwnerToken(await dockPaths()), { timeoutMs })
 }
 async function provider_vm_probe() { return v3Worker('probe_host') }
 async function provider_vm_capacity() { return v3Worker('capacity_check') }
@@ -2408,7 +2410,7 @@ function percentile(values, fraction) {
   return ordered[Math.min(ordered.length - 1, Math.max(0, Math.round((ordered.length - 1) * fraction)))]
 }
 
-async function timedBandwidthProbe(url, direction, durationMs, maxBytes, onProgress = () => undefined) {
+async function timedBandwidthProbe(url, direction, durationMs, maxBytes, onProgress = () => undefined, options = {}) {
   const samples = []
   let transferred = 0
   const startedAt = performance.now()
@@ -2418,13 +2420,15 @@ async function timedBandwidthProbe(url, direction, durationMs, maxBytes, onProgr
     const bytes = Math.min(sizes[Math.min(index, sizes.length - 1)], maxBytes - transferred)
     if (bytes <= 0) break
     const sampleStartedAt = performance.now()
-    const response = direction === 'download'
-      ? await fetchWithTimeout(`${url}?bytes=${bytes}&cache=${Date.now()}-${index}`, { cache: 'no-store' }, 15000)
-      : await fetchWithTimeout(url, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: Buffer.alloc(bytes) }, 15000)
-    if (!response.ok) throw new Error(`network ${direction} probe returned ${response.status}`)
-    let actualBytes = bytes
-    if (direction === 'download') actualBytes = (await response.arrayBuffer()).byteLength
-    else await response.arrayBuffer()
+    const target = direction === 'download' ? `${url}?bytes=${bytes}&cache=${Date.now()}-${index}` : url
+    const requestOptions = direction === 'download'
+      ? { cache: 'no-store', signal: options.signal }
+      : { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: Buffer.alloc(bytes), signal: options.signal }
+    const { body } = await fetchAndReadWithTimeout(target, requestOptions, 15000, async (response) => {
+      if (!response.ok) throw new Error(`network ${direction} probe returned ${response.status}`)
+      return response.arrayBuffer()
+    })
+    const actualBytes = direction === 'download' ? body.byteLength : bytes
     const elapsedMs = Math.max(1, performance.now() - sampleStartedAt)
     transferred += actualBytes
     samples.push((actualBytes * 8 * 1000) / elapsedMs)
@@ -2439,34 +2443,35 @@ async function timedBandwidthProbe(url, direction, durationMs, maxBytes, onProgr
   }
 }
 
-async function measurePublicNetwork(onProgress = () => undefined) {
+async function measurePublicNetwork(onProgress = () => undefined, options = {}) {
   const base = 'https://speed.cloudflare.com'
   const latencySamples = []
   let meta = {}
   onProgress('geolocation', 0)
   try {
-    const metaResponse = await fetchWithTimeout(`${base}/meta`, { cache: 'no-store' }, 8000)
-    if (metaResponse.ok) meta = objectOr(await metaResponse.json())
+    const { response, body } = await fetchAndReadWithTimeout(`${base}/meta`, { cache: 'no-store', signal: options.signal }, 8000, (value) => value.json())
+    if (response.ok) meta = objectOr(body)
   } catch {}
   if (!(meta.clientIp || meta.clientIP) || !(meta.country || meta.city || meta.region)) {
     try {
-      const geoResponse = await fetchWithTimeout('https://api.ip.sb/geoip', { cache: 'no-store', headers: { 'User-Agent': 'ExoraDock/0.1' } }, 8000)
-      if (geoResponse.ok) meta = { ...meta, ...objectOr(await geoResponse.json()) }
+      const { response, body } = await fetchAndReadWithTimeout('https://api.ip.sb/geoip', { cache: 'no-store', headers: { 'User-Agent': 'ExoraDock/0.1' }, signal: options.signal }, 8000, (value) => value.json())
+      if (response.ok) meta = { ...meta, ...objectOr(body) }
     } catch {}
   }
   onProgress('latency', 0)
   for (let i = 0; i < 5; i += 1) {
     const startedAt = performance.now()
-    const response = await fetchWithTimeout(`${base}/__down?bytes=0&cache=${Date.now()}-${i}`, { cache: 'no-store' }, 8000)
-    if (!response.ok) throw new Error(`network latency probe returned ${response.status}`)
-    await response.arrayBuffer()
+    await fetchAndReadWithTimeout(`${base}/__down?bytes=0&cache=${Date.now()}-${i}`, { cache: 'no-store', signal: options.signal }, 8000, async (response) => {
+      if (!response.ok) throw new Error(`network latency probe returned ${response.status}`)
+      return response.arrayBuffer()
+    })
     latencySamples.push(performance.now() - startedAt)
     onProgress('latency', (i + 1) / 5)
   }
   onProgress('download', 0)
-  const download = await timedBandwidthProbe(`${base}/__down`, 'download', 4000, 400 << 20, (progress, detail) => onProgress('download', progress, detail))
+  const download = await timedBandwidthProbe(`${base}/__down`, 'download', 4000, 400 << 20, (progress, detail) => onProgress('download', progress, detail), options)
   onProgress('upload', 0)
-  const upload = await timedBandwidthProbe(`${base}/__up`, 'upload', 3000, 200 << 20, (progress, detail) => onProgress('upload', progress, detail))
+  const upload = await timedBandwidthProbe(`${base}/__up`, 'upload', 3000, 200 << 20, (progress, detail) => onProgress('upload', progress, detail), options)
   const result = {
     publicIp: meta.clientIp || meta.clientIP || meta.ip || '',
     city: meta.city || '',
@@ -2489,32 +2494,40 @@ async function measurePublicNetwork(onProgress = () => undefined) {
 }
 
 async function provider_host_scan(payload = {}) {
+  const timeoutMs = 60000
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(new RequestTimeoutError('Hardware scan timed out after 60 seconds. Check the network connection and try again.')), timeoutMs)
   const emitProgress = (phase, percent, detail = {}) => mainWindow?.webContents.send('exora:v3-progress', { kind: 'host_scan', phase, percent: Math.max(0, Math.min(100, Math.round(percent))), ...detail })
-  emitProgress('hardware', 4)
-  const runtime = await v3Worker('probe_runtime')
-  emitProgress('hardware', 18)
-  const phaseRanges = {
-    geolocation: [18, 28],
-    latency: [28, 40],
-    download: [40, 70],
-    upload: [70, 94],
+  try {
+    emitProgress('hardware', 4)
+    const runtime = await v3Worker('probe_runtime', {}, { timeoutMs: 30000 })
+    emitProgress('hardware', 18)
+    const phaseRanges = {
+      geolocation: [18, 28],
+      latency: [28, 40],
+      download: [40, 70],
+      upload: [70, 94],
+    }
+    const network = await measurePublicNetwork((phase, progress, detail = {}) => {
+      const range = phaseRanges[phase] || [18, 94]
+      emitProgress(phase, range[0] + (range[1] - range[0]) * progress, detail)
+    }, { signal: controller.signal })
+    if (controller.signal.aborted) throw controller.signal.reason
+    let hardware = {}
+    try { hardware = JSON.parse(String(runtime.result?.hardware || '{}')) } catch {}
+    const gpuLine = String(runtime.result?.gpu || '').split(/\r?\n/).find(Boolean) || ''
+    const [gpuName, gpuUUID, gpuMemoryMiB, gpuFreeMiB, driverVersion] = gpuLine.split(',').map((item) => item.trim())
+    const measuredAt = new Date().toISOString()
+    const result = { ...runtime.result, hardware, gpu: gpuName ? { name: gpuName, uuid: gpuUUID, memoryMiB: Number(gpuMemoryMiB), freeMemoryMiB: Number(gpuFreeMiB), driverVersion } : undefined, network, measuredAt, scanReason: String(payload?.input?.reason || 'manual') }
+    const paths = await dockPaths()
+    emitProgress('saving', 96)
+    await ensurePersistenceLayout(paths)
+    await writeJsonAtomic(paths.providerHostSnapshotPath, { version: 1, measuredAt, result })
+    emitProgress('complete', 100)
+    return { result, measuredAt }
+  } finally {
+    clearTimeout(timeout)
   }
-  const network = await measurePublicNetwork((phase, progress, detail = {}) => {
-    const range = phaseRanges[phase] || [18, 94]
-    emitProgress(phase, range[0] + (range[1] - range[0]) * progress, detail)
-  })
-  let hardware = {}
-  try { hardware = JSON.parse(String(runtime.result?.hardware || '{}')) } catch {}
-  const gpuLine = String(runtime.result?.gpu || '').split(/\r?\n/).find(Boolean) || ''
-  const [gpuName, gpuUUID, gpuMemoryMiB, gpuFreeMiB, driverVersion] = gpuLine.split(',').map((item) => item.trim())
-  const measuredAt = new Date().toISOString()
-  const result = { ...runtime.result, hardware, gpu: gpuName ? { name: gpuName, uuid: gpuUUID, memoryMiB: Number(gpuMemoryMiB), freeMemoryMiB: Number(gpuFreeMiB), driverVersion } : undefined, network, measuredAt, scanReason: String(payload?.input?.reason || 'manual') }
-  const paths = await dockPaths()
-  emitProgress('saving', 96)
-  await ensurePersistenceLayout(paths)
-  await writeJsonAtomic(paths.providerHostSnapshotPath, { version: 1, measuredAt, result })
-  emitProgress('complete', 100)
-  return { result, measuredAt }
 }
 
 function bundledEnvironmentCatalog() {

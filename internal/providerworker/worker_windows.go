@@ -259,10 +259,18 @@ func alignedBlock(size, alignment int) []byte {
 	return raw[offset : offset+size]
 }
 
+func cleanupDiskBenchmarkFiles(dataDir string) {
+	matches, _ := filepath.Glob(filepath.Join(dataDir, ".disk-benchmark-*.tmp"))
+	for _, match := range matches {
+		_ = os.Remove(match)
+	}
+}
+
 func (s Server) benchmarkDisk(ctx context.Context) (map[string]any, error) {
 	if err := os.MkdirAll(s.DataDir, 0700); err != nil {
 		return nil, err
 	}
+	cleanupDiskBenchmarkFiles(s.DataDir)
 	path := filepath.Join(s.DataDir, fmt.Sprintf(".disk-benchmark-%d.tmp", time.Now().UnixNano()))
 	pathPtr, err := windows.UTF16PtrFromString(path)
 	if err != nil {
@@ -272,8 +280,8 @@ func (s Server) benchmarkDisk(ctx context.Context) (map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create benchmark file: %w", err)
 	}
-	defer windows.CloseHandle(handle)
 	defer os.Remove(path)
+	defer windows.CloseHandle(handle)
 
 	const totalBytes = 256 * 1024 * 1024
 	const blockBytes = 4 * 1024 * 1024
