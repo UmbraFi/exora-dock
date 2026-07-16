@@ -39,7 +39,7 @@ Resource → Listing → Lease → Usage → Settlement
 
 ## Repository implementation status
 
-The Go daemon, Electron application, and Cloud implement the V3 marketplace paths for Resources, Endpoint, API Bridge, and managed compute. Version `0.1.0-preview.1` is an unsigned Windows x64 Technical Preview, not an Authenticode-signed production release. Windows may show Unknown publisher or SmartScreen warnings; verify the release SHA-256 before installation.
+The Go daemon, Electron application, and Cloud implement the V3 marketplace paths for Resources, Endpoint, API Bridge, and managed compute. Version `0.1.0-preview.2` is a Technical Preview for Windows x64, macOS ARM64, and Linux x64. Windows is not Authenticode-signed, macOS is ad-hoc signed and not notarized, and Linux packages rely on the signed release index; verify the published SHA-256 before installation.
 
 ## Current local development
 

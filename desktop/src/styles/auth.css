@@ -577,23 +577,6 @@
 .auth-secondary:hover { color: var(--color-primary); border-color: rgb(var(--color-primary-rgb) / .34); background: var(--color-primary-soft); }
 .auth-register-button { margin-top: -3px; }
 
-.auth-test-switch {
-  display: flex;
-  width: 100%;
-  min-height: 38px;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  margin-top: -4px;
-  border: 1px dashed #cfd1df;
-  color: #74788d;
-  background: transparent;
-  box-shadow: none;
-  font-size: 10px;
-}
-.auth-test-switch strong { color: var(--color-primary); font-size: 8px; letter-spacing: .1em; }
-.auth-test-switch:hover { border-color: rgb(var(--color-primary-rgb) / .34); color: var(--color-primary); background: var(--color-primary-soft); box-shadow: none; transform: none; }
-
 .auth-link,
 .auth-switch button,
 .auth-resend button,

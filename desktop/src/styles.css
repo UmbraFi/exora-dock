@@ -2490,20 +2490,6 @@ h3 {
   opacity: 0.35;
 }
 
-.workspace-toolbar .workspace-test-auth-button {
-  width: auto;
-  gap: 5px;
-  padding: 0 8px;
-  border: 1px solid rgb(var(--color-primary-rgb) / .24);
-  color: var(--color-primary);
-}
-
-.workspace-test-auth-button span {
-  font-size: 7px;
-  font-weight: 850;
-  letter-spacing: .08em;
-}
-
 .workspace-toolbar svg {
   display: block;
   height: 16px;

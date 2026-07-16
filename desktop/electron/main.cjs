@@ -9,6 +9,7 @@ const YAML = require('yaml')
 const { autoUpdater } = require('electron-updater')
 const { registerIpcHandlers } = require('./ipc.cjs')
 const { assertDesktopCommandSupported, desktopCapabilities } = require('./platform-capabilities.cjs')
+const { releaseWarningForArtifact, selectReleaseArtifact } = require('./release-manifest.cjs')
 const { createCloudAuth } = require('./cloud-auth.cjs')
 const {
   createAppURLPolicy,
@@ -528,7 +529,7 @@ function releaseVerificationKey() {
 }
 
 async function release_status() {
-  const manifestURL = String(process.env.EXORA_RELEASE_MANIFEST_URL || 'https://github.com/UmbraFi/exora-dock/releases/download/v0.1.0-preview.1/release-manifest.json').trim()
+  const manifestURL = String(process.env.EXORA_RELEASE_MANIFEST_URL || 'https://github.com/UmbraFi/exora-dock/releases/download/v0.1.0-preview.2/release-manifest.json').trim()
   const signatureURL = manifestURL.replace(/release-manifest\.json(?:\?.*)?$/, 'release-manifest.sig')
   const [manifestResponse, signatureResponse] = await Promise.all([fetch(manifestURL), fetch(signatureURL)])
   if (!manifestResponse.ok || !signatureResponse.ok) throw new Error('The signed Technical Preview release manifest is unavailable.')
@@ -540,16 +541,16 @@ async function release_status() {
   const key = crypto.createPublicKey({ key: spki, format: 'der', type: 'spki' })
   if (!crypto.verify(null, encoded, key, signature)) throw new Error('Release manifest signature verification failed.')
   const manifest = JSON.parse(encoded.toString('utf8'))
-  if (manifest.schema !== 'exora.release-manifest.v1' || manifest.platform !== 'windows' || !/^[a-f0-9]{64}$/.test(String(manifest.sha256 || ''))) throw new Error('Release manifest contract is invalid.')
+  const artifact = selectReleaseArtifact(manifest, process.platform, process.arch)
   return {
     currentVersion: String(app.getVersion() || ''),
     latestVersion: String(manifest.version || ''),
     updateAvailable: String(manifest.version || '').replace(/^v/, '') !== String(app.getVersion() || ''),
-    artifact: manifest.artifact,
-    sha256: manifest.sha256,
-    authentiCodeSigned: false,
-    warning: 'Unsigned Technical Preview: Windows may show Unknown publisher or SmartScreen warnings.',
-    downloadURL: new URL(String(manifest.artifact), manifestURL).toString(),
+    artifact: artifact.artifact,
+    sha256: artifact.sha256,
+    authentiCodeSigned: artifact.signing?.scheme === 'authenticode' && artifact.signing?.status === 'signed',
+    warning: releaseWarningForArtifact(artifact),
+    downloadURL: new URL(String(artifact.artifact), manifestURL).toString(),
   }
 }
 

@@ -785,7 +785,10 @@ func (s Server) resetLease(ctx context.Context, input map[string]any) (map[strin
 }
 
 func decodeWindowsOutput(raw []byte) string {
-	if len(raw) >= 2 && raw[1] == 0 {
+	if looksLikeUTF16LE(raw) {
+		if len(raw) >= 2 && raw[0] == 0xff && raw[1] == 0xfe {
+			raw = raw[2:]
+		}
 		words := make([]uint16, 0, len(raw)/2)
 		for i := 0; i+1 < len(raw); i += 2 {
 			words = append(words, uint16(raw[i])|uint16(raw[i+1])<<8)
@@ -793,4 +796,30 @@ func decodeWindowsOutput(raw []byte) string {
 		return string(utf16.Decode(words))
 	}
 	return string(raw)
+}
+
+func looksLikeUTF16LE(raw []byte) bool {
+	if len(raw) < 2 {
+		return false
+	}
+	if raw[0] == 0xff && raw[1] == 0xfe {
+		return true
+	}
+	pairs := len(raw) / 2
+	if pairs > 256 {
+		pairs = 256
+	}
+	oddNulls, evenNulls := 0, 0
+	for i := 0; i < pairs; i++ {
+		if raw[i*2] == 0 {
+			evenNulls++
+		}
+		if raw[i*2+1] == 0 {
+			oddNulls++
+		}
+	}
+	// UTF-16LE command output normally contains ASCII punctuation, digits,
+	// spaces, or CRLF even when its first character is CJK. UTF-8 text does
+	// not contain these alternating NUL bytes.
+	return oddNulls >= 2 && oddNulls*4 >= pairs && oddNulls > evenNulls*2
 }
