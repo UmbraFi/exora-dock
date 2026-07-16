@@ -77,6 +77,12 @@ for (const marker of ['button::before', 'button::after', 'button *', 'background
 for (const marker of ['function renderV3SellerSurface', "['listings', 'Listings',", "['vm', 'VM',", "['resources', 'Resources',", "['endpoint', 'Endpoint',", "['api_bridge', 'API Bridge',", 'function renderV3EndpointAgentPage', 'class="v3-seller-active-bar"', 'class="v3-market-surface v3-seller-surface"']) {
   if (!renderer.includes(marker)) throw new Error(`V3 Electron surface missing: ${marker}`)
 }
+for (const marker of ['function renderV3HostScanButton', 'async function runV3WindowsHostScan()', "state.v3HostScanProgress = { phase: 'hardware', percent: 0 }", 'state.v3HostScanProgress = undefined', 'if (button.dataset.v3Action === \'vm-probe\') return']) {
+  if (!renderer.includes(marker)) throw new Error(`Recoverable host scan UI missing: ${marker}`)
+}
+if (!renderer.includes('if (agentQuery) agentQuery.disabled = next || builtInBuyerInputLocked()')) throw new Error('Global busy state must tolerate the retired Agent composer')
+if (!electronMain.includes("new RequestTimeoutError('Hardware scan timed out after 60 seconds.")) throw new Error('Host scan must have an overall timeout')
+if (!electronMain.includes('fetchAndReadWithTimeout(target, requestOptions, 15000')) throw new Error('Host bandwidth probes must time out while reading response bodies')
 const tabOrder = ["['listings', 'Listings',", "['vm', 'VM',", "['resources', 'Resources',", "['endpoint', 'Endpoint',", "['api_bridge', 'API Bridge',"].map((marker) => renderer.indexOf(marker))
 if (tabOrder.some((index) => index < 0) || tabOrder.some((index, position) => position > 0 && index <= tabOrder[position - 1])) throw new Error('Main workspace tabs must be ordered Listings, VM, Resources, Endpoint, API Bridge')
 if (!renderer.includes("v3SellerTab: 'listings'")) throw new Error('Listings must be the default main workspace tab')

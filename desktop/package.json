@@ -13,7 +13,7 @@
     "preview:desktop": "npm run dev",
     "dev:frontend": "vite --host 127.0.0.1 --port 1420",
     "build:frontend": "tsc && vite build",
-    "build:electron": "node --test electron/app-settings.test.cjs electron/cloud-auth.test.cjs electron/resource-archive.test.cjs electron/legacy-frontend-cleanup.test.cjs electron/platform-capabilities.test.cjs electron/release-manifest.test.cjs electron/ipc.test.cjs && node electron/check.cjs",
+    "build:electron": "node --test electron/app-settings.test.cjs electron/cloud-auth.test.cjs electron/resource-archive.test.cjs electron/legacy-frontend-cleanup.test.cjs electron/platform-capabilities.test.cjs electron/release-manifest.test.cjs electron/ipc.test.cjs electron/network-timeout.test.cjs && node electron/check.cjs",
     "build": "npm run build:frontend && npm run build:electron && electron-builder",
     "build:dmg": "npm run build:frontend && npm run build:electron && electron-builder --mac dmg",
     "build:mac": "npm run build:frontend && npm run build:electron && electron-builder --mac dmg zip --arm64 --publish never -c.mac.identity=- -c.mac.hardenedRuntime=false",

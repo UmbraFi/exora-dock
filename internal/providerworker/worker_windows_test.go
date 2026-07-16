@@ -46,6 +46,25 @@ func TestDecodeWindowsOutputPreservesUTF8(t *testing.T) {
 	}
 }
 
+func TestCleanupDiskBenchmarkFilesRemovesOnlyScanArtifacts(t *testing.T) {
+	root := t.TempDir()
+	stale := filepath.Join(root, ".disk-benchmark-123.tmp")
+	keep := filepath.Join(root, "provider-state.json")
+	if err := os.WriteFile(stale, []byte("stale"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keep, []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cleanupDiskBenchmarkFiles(root)
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale benchmark still exists: %v", err)
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatalf("unrelated provider state was removed: %v", err)
+	}
+}
+
 func (r *recordingRunner) Run(_ context.Context, name string, args ...string) (string, error) {
 	r.calls = append(r.calls, name+" "+strings.Join(args, " "))
 	if strings.Contains(strings.Join(args, " "), "--list --quiet") {

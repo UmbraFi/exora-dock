@@ -1624,9 +1624,9 @@ const fields = {
 const buyerAgentForm = app.querySelector<HTMLFormElement>('[data-buyer-agent-form]')!
 const sellerForm = app.querySelector<HTMLFormElement>('[data-seller-form]')!
 const llmSettingsForm = app.querySelector<HTMLFormElement>('[data-llm-form]')!
-const agentChatForm = app.querySelector<HTMLFormElement>('[data-agent-chat-form]')!
-const agentQuery = app.querySelector<HTMLTextAreaElement>('[data-agent-query]')!
-const agentSendButton = app.querySelector<HTMLButtonElement>('[data-agent-send]')!
+const agentChatForm = app.querySelector<HTMLFormElement>('[data-agent-chat-form]')
+const agentQuery = app.querySelector<HTMLTextAreaElement>('[data-agent-query]')
+const agentSendButton = app.querySelector<HTMLButtonElement>('[data-agent-send]')
 
 fields.sellerSurfaceTabs.addEventListener('click', (event) => {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-v3-seller-tab]')
@@ -7849,7 +7849,7 @@ function renderChatSurface() {
   fields.chatView.classList.toggle('seller-monitor-mode', sellerMonitor)
   fields.chatView.classList.toggle('buyer-first-step-transition', state.buyerFirstStepTransition && state.workOrderSide === 'buyer')
   fields.chatFeed.classList.remove('hidden')
-  agentChatForm.classList.toggle('hidden', sellerEmptySetup || sellerMonitor)
+  agentChatForm?.classList.toggle('hidden', sellerEmptySetup || sellerMonitor)
   renderExternalWorkLockControls()
   resizeAgentComposer()
 }
@@ -7879,6 +7879,7 @@ function rightWorkspaceIsWhite() {
 }
 
 function resizeAgentComposer() {
+  if (!agentQuery) return
   agentQuery.style.height = 'auto'
   const maxHeight = 168
   const nextHeight = Math.min(Math.max(agentQuery.scrollHeight, 38), maxHeight)
@@ -7890,7 +7891,7 @@ function resizeAgentComposer() {
 function updateComposerOverlaySpace() {
   const stack = app.querySelector<HTMLElement>('[data-buyer-entry-stack]')
   if (!stack) return
-  const height = Math.max(agentChatForm.offsetHeight, stack.offsetHeight, 72)
+  const height = Math.max(agentChatForm?.offsetHeight || 0, stack.offsetHeight, 72)
   fields.chatView.style.setProperty('--composer-overlay-height', `${Math.ceil(height)}px`)
 }
 
@@ -8347,6 +8348,28 @@ async function loadV3WindowsEnvironments() {
   renderDecisionPanel()
 }
 
+async function runV3WindowsHostScan() {
+  if (state.v3HostScanning) return
+  state.v3HostScanning = true
+  state.v3HostScanProgress = { phase: 'hardware', percent: 0 }
+  renderDecisionPanel()
+  let reloadEnvironments = false
+  try {
+    const scanned = await invoke<{ result: Record<string, unknown> }>('provider_host_scan')
+    state.v3VMProbe = scanned.result
+    state.v3EnvironmentImagesLoaded = false
+    reloadEnvironments = true
+  } catch (error) {
+    const message = humanizeError(error)
+    showToast(message.includes('unknown desktop command') ? 'Restart Exora Dock to activate the updated Windows provider bridge.' : message)
+  } finally {
+    state.v3HostScanning = false
+    state.v3HostScanProgress = undefined
+    renderDecisionPanel()
+  }
+  if (reloadEnvironments) void loadV3WindowsEnvironments()
+}
+
 let v3ConsumerBalanceRequest: Promise<void> | undefined
 
 function updateV3ConsumerBalanceLabels() {
@@ -8793,6 +8816,16 @@ function v3HostScanPhaseLabel(phase: string) {
   } as Record<string, string>)[phase] || 'Scanning'
 }
 
+function renderV3HostScanButton(hasProbe: boolean) {
+  if (!state.v3HostScanning) {
+    return `<button class="ghost" type="button" data-v3-action="vm-probe">${hasProbe ? 'Scan again' : 'Scan hardware'}</button>`
+  }
+  const progress = state.v3HostScanProgress || { phase: 'hardware', percent: 0 }
+  const percent = Math.max(0, Math.min(100, Math.round(progress.percent)))
+  const label = v3HostScanPhaseLabel(progress.phase)
+  return `<button class="ghost v3-scan-progress-button" type="button" data-v3-action="vm-probe" disabled style="--v3-scan-progress: ${percent}%" aria-label="${escapeAttr(`${label}, ${percent} percent`)}">${percent}% · ${escapeHTML(label)}</button>`
+}
+
 function updateV3HostScanProgressButton() {
   const button = fields.actionView.querySelector<HTMLButtonElement>('[data-v3-action="vm-probe"]')
   const progress = state.v3HostScanProgress
@@ -8942,7 +8975,7 @@ function renderV3VMPage() {
     const step1: V3WizardStepState = state.v3HostScanning ? 'busy' : probe ? 'complete' : 'available'
     const step2: V3WizardStepState = !probe ? 'locked' : state.v3EnvironmentSaving ? 'busy' : environmentReady ? 'complete' : 'available'
     const step3: V3WizardStepState = !environmentReady ? 'locked' : 'available'
-    return `<div class="v3-vm-onboarding v3-application-flow"><section class="v3-console-panel v3-host-scan ${v3WizardStepClass(step1)}"><div class="v3-step-heading"><span>1</span><div><strong>Scan this PC</strong><small>Hardware, available capacity, network speed and public location</small></div><button class="ghost" type="button" data-v3-action="vm-probe" ${state.v3HostScanning ? 'disabled' : ''}>${state.v3HostScanning ? 'Scanning…' : probe ? 'Scan again' : 'Scan hardware'}</button></div>${probe ? `<div class="v3-host-facts"><span><small>Processor</small><strong>${escapeHTML(String(hardware.Cpu || 'Unknown CPU'))}</strong><em>${Number(hardware.Cores || 0)} cores · ${Number(hardware.LogicalProcessors || 0)} threads</em></span><span><small>Memory</small><strong>${memoryGiB.toFixed(0)} GiB</strong><em>${(Number(hardware.FreeMemoryBytes || 0) / 1024 ** 3).toFixed(0)} GiB currently free</em></span><span><small>GPU</small><strong>${escapeHTML(String(gpu.name || 'No NVIDIA GPU detected'))}</strong><em>${gpu.memoryMiB ? `${(Number(gpu.memoryMiB) / 1024).toFixed(0)} GiB VRAM · driver ${escapeHTML(String(gpu.driverVersion || ''))}` : 'CPU environments available'}</em></span><span><small>Storage</small><strong>${freeDiskGiB} GiB free</strong><em>Fixed reservation before listing</em></span><span><small>Network</small><strong>↓ ${Number(network.downloadMbps || 0)} · ↑ ${Number(network.uploadMbps || 0)} Mbps</strong><em>${Number(network.latencyMs || 0)} ms to Exora Cloud</em></span><span><small>Public location</small><strong>${escapeHTML([network.city, network.region, network.country].filter(Boolean).join(', ') || 'Location unavailable')}</strong><em>${escapeHTML(String(network.publicIp || 'IP unavailable'))}</em></span></div>` : '<div class="v3-scan-empty"><strong>Know exactly what can be listed</strong><span>Exora reads capacity locally and measures the route to Exora Cloud. No hardware names need to be entered manually.</span></div>'}</section>
+    return `<div class="v3-vm-onboarding v3-application-flow"><section class="v3-console-panel v3-host-scan ${v3WizardStepClass(step1)}"><div class="v3-step-heading"><span>1</span><div><strong>Scan this PC</strong><small>Hardware, available capacity, network speed and public location</small></div>${renderV3HostScanButton(Boolean(probe))}</div>${probe ? `<div class="v3-host-facts"><span><small>Processor</small><strong>${escapeHTML(String(hardware.Cpu || 'Unknown CPU'))}</strong><em>${Number(hardware.Cores || 0)} cores · ${Number(hardware.LogicalProcessors || 0)} threads</em></span><span><small>Memory</small><strong>${memoryGiB.toFixed(0)} GiB</strong><em>${(Number(hardware.FreeMemoryBytes || 0) / 1024 ** 3).toFixed(0)} GiB currently free</em></span><span><small>GPU</small><strong>${escapeHTML(String(gpu.name || 'No NVIDIA GPU detected'))}</strong><em>${gpu.memoryMiB ? `${(Number(gpu.memoryMiB) / 1024).toFixed(0)} GiB VRAM · driver ${escapeHTML(String(gpu.driverVersion || ''))}` : 'CPU environments available'}</em></span><span><small>Storage</small><strong>${freeDiskGiB} GiB free</strong><em>Fixed reservation before listing</em></span><span><small>Network</small><strong>↓ ${Number(network.downloadMbps || 0)} · ↑ ${Number(network.uploadMbps || 0)} Mbps</strong><em>${Number(network.latencyMs || 0)} ms to Exora Cloud</em></span><span><small>Public location</small><strong>${escapeHTML([network.city, network.region, network.country].filter(Boolean).join(', ') || 'Location unavailable')}</strong><em>${escapeHTML(String(network.publicIp || 'IP unavailable'))}</em></span></div>` : '<div class="v3-scan-empty"><strong>Know exactly what can be listed</strong><span>Exora reads capacity locally and measures the route to Exora Cloud. No hardware names need to be entered manually.</span></div>'}</section>
       <section class="v3-console-panel ${v3WizardStepClass(step2)}" ${step2 === 'locked' ? 'inert aria-disabled="true"' : ''}><div class="v3-step-heading v3-environment-step-heading"><span>2</span><div><strong>Choose an environment</strong><small>${step2 === 'locked' ? 'Complete Step 1 to choose storage and a signed environment' : 'Install and validate a signed, disposable Linux package'}</small></div>${renderV3EnvironmentSaveControls()}</div><div class="v3-environment-list">${images || (state.v3EnvironmentCatalogOffline ? '<div class="v3-scan-empty"><strong>Connect Exora Cloud to load environments</strong><span>The local hardware scan remains available, but signed Ubuntu and CUDA packages require a linked Dock account.</span></div>' : '<p class="empty-copy">Scan this PC to load compatible environments.</p>')}</div></section>
       <form class="v3-console-panel v3-provider-form ${v3WizardStepClass(step3)}" data-v3-form="vm" ${step3 === 'locked' ? 'inert aria-disabled="true"' : ''}><div class="v3-step-heading"><span>3</span><div><strong>Price and submit</strong><small>${step3 === 'locked' ? 'Complete Step 2 to configure pricing' : 'Creates a private Listing draft; publication happens only in Listings'}</small></div><button type="submit" class="v3-direct-publish" ${environmentReady ? '' : 'disabled'}>Submit to Listings</button></div>${renderV3WindowsPricing(recommendedPrice)}<p class="v3-listing-note">Submission saves a private draft and does not publish it.</p></form></div>`
   }
@@ -10496,7 +10529,19 @@ function attachV3SurfaceHandlers() {
     await invoke('provider_environment_update_storage', { input: { rootPath: state.v3EnvironmentRoot, workspaceGiB: state.v3EnvironmentWorkspaceGiB, pricing: { baseFee: state.v3BaseFee, baseFeeEnabled: state.v3BaseFeeEnabled, pricePerMinute: state.v3PricePerMinute, minimumMinutes: state.v3MinimumMinutes, longDiscountAfterMinutes: state.v3LongDiscountAfterMinutes, longDiscountPercent: state.v3LongDiscountPercent, longDiscountMinimumPricePercent: state.v3LongDiscountMinimumPricePercent, longDiscountEnabled: state.v3LongDiscountEnabled } } })
   })))
   fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-image-cloud-unavailable]').forEach((button) => button.addEventListener('click', () => { state.v3SellerError = 'Link this Dock to Exora Cloud to download the signed Ubuntu and CUDA artifacts.'; state.v3EnvironmentCloudOpen = false; renderDecisionPanel() }))
-  action('vm-probe', () => void run(async () => { if (navigator.userAgent.includes('Windows')) { state.v3HostScanning = true; renderDecisionPanel(); try { const scanned = await invoke<{ result: Record<string, unknown> }>('provider_host_scan'); state.v3VMProbe = scanned.result; state.v3EnvironmentImagesLoaded = false; await loadV3WindowsEnvironments() } catch (error) { if (humanizeError(error).includes('unknown desktop command')) throw new Error('Restart Exora Dock to activate the updated Windows provider bridge.'); throw error } finally { state.v3HostScanning = false; renderDecisionPanel() } return } const probe = await invoke<{ result: Record<string, unknown> }>('provider_vm_probe'); state.v3VMProbe = probe.result; const domains = await invoke<{ result: { domains?: Array<Record<string, unknown>> } }>('provider_vm_domains'); state.v3VMDomains = domains.result.domains || []; renderDecisionPanel() }))
+  action('vm-probe', () => {
+    if (navigator.userAgent.includes('Windows')) {
+      void runV3WindowsHostScan()
+      return
+    }
+    void run(async () => {
+      const probe = await invoke<{ result: Record<string, unknown> }>('provider_vm_probe')
+      state.v3VMProbe = probe.result
+      const domains = await invoke<{ result: { domains?: Array<Record<string, unknown>> } }>('provider_vm_domains')
+      state.v3VMDomains = domains.result.domains || []
+      renderDecisionPanel()
+    })
+  })
   fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-image-pick]').forEach((button) => button.addEventListener('click', () => {
     state.v3SelectedEnvironmentImageId = button.dataset.v3ImagePick
     state.v3VMTemplate = undefined
@@ -12846,9 +12891,11 @@ function builtInBuyerInputLocked() {
 function renderExternalWorkLockControls() {
   if (state.workOrderSide === 'seller') {
     fields.externalWorkLock.classList.add('hidden')
-    agentQuery.disabled = state.busy
-    agentSendButton.disabled = state.busy
-    agentQuery.placeholder = 'Message the bound seller Agent...'
+    if (agentQuery) {
+      agentQuery.disabled = state.busy
+      agentQuery.placeholder = 'Message the bound seller Agent...'
+    }
+    if (agentSendButton) agentSendButton.disabled = state.busy
     return
   }
   app.querySelectorAll<HTMLButtonElement>('.composer-mcp-copy-button').forEach((button) => {
@@ -12867,9 +12914,11 @@ function renderExternalWorkLockControls() {
     fields.externalWorkTakeoverButton.disabled = state.busy
     fields.externalWorkTakeoverButton.setAttribute('title', t('externalWork.takeoverTitle'))
   }
-  agentQuery.disabled = state.busy || locked
-  agentSendButton.disabled = state.busy || locked
-  agentQuery.placeholder = locked ? agentComposerLockedPlaceholder() : agentComposerPlaceholder()
+  if (agentQuery) {
+    agentQuery.disabled = state.busy || locked
+    agentQuery.placeholder = locked ? agentComposerLockedPlaceholder() : agentComposerPlaceholder()
+  }
+  if (agentSendButton) agentSendButton.disabled = state.busy || locked
 }
 
 function mergeOrderSide(thread: WorkThread, side: OrderSide) {
@@ -14468,7 +14517,7 @@ async function takeOverExternalWork() {
     renderExternalWorkLockControls()
     await refreshWorkspace({ quiet: true })
     showToast(t('toast.buyerControlRestored'))
-    agentQuery.focus()
+    agentQuery?.focus()
   } catch (error) {
     showToast(humanizeError(error))
   } finally {
@@ -14892,12 +14941,12 @@ function startNewConversation(folder: ProjectFolder = defaultWorkProjectFolder()
   state.expandedProjectFolderPaths.add(projectPathKey(folder.path))
   scheduleSaveAppSettings()
   setActiveView('chat')
-  agentQuery.value = ''
+  if (agentQuery) agentQuery.value = ''
   createChatThread({ title: nextDraftTaskTitle(folder), status: 'draft', projectPath: folder.path })
   state.selectedId = undefined
   state.pinStep = undefined
   renderAll()
-  window.setTimeout(() => agentQuery.focus(), 0)
+  window.setTimeout(() => agentQuery?.focus(), 0)
 }
 
 function activeChatThread() {
@@ -15017,9 +15066,10 @@ function setBusy(next: boolean) {
     if (button.dataset.windowAction) return
     if (button.dataset.toolbarAction === 'toggle-sidebar') return
     if (button.dataset.action === 'close-cart') return
+    if (button.dataset.v3Action === 'vm-probe') return
     button.disabled = next
   })
-  agentQuery.disabled = next || builtInBuyerInputLocked()
+  if (agentQuery) agentQuery.disabled = next || builtInBuyerInputLocked()
   renderExternalWorkLockControls()
   renderChromeControls()
 }
@@ -16860,6 +16910,7 @@ async function bootstrapWorkspace() {
     if (!payload || typeof payload !== 'object') return
     const event = payload as Partial<V3ImageProgress & V3HostScanProgress & V3AssetProgress> & { kind?: string }
     if (event.kind === 'host_scan' && event.phase && typeof event.percent === 'number') {
+      if (!state.v3HostScanning) return
       state.v3HostScanProgress = { phase: event.phase, percent: event.percent, bytes: event.bytes, samples: event.samples }
       updateV3HostScanProgressButton()
       return
