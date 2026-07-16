@@ -16,9 +16,9 @@ Consumer Agent → Consumer Dock MCP
 
 The canonical specification is available in:
 
-- [Chinese V3.2 whitepaper](./docs/WHITEPAPER.md)
+- [中文 V3.2 白皮书](./docs/WHITEPAPER.md)
 - [English V3.2 whitepaper](./docs/WHITEPAPER.en.md)
-- [Architecture boundaries of the four core projects](./docs/CORE_APPLICATION_BOUNDARIES.md)
+- [四个核心项目的架构边界](./docs/CORE_APPLICATION_BOUNDARIES.md)
 
 V3.2 centers on:
 

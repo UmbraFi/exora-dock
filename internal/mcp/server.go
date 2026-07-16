@@ -255,7 +255,7 @@ func (s *Server) callToolInner(ctx context.Context, name string, args map[string
 	case "exora.search_products":
 		query := url.Values{}
 		copyStringArg(query, args, "q")
-		copyStringArg(query, args, "kind")
+		copyStringArg(query, args, "applicationSource")
 		return s.proxy(ctx, http.MethodGet, "/v3/catalog/listings", query, nil)
 	case "exora.get_product_manifest":
 		listingID := firstString(args, "listingId")
@@ -322,16 +322,6 @@ func (s *Server) callToolInner(ctx context.Context, name string, args map[string
 			delete(body, forbidden)
 		}
 		return s.proxy(ctx, http.MethodPost, "/v3/provider/api-bridge-drafts", nil, body)
-	case "exora.invoke_api_bridge":
-		listingID := firstString(args, "listingId")
-		operationID := firstString(args, "operationId")
-		if listingID == "" || operationID == "" || firstString(args, "idempotencyKey") == "" {
-			return errorResult("listingId, operationId, and idempotencyKey required", nil), nil
-		}
-		if _, ok := args["maxChargeAtomic"]; !ok {
-			return errorResult("maxChargeAtomic required", nil), nil
-		}
-		return s.proxy(ctx, http.MethodPost, "/v3/invocations", nil, args)
 	case "exora.get_my_agent_card":
 		return s.proxy(ctx, http.MethodGet, "/v1/agent-cards/mine", nil, nil)
 	case "exora.search_agent_cards":
@@ -1854,14 +1844,14 @@ func strictObjectSchema(properties map[string]any, required []string) map[string
 
 func toolDefinitions() []toolDefinition {
 	return []toolDefinition{
-		{Name: "exora.search_products", Title: "Search Exora Products", Description: "Browse the same published listing catalog shown in Exora Dock.", InputSchema: strictObjectSchema(map[string]any{"q": stringProp("Optional title or description query."), "kind": stringProp("Optional compute, download, or api_operation kind.")}, nil)},
+		{Name: "exora.search_products", Title: "Search Exora Products", Description: "Browse the same four-project published catalog shown in Exora Dock.", InputSchema: strictObjectSchema(map[string]any{"q": stringProp("Optional title or description query."), "applicationSource": stringProp("Optional vm, resources, endpoint, or api_bridge project.")}, nil)},
 		{Name: "exora.get_product_manifest", Title: "Get Product Manifest", Description: "Read a published listing, its manifest, price, availability, and isolation disclosure.", InputSchema: strictObjectSchema(map[string]any{"listingId": stringProp("Published listing id.")}, []string{"listingId"})},
 		{Name: "exora.estimate_purchase", Title: "Estimate Purchase", Description: "Estimate the authoritative charge, balance, and approval requirement before spending.", InputSchema: strictObjectSchema(map[string]any{"listingId": stringProp("Published listing id."), "durationMinutes": integerProp("Positive whole minutes for compute products.")}, []string{"listingId"})},
-		{Name: "exora.purchase_compute_minutes", Title: "Purchase Compute Minutes", Description: "Reserve funds and provision a KVM or disclosed managed WSL lease through the canonical consumer API.", InputSchema: strictObjectSchema(map[string]any{"listingId": stringProp("Published compute listing id."), "durationMinutes": integerProp("Positive whole minutes."), "idempotencyKey": stringProp("Stable retry key."), "maxChargeAtomic": integerProp("Maximum authorized USDC atomic charge."), "approvalId": stringProp("Approved over-budget request id, when required."), "activitySessionId": stringProp("Stable history grouping id."), "sshPublicKey": stringProp("Required OpenSSH public key installed in the guest; the private key must remain local.")}, []string{"listingId", "durationMinutes", "idempotencyKey", "maxChargeAtomic", "sshPublicKey"})},
+		{Name: "exora.purchase_compute_minutes", Title: "Purchase VM Minutes", Description: "Reserve funds and provision a VM Lease. Code and results move only through Lease SSH/SFTP/rsync.", InputSchema: strictObjectSchema(map[string]any{"listingId": stringProp("Published VM listing id."), "durationMinutes": integerProp("Positive whole minutes."), "idempotencyKey": stringProp("Stable retry key."), "maxChargeAtomic": integerProp("Maximum authorized USDC atomic charge."), "approvalId": stringProp("Approved over-budget request id, when required."), "activitySessionId": stringProp("Stable history grouping id."), "sshPublicKey": stringProp("Required OpenSSH public key installed in the guest; the private key must remain local.")}, []string{"listingId", "durationMinutes", "idempotencyKey", "maxChargeAtomic", "sshPublicKey"})},
 		{Name: "exora.extend_compute_minutes", Title: "Extend Compute Minutes", Description: "Purchase additional whole minutes for an active lease.", InputSchema: strictObjectSchema(map[string]any{"purchaseId": stringProp("Original compute purchase id."), "durationMinutes": integerProp("Additional whole minutes."), "idempotencyKey": stringProp("Stable retry key."), "maxChargeAtomic": integerProp("Maximum authorized charge."), "approvalId": stringProp("Approved over-budget request id, when required.")}, []string{"purchaseId", "durationMinutes", "idempotencyKey", "maxChargeAtomic"})},
-		{Name: "exora.purchase_download", Title: "Purchase Download", Description: "Charge once and issue a non-transferable DownloadGrant for an asset or model.", InputSchema: strictObjectSchema(map[string]any{"listingId": stringProp("Published download listing id."), "idempotencyKey": stringProp("Stable retry key."), "maxChargeAtomic": integerProp("Maximum authorized charge."), "approvalId": stringProp("Approved over-budget request id, when required."), "activitySessionId": stringProp("Stable history grouping id.")}, []string{"listingId", "idempotencyKey", "maxChargeAtomic"})},
+		{Name: "exora.purchase_download", Title: "Purchase Resources", Description: "Charge once and issue a non-transferable DownloadGrant for one fixed Resources version stored in S3. It is never mounted into a VM.", InputSchema: strictObjectSchema(map[string]any{"listingId": stringProp("Published Resources listing id."), "idempotencyKey": stringProp("Stable retry key."), "maxChargeAtomic": integerProp("Maximum authorized charge."), "approvalId": stringProp("Approved over-budget request id, when required."), "activitySessionId": stringProp("Stable history grouping id.")}, []string{"listingId", "idempotencyKey", "maxChargeAtomic"})},
 		{Name: "exora.create_download_transfer", Title: "Create Download Transfer", Description: "Issue a short-lived resumable transfer URL from an active DownloadGrant without charging again.", InputSchema: strictObjectSchema(map[string]any{"grantId": stringProp("Active download grant id.")}, []string{"grantId"})},
-		{Name: "exora.invoke_operation", Title: "Invoke Marketplace Operation", Description: "Invoke a paid API operation with the same idempotency, maximum charge, budget, approval, and ledger path as the Desktop.", InputSchema: strictObjectSchema(map[string]any{"listingId": stringProp("Published API listing id."), "operationId": stringProp("Declared operation id."), "idempotencyKey": stringProp("Stable retry key."), "maxChargeAtomic": integerProp("Maximum authorized charge."), "approvalId": stringProp("Approved request id when required."), "activitySessionId": stringProp("Stable history grouping id."), "query": objectProp("Query parameters."), "headers": objectProp("Safe request headers."), "body": objectProp("JSON request body.")}, []string{"listingId", "operationId", "idempotencyKey", "maxChargeAtomic"})},
+		{Name: "exora.invoke_operation", Title: "Invoke Marketplace Operation", Description: "Invoke a paid operation using the reviewed OpenAPI contract and deterministic adapter.", InputSchema: strictObjectSchema(map[string]any{"listingId": stringProp("Published API listing id."), "operationId": stringProp("Declared operation id."), "idempotencyKey": stringProp("Stable retry key."), "maxChargeAtomic": integerProp("Maximum authorized charge."), "approvalId": stringProp("Approved request id when required."), "activitySessionId": stringProp("Stable history grouping id."), "arguments": objectProp("Operation arguments validated against the published contract.")}, []string{"listingId", "operationId", "idempotencyKey", "maxChargeAtomic"})},
 		{Name: "exora.get_lease", Title: "Get Lease", Description: "Read lease state, expiry, backend disclosure, and current guest capability.", InputSchema: strictObjectSchema(map[string]any{"leaseId": stringProp("Lease id.")}, []string{"leaseId"})},
 		{Name: "exora.release_lease", Title: "Release Lease", Description: "End an active lease and request provider reset. Voluntary early release has no refund.", InputSchema: strictObjectSchema(map[string]any{"leaseId": stringProp("Lease id.")}, []string{"leaseId"})},
 		{Name: "exora.get_usage", Title: "Get Marketplace Usage", Description: "Read an active lease or the account's append-only marketplace ledger.", InputSchema: strictObjectSchema(map[string]any{"leaseId": stringProp("Optional lease id; omit for account ledger.")}, nil)},
@@ -1871,24 +1861,13 @@ func toolDefinitions() []toolDefinition {
 			InputSchema: strictObjectSchema(map[string]any{
 				"draftId": stringProp("Use the preallocated desktop draft id when supplied; otherwise omit to create."), "expectedVersion": numberProp("Use 0 for a preallocated id's first save; use the current version for updates."),
 				"title": stringProp("Seller-facing service title."), "description": stringProp("Service description supplied by the seller."),
-				"bridgeMode": stringProp("transparent for API Bridge or dock_tunnel for a local Endpoint."),
-				"protocol":   stringProp("openapi, openai, generic_http, or sse."), "baseUrl": stringProp("Public HTTPS provider base URL. Omit for dock_tunnel."),
+				"bridgeMode":    stringProp("transparent for API Bridge or dock_tunnel for a local Endpoint."),
+				"interfaceMode": stringProp("passthrough preserves the provider wire format; agent_managed uses a reviewed deterministic adapter."),
+				"protocol":      stringProp("openapi, openai, generic_http, or sse."), "baseUrl": stringProp("Public HTTPS provider base URL. Omit for dock_tunnel."),
 				"healthPath": stringProp("Seller-declared side-effect-free probe path."), "routes": arrayProp("Routes. Each route includes operationId, method, path, displayName, pricing[], and maxChargePerInvocationAtomic when variable-priced."),
+				"contract": objectProp("Complete OpenAPI 3.1 contract."), "adapter": objectProp("exora.adapter.v1 deterministic mappings; omit for passthrough."),
 				"agentNotes": stringProp("Notes for human review."), "unresolvedFields": arrayProp("Fields the agent could not determine."),
-			}, []string{"title", "bridgeMode", "protocol", "healthPath", "routes"}),
-		},
-		{
-			Name: "exora.invoke_api_bridge", Title: "Invoke API Bridge",
-			Description: "Invoke a published API Bridge operation through the same metered transparent Gateway used by HTTP clients.",
-			InputSchema: strictObjectSchema(map[string]any{
-				"listingId": stringProp("Published listing id."), "operationId": stringProp("Declared operation id."),
-				"idempotencyKey":    stringProp("Stable unique key for this logical invocation; reuse it on retries."),
-				"maxChargeAtomic":   integerProp("Maximum authorized USDC atomic charge."),
-				"activitySessionId": stringProp("Stable caller-generated id that groups related invocations into one human history record. Reuse it only for the same resource task."),
-				"query":             objectProp("Optional query parameters."), "headers": objectProp("Optional safe provider request headers."),
-				"body": objectProp("Optional JSON request body."), "artifacts": arrayProp("Optional artifact references."),
-				"maxBudgetAtomic": numberProp("Optional buyer-side USDC atomic budget cap."),
-			}, []string{"listingId", "operationId", "idempotencyKey", "maxChargeAtomic"}),
+			}, []string{"title", "bridgeMode", "interfaceMode", "protocol", "healthPath", "routes", "contract"}),
 		},
 		{
 			Name:        "exora.get_my_agent_card",

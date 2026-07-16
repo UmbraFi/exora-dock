@@ -60,7 +60,7 @@ func TestMCPLegacyMarketToolsRequireExplicitOptIn(t *testing.T) {
 	listed := responseMap(t, server.HandleJSON(context.Background(), []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)))
 	tools := listed["result"].(map[string]any)["tools"].([]any)
 	toolsJSON := mustJSON(t, tools)
-	if len(tools) != 39 || !strings.Contains(toolsJSON, "exora.search_products") || !strings.Contains(toolsJSON, "exora.purchase_compute_minutes") || !strings.Contains(toolsJSON, "exora.purchase_download") || !strings.Contains(toolsJSON, "exora.invoke_operation") || !strings.Contains(toolsJSON, "exora.search_offers") || !strings.Contains(toolsJSON, "exora.run_buyer_work") || !strings.Contains(toolsJSON, "exora.save_api_bridge_draft") || !strings.Contains(toolsJSON, "exora.invoke_api_bridge") {
+	if len(tools) != 38 || !strings.Contains(toolsJSON, "exora.search_products") || !strings.Contains(toolsJSON, "exora.purchase_compute_minutes") || !strings.Contains(toolsJSON, "exora.purchase_download") || !strings.Contains(toolsJSON, "exora.invoke_operation") || !strings.Contains(toolsJSON, "exora.search_offers") || !strings.Contains(toolsJSON, "exora.run_buyer_work") || !strings.Contains(toolsJSON, "exora.save_api_bridge_draft") {
 		t.Fatalf("legacy tools = %#v", tools)
 	}
 }
@@ -145,7 +145,7 @@ func TestMCPFindSellersProxiesNaturalLanguageSearch(t *testing.T) {
 	}
 }
 
-func TestMCPAPIBridgeUsesCanonicalStrictInvocation(t *testing.T) {
+func TestMCPInvokeOperationUsesCanonicalStrictInvocation(t *testing.T) {
 	calls := 0
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
@@ -169,11 +169,11 @@ func TestMCPAPIBridgeUsesCanonicalStrictInvocation(t *testing.T) {
 	}))
 	defer ts.Close()
 	server := NewServer(Options{BaseURL: ts.URL, AgentToken: "agent", LegacyMarket: true})
-	missing := responseMap(t, server.HandleJSON(context.Background(), []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"exora.invoke_api_bridge","arguments":{"listingId":"lst","operationId":"op"}}}`)))
+	missing := responseMap(t, server.HandleJSON(context.Background(), []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"exora.invoke_operation","arguments":{"listingId":"lst","operationId":"op"}}}`)))
 	if !strings.Contains(mustJSON(t, missing), "idempotencyKey") {
 		t.Fatalf("missing validation=%#v", missing)
 	}
-	response := responseMap(t, server.HandleJSON(context.Background(), []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"exora.invoke_api_bridge","arguments":{"listingId":"lst","operationId":"op","idempotencyKey":"invoke-one","maxChargeAtomic":500}}}`)))
+	response := responseMap(t, server.HandleJSON(context.Background(), []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"exora.invoke_operation","arguments":{"listingId":"lst","operationId":"op","idempotencyKey":"invoke-one","maxChargeAtomic":500,"arguments":{"message":"hello"}}}}`)))
 	if strings.Contains(mustJSON(t, response), `"isError":true`) {
 		t.Fatalf("response=%#v", response)
 	}

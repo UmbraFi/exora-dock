@@ -1,14 +1,24 @@
 package sellerdraft
 
-import "time"
+import (
+	"strings"
+	"time"
+)
+
+type ApplicationSource string
 
 const (
+	ApplicationVM        ApplicationSource = "vm"
+	ApplicationResources ApplicationSource = "resources"
+	ApplicationEndpoint  ApplicationSource = "endpoint"
+	ApplicationAPIBridge ApplicationSource = "api_bridge"
+
 	SchemaVersion = "seller-draft-run.v1"
 
-	KindVM        = "vm"
-	KindResources = "resources"
-	KindEndpoint  = "endpoint"
-	KindAPIBridge = "api_bridge"
+	KindVM        = string(ApplicationVM)
+	KindResources = string(ApplicationResources)
+	KindEndpoint  = string(ApplicationEndpoint)
+	KindAPIBridge = string(ApplicationAPIBridge)
 
 	StatusQueued        = "queued"
 	StatusDiscovering   = "discovering"
@@ -26,6 +36,16 @@ const (
 	CandidateTTL = 30 * time.Minute
 	RecordTTL    = 365 * 24 * time.Hour
 )
+
+func ParseApplicationSource(value string) (ApplicationSource, bool) {
+	source := ApplicationSource(strings.TrimSpace(value))
+	switch source {
+	case ApplicationVM, ApplicationResources, ApplicationEndpoint, ApplicationAPIBridge:
+		return source, true
+	default:
+		return "", false
+	}
+}
 
 type AllowedRoot struct {
 	ID          string   `json:"id"`

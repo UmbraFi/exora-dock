@@ -13,7 +13,13 @@
 
 .v3-activity-detail[data-status="needs_attention"] { --activity-warning: 196 61 75; }
 
-.action-view:has(.v3-activity-detail) { margin-top: 0; }
+.action-view:has(.v3-activity-detail) { margin-top: 0; overflow-x: hidden; overflow-y: overlay; scrollbar-color: auto; scrollbar-gutter: auto; scrollbar-width: auto; }
+.action-view:has(.v3-activity-detail)::-webkit-scrollbar { width: 3px; height: 3px; }
+.action-view:has(.v3-activity-detail)::-webkit-scrollbar-track,
+.action-view:has(.v3-activity-detail)::-webkit-scrollbar-corner { background: transparent; }
+.action-view:has(.v3-activity-detail)::-webkit-scrollbar-thumb { border: 0; border-radius: 999px; background: var(--scrollbar-thumb); }
+.action-view:has(.v3-activity-detail)::-webkit-scrollbar-button,
+.action-view:has(.v3-activity-detail)::-webkit-scrollbar-button:single-button { display: none; width: 0; height: 0; }
 .app-shell .main-workspace:has(.v3-activity-detail)::after {
   position: absolute;
   z-index: 7;

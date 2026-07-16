@@ -9,6 +9,9 @@ function registerIpcHandlers(ipcMain, groups, options = {}) {
   const authorizeCommand = typeof options.authorizeCommand === 'function'
     ? options.authorizeCommand
     : () => undefined
+  const timeoutForCommand = typeof options.timeoutForCommand === 'function'
+    ? options.timeoutForCommand
+    : () => 0
 
   ipcMain.handle(channel, async (event, command, payload = {}) => {
     if (!validateSender(event)) {
@@ -18,7 +21,20 @@ function registerIpcHandlers(ipcMain, groups, options = {}) {
       throw new Error(`unknown desktop command: ${String(command)}`)
     }
     await authorizeCommand(command, payload, event)
-    return handlers[command](payload, event)
+    const operation = Promise.resolve().then(() => handlers[command](payload, event))
+    const timeoutMs = Math.max(0, Number(timeoutForCommand(command, payload, event)) || 0)
+    if (!timeoutMs) return operation
+    let timer
+    const deadline = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error(`Desktop command ${command} timed out after ${Math.round(timeoutMs / 1000)} seconds. The interface has been released; retry when the service is available.`)
+        error.code = 'IPC_COMMAND_TIMEOUT'
+        reject(error)
+      }, timeoutMs)
+      timer.unref?.()
+    })
+    try { return await Promise.race([operation, deadline]) }
+    finally { clearTimeout(timer) }
   })
 
   return handlers

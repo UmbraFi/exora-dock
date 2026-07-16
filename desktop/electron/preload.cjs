@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron')
+const { contextBridge, ipcRenderer, webUtils } = require('electron')
 
 function argValue(name) {
   const prefix = `--${name}=`
@@ -17,6 +17,10 @@ const exoraBridge = Object.freeze({
       return Promise.reject(new Error('Desktop command must be a non-empty string.'))
     }
     return ipcRenderer.invoke('exora:invoke', command, payload ?? {})
+  },
+  getPathForFile(file) {
+    if (!file) return ''
+    return webUtils.getPathForFile(file)
   },
   onV3Progress(callback) {
     if (typeof callback !== 'function') return () => undefined

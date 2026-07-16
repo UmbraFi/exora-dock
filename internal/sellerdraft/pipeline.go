@@ -43,7 +43,7 @@ func (s *Service) runResources(ctx context.Context, runID string, policy SellerA
 	manifest := provenanceManifest(runID, policy, combinedFingerprint(candidates), mapValue(normalized, "specification"))
 	manifest["archiveFormat"], manifest["sourceCount"], manifest["sha256"], manifest["sizeBytes"] = "zip", len(candidates), checksum, size
 	productPayload := map[string]any{
-		"idempotencyKey": runID + "-product", "productKind": "download", "title": normalized["title"],
+		"idempotencyKey": runID + "-product", "productKind": "download", "applicationSource": ApplicationResources, "title": normalized["title"],
 		"description": normalized["description"], "manifest": manifest,
 	}
 	var productResponse struct {
@@ -302,7 +302,7 @@ func (s *Service) runVM(ctx context.Context, runID string, policy SellerAutomati
 	manifest["capacitySnapshot"], manifest["reservation"] = capacity, reservation
 	manifest["networkSnapshot"] = network
 	manifest["reservationExpiresAt"] = expiresAt.Format(time.RFC3339Nano)
-	productID, err := s.createGenericProduct(ctx, runID, "compute", normalized, manifest)
+	productID, err := s.createGenericProduct(ctx, runID, ApplicationVM, "compute", normalized, manifest)
 	if err != nil {
 		return err
 	}
@@ -479,7 +479,7 @@ func (s *Service) runEndpoint(ctx context.Context, runID string, policy SellerAu
 	if err := s.step(runID, StatusCreatingDraft, 75, "Creating a reviewed Endpoint draft and private Listing"); err != nil {
 		return err
 	}
-	result, err := s.createServiceApplication(ctx, runID, policy, candidate, normalized, saved.EndpointID, "dock_tunnel", "none", "", "")
+	result, err := s.createServiceApplication(ctx, runID, policy, candidate, normalized, saved.EndpointID, "dock_tunnel", authType, header, secret)
 	if err != nil {
 		return err
 	}
@@ -551,7 +551,7 @@ func (s *Service) createServiceApplication(ctx context.Context, runID string, po
 	}
 	payload := map[string]any{
 		"idempotencyKey": runID + "-import", "draftId": draftID, "draftVersion": version, "reviewReceipt": receipt,
-		"authType": authType, "apiKeyHeader": header, "secret": secret, "price": normalized["price"], "limits": normalized["limits"],
+		"price": normalized["price"], "limits": normalized["limits"],
 		"sellerPolicyReceipt": Receipt(policy), "creationActor": "agent", "draftRunId": runID,
 		"sourceFingerprint": candidate.SourceFingerprint, "mcpConnection": run.Request.MCPConnectionID,
 	}
@@ -560,7 +560,11 @@ func (s *Service) createServiceApplication(ctx context.Context, runID string, po
 		path = "/v3/provider/endpoint-imports"
 		payload["endpointId"] = endpointID
 		payload["localConnectivityPassed"] = true
+		payload["credentialConfigured"] = authType == "none" || strings.TrimSpace(secret) != ""
 	} else {
+		payload["authType"] = authType
+		payload["apiKeyHeader"] = header
+		payload["secret"] = secret
 		payload["materialFingerprint"] = candidate.SourceFingerprint
 	}
 	var imported struct {
@@ -573,12 +577,12 @@ func (s *Service) createServiceApplication(ctx context.Context, runID string, po
 	return RunResult{ProductID: imported.Product.ProductID, ListingID: imported.Listing.ListingID, DraftID: draftID}, nil
 }
 
-func (s *Service) createGenericProduct(ctx context.Context, runID, kind string, normalized, manifest map[string]any) (string, error) {
+func (s *Service) createGenericProduct(ctx context.Context, runID string, source ApplicationSource, kind string, normalized, manifest map[string]any) (string, error) {
 	var response struct {
 		Product cloudProduct `json:"product"`
 	}
 	err := s.cloud.JSON(ctx, http.MethodPost, "/v3/provider/products", map[string]any{
-		"idempotencyKey": runID + "-product", "productKind": kind, "title": normalized["title"], "description": normalized["description"], "manifest": manifest,
+		"idempotencyKey": runID + "-product", "productKind": kind, "applicationSource": source, "title": normalized["title"], "description": normalized["description"], "manifest": manifest,
 	}, &response)
 	if err != nil {
 		return "", err
