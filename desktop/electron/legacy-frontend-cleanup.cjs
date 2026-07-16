@@ -1,4 +1,3 @@
-const fs = require('node:fs/promises')
 const { SETTINGS_VERSION, pickAppSettingsV3 } = require('./app-settings.cjs')
 
 const LEGACY_FRONTEND_CLEANUP_MARKER = 'legacyFrontendCleanupV2'
@@ -28,7 +27,6 @@ async function cleanupLegacyFrontendData(options = {}) {
   const paths = options.paths || {}
   const readJson = options.readJson
   const writeJson = options.writeJson
-  const remove = options.remove || ((target, settings) => fs.rm(target, settings))
   const now = options.now || (() => new Date())
   if (typeof readJson !== 'function' || typeof writeJson !== 'function') {
     throw new Error('Legacy frontend cleanup requires JSON read/write helpers.')
@@ -37,15 +35,6 @@ async function cleanupLegacyFrontendData(options = {}) {
   const desktopState = objectOr(await readJson(paths.desktopStatePath, {}))
   if (desktopState.migrations?.[LEGACY_FRONTEND_CLEANUP_MARKER]) {
     return { migrated: false, alreadyComplete: true }
-  }
-
-  for (const target of [
-    paths.legacyConversationsRoot,
-    paths.legacyTransactionsRoot,
-    paths.localAgentBindingPath,
-    paths.localAgentScanPath,
-  ].filter(Boolean)) {
-    await remove(target, { recursive: true, force: true })
   }
 
   const settingsDocument = objectOr(await readJson(paths.appSettingsPath, {}))

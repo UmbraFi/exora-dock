@@ -20,6 +20,12 @@ const { cleanupLegacyFrontendData } = require('./legacy-frontend-cleanup.cjs')
 const { RequestTimeoutError, fetchAndReadWithTimeout } = require('./network-timeout.cjs')
 const { SETTINGS_VERSION, normalizeAppSettingsV3, redactDiagnostics } = require('./app-settings.cjs')
 const {
+  readAPIBridgeMaterialManifest: readStoredAPIBridgeMaterialManifest,
+  removeAPIBridgeMaterial,
+  withAPIBridgeMaterialMutation,
+  writeJSONAtomically,
+} = require('./api-materials.cjs')
+const {
   MAX_RESOURCE_ARCHIVE_BYTES,
   cleanupResourceArchive,
   cleanupResourceArchiveSync,
@@ -240,8 +246,6 @@ function createIpcHandlerGroups() {
       auth_pin_change,
       auth_pin_reset,
       auth_logout,
-      auth_social_start,
-      auth_social_complete,
     },
     dockRuntime: {
       app_status,
@@ -351,9 +355,6 @@ function createIpcHandlerGroups() {
     walletAndSecurity: {
       wallet_status,
       wallet_spend_policy_save,
-      wallet_create,
-      wallet_unlock,
-      wallet_restore,
       wallet_withdraw,
       security_status,
     },
@@ -417,8 +418,6 @@ async function auth_pin_set(payload) { return cloudAuth.setPIN(payload) }
 async function auth_pin_change(payload) { return cloudAuth.changePIN(payload) }
 async function auth_pin_reset(payload) { return cloudAuth.resetPIN(payload) }
 async function auth_logout() { return cloudAuth.logout() }
-async function auth_social_start(payload) { return cloudAuth.socialStart(payload) }
-async function auth_social_complete(payload) { return cloudAuth.socialComplete(payload) }
 
 async function app_status() {
   const paths = await dockPaths()
@@ -927,10 +926,6 @@ async function wallet_spend_policy_save(payload = {}) {
 	return cloudAuth.apiRequest('PUT', '/v3/account/spend-policy', { enabled, singleLimitAtomic, periodLimitAtomic, periodSeconds: 86400, pin })
 }
 
-async function wallet_create() { throw new Error('Local Solana wallets are retired; Exora now uses platform custody.') }
-async function wallet_unlock() { throw new Error('Local Solana wallets are retired; Exora now uses platform custody.') }
-async function wallet_restore() { throw new Error('Local Solana wallets are retired; Exora now uses platform custody.') }
-
 async function wallet_withdraw(payload) {
   const input = payload?.input ?? {}
   const challengeId = String(input.challengeId || '').trim()
@@ -1016,12 +1011,8 @@ async function dockPaths() {
     desktopStatePath: path.join(rootDir, DESKTOP_STATE_NAME),
     persistenceDir,
     appSettingsPath: path.join(persistenceDir, 'settings', 'settings.json'),
-    localAgentBindingPath: path.join(persistenceDir, 'settings', 'local-agent-binding.json'),
-    localAgentScanPath: path.join(persistenceDir, 'settings', 'local-agent-scan.json'),
     providerHostSnapshotPath: path.join(persistenceDir, 'settings', 'provider-host-snapshot.json'),
     providerEnvironmentSettingsPath: path.join(persistenceDir, 'settings', 'provider-environment.json'),
-    legacyConversationsRoot: path.join(persistenceDir, 'conversations'),
-    legacyTransactionsRoot: path.join(persistenceDir, 'transactions'),
     helperPath,
     wslBrokerPath: resolveBundledBinary('exora-wsl-broker'),
     pidPath: path.join(rootDir, 'exora-dockd.pid'),
@@ -1351,7 +1342,7 @@ function mcpCommandString(helperPath, configPath) {
 }
 
 function agentPrompt() {
-  return 'Find my local Exora Dock by reading the local ExoraDock agent-discovery.json, start the stdio MCP server from mcpCommand, then use its Exora tools instead of guessing HTTP endpoints. MCP is the external local-agent channel; use baseUrl REST only as fallback. For a specific transaction, use the prompt copied from Buyer/Seller so you also receive a workUid.'
+  return 'Read the local ExoraDock agent-discovery.json, start the stdio MCP server from mcpCommand, and use Exora MCP for VM, Resources, Endpoint, and API Bridge workflows. Seller draft tools may prepare drafts only; never publish, submit credentials, or confirm seller rights automatically.'
 }
 
 function opencodeConfigString(helperPath, configPath) {
@@ -1371,564 +1362,40 @@ function opencodeConfigValue(helperPath, configPath) {
   }
 }
 
-async function sellerSettingsFromConfig(paths) {
-  const raw = await readTextOr(paths.configPath, defaultLocalConfig(paths))
-  return sellerSettingsFromYaml(raw)
-}
 
-function sellerSettingsFromYaml(raw) {
-  const value = YAML.parse(raw) || {}
-  const seller = objectOr(value.seller_agent)
-  const provider = objectOr(value.provider)
-  const docker = objectOr(provider.docker)
-  const sellerLLM = roleLLMSettingsFromYaml(value, 'seller_llm')
-  const apiKey = sellerLLM.apiKey
-  const llmBaseUrl = sellerLLM.llmBaseUrl
-  const providerPreset = sellerLLM.providerPreset
-  const requiresApiKey = providerRequiresApiKey(providerPreset, llmBaseUrl)
-  return {
-    enabled: boolAt(seller, 'enabled', false),
-    autoQuote: boolAt(seller, 'auto_quote', true),
-    quotePublishMode: stringAt(seller,'quote_publish_mode',boolAt(seller,'auto_quote',true)?'auto':'manual_review'),
-    autoAcceptLowRisk: boolAt(seller, 'auto_accept_low_risk', boolAt(seller, 'auto_complete_text_tasks', false)),
-    autoCompleteTextTasks: boolAt(seller, 'auto_complete_text_tasks', false),
-    llmBaseUrl,
-    hasApiKey: apiKey !== '' || !requiresApiKey,
-    keyFormat: apiKey === '' && !requiresApiKey ? 'not_required' : apiKeyFormat(apiKey),
-    providerPreset,
-    wireApi: sellerLLM.wireApi,
-    capabilities: sellerLLM.capabilities,
-    researchModel: sellerLLM.researchModel,
-    researchReasoningEffort: sellerLLM.researchReasoningEffort,
-    utilityModel: sellerLLM.utilityModel,
-    utilityReasoningEffort: sellerLLM.utilityReasoningEffort,
-    disableResponseStorage: sellerLLM.disableResponseStorage,
-    providerId: stringAt(seller, 'provider_pubkey', 'local-dev-miner'),
-    quotePrice: numberAt(seller, 'default_quote_price', 0),
-    currency: stringAt(seller, 'default_quote_currency', 'USDC'),
-    estimatedSeconds: integerAt(seller, 'default_estimated_seconds', 60),
-    dockerEnabled: boolAt(docker, 'enabled', false),
-    dockerDefaultImage: stringAt(docker, 'default_image', ''),
-    dockerAllowedImages: arrayAt(docker, 'allowed_images'),
-    dockerNetworkMode: stringAt(docker, 'network_mode', 'none'),
-    dockerAllowedNetworkModes: arrayAt(docker, 'allowed_network_modes', ['none']),
-    dockerAllowGpu: boolAt(docker, 'allow_gpu', false),
-    dockerMaxCpus: numberAt(docker, 'max_cpus', 0),
-    dockerMaxMemoryMb: integerAt(docker, 'max_memory_mb', 0),
-    dockerPullPolicy: stringAt(docker, 'pull_policy', 'missing'),
-  }
-}
 
-async function ensureLLMProfiles(paths) {
-  const state = await readDesktopState(paths)
-  const profiles = Array.isArray(state.llmProfiles) ? state.llmProfiles.map(normalizeStoredLLMProfile).filter(Boolean) : []
-  if (!profiles.length) {
-    const raw = await readTextOr(paths.configPath, defaultLocalConfig(paths))
-    profiles.push(...llmProfilesFromYaml(raw))
-  }
-  state.llmProfiles = profiles
-  const profileIds = new Set(profiles.map((profile) => profile.id))
-  if (!state.llmProfileRoleDefaultsInitialized) {
-    const fallbackBuyer = profileIds.has('default-buyer-api')
-      ? 'default-buyer-api'
-      : profileIds.has('default-api')
-        ? 'default-api'
-        : profiles[0]?.id || ''
-    const fallbackSeller = profileIds.has('default-seller-api')
-      ? 'default-seller-api'
-      : profileIds.has('default-api')
-        ? 'default-api'
-        : fallbackBuyer
-    state.buyerLLMProfileId = state.buyerLLMProfileId || fallbackBuyer
-    state.sellerLLMProfileId = state.sellerLLMProfileId || fallbackSeller
-    state.llmProfileRoleDefaultsInitialized = true
-  }
-  if (state.buyerLLMProfileId && !profileIds.has(state.buyerLLMProfileId)) state.buyerLLMProfileId = ''
-  if (state.sellerLLMProfileId && !profileIds.has(state.sellerLLMProfileId)) state.sellerLLMProfileId = ''
-  if (!profileIds.has(state.activeLLMProfileId)) state.activeLLMProfileId = state.sellerLLMProfileId || state.buyerLLMProfileId || profiles[0]?.id || ''
-  await writeDesktopState(paths, state)
-}
 
-async function llmProfileStatus(paths) {
-  await ensureLLMProfiles(paths)
-  const state = await readDesktopState(paths)
-  const profiles = Array.isArray(state.llmProfiles) ? state.llmProfiles.map(normalizeStoredLLMProfile).filter(Boolean) : []
-  return {
-    profiles: profiles.map((profile) => profileForRenderer(profile, state)),
-    activeProfileId: state.activeLLMProfileId || profiles[0]?.id || '',
-    buyerProfileId: state.buyerLLMProfileId || '',
-    sellerProfileId: state.sellerLLMProfileId || '',
-    keyStorageAvailable: safeStorage.isEncryptionAvailable(),
-  }
-}
 
-function topLevelLLMSettingsFromYaml(value) {
-  const legacyModel = stringAt(value, 'llm_model', 'gpt-5.5')
-  const llmBaseUrl = stringAt(value, 'llm_base_url', 'https://api.openai.com/v1')
-  const providerPreset = normalizeProviderPreset(stringAt(value, 'llm_provider_preset', inferProviderPreset(llmBaseUrl)))
-  const wireApi = normalizeWireApi(stringAt(value, 'llm_wire_api', defaultWireForPreset(providerPreset)))
-  return {
-    llmBaseUrl,
-    apiKey: stringAt(value, 'llm_api_key', ''),
-    providerPreset,
-    wireApi,
-    capabilities: llmCapabilitiesFromYaml(value),
-    researchModel: stringAt(value, 'llm_research_model', legacyModel),
-    researchReasoningEffort: stringAt(value, 'llm_research_reasoning_effort', 'high'),
-    utilityModel: stringAt(value, 'llm_utility_model', legacyModel),
-    utilityReasoningEffort: stringAt(value, 'llm_utility_reasoning_effort', 'low'),
-    disableResponseStorage: boolAt(value, 'llm_disable_response_storage', true),
-  }
-}
 
-function roleLLMSettingsFromYaml(value, key) {
-  const fallback = topLevelLLMSettingsFromYaml(value)
-  const role = objectOr(value[key])
-  if (!roleLLMBlockConfigured(role)) return fallback
-  const llmBaseUrl = stringAt(role, 'base_url', fallback.llmBaseUrl)
-  const providerPreset = normalizeProviderPreset(stringAt(role, 'provider_preset', inferProviderPreset(llmBaseUrl)))
-  const wireApi = normalizeWireApi(stringAt(role, 'wire_api', defaultWireForPreset(providerPreset)))
-  const legacyModel = stringAt(role, 'model', fallback.researchModel)
-  const researchModel = stringAt(role, 'research_model', legacyModel)
-  return {
-    llmBaseUrl,
-    apiKey: stringAt(role, 'api_key', ''),
-    providerPreset,
-    wireApi,
-    capabilities: roleLLMCapabilitiesFromYaml(role, providerPreset, wireApi),
-    researchModel,
-    researchReasoningEffort: stringAt(role, 'research_reasoning_effort', fallback.researchReasoningEffort),
-    utilityModel: stringAt(role, 'utility_model', researchModel),
-    utilityReasoningEffort: stringAt(role, 'utility_reasoning_effort', fallback.utilityReasoningEffort),
-    disableResponseStorage: boolAt(role, 'disable_response_storage', fallback.disableResponseStorage),
-  }
-}
 
-function roleLLMBlockConfigured(role) {
-  return Boolean(
-    stringAt(role, 'base_url', '') ||
-    stringAt(role, 'api_key', '') ||
-    stringAt(role, 'provider_preset', '') ||
-    stringAt(role, 'model', '') ||
-    stringAt(role, 'wire_api', '') ||
-    Object.keys(objectOr(role.capabilities)).length ||
-    Object.keys(objectOr(role.extra_headers)).length ||
-    stringAt(role, 'research_model', '') ||
-    stringAt(role, 'research_reasoning_effort', '') ||
-    stringAt(role, 'utility_model', '') ||
-    stringAt(role, 'utility_reasoning_effort', '') ||
-    role.disable_response_storage === true
-  )
-}
 
-function llmProfilesFromYaml(raw) {
-  const value = YAML.parse(raw) || {}
-  const buyerLLM = roleLLMSettingsFromYaml(value, 'buyer_llm')
-  const sellerLLM = roleLLMSettingsFromYaml(value, 'seller_llm')
-  if (roleLLMBlockConfigured(objectOr(value.buyer_llm)) || roleLLMBlockConfigured(objectOr(value.seller_llm))) {
-    const profiles = [
-      llmProfileFromSettings('default-buyer-api', 'Buyer API', buyerLLM),
-      llmProfileFromSettings('default-seller-api', 'Seller API', sellerLLM),
-    ]
-    return profiles.filter((profile, index) => profiles.findIndex((item) => item.llmBaseUrl === profile.llmBaseUrl && item.researchModel === profile.researchModel) === index)
-  }
-  return [llmProfileFromSettings('default-api', 'Default API', topLevelLLMSettingsFromYaml(value))]
-}
 
-function llmProfileFromSettings(id, name, settings) {
-  const now = new Date().toISOString()
-  const profile = normalizeStoredLLMProfile({
-    id,
-    name,
-    providerPreset: settings.providerPreset,
-    llmBaseUrl: settings.llmBaseUrl,
-    wireApi: settings.wireApi,
-    capabilities: settings.capabilities,
-    researchModel: settings.researchModel,
-    researchReasoningEffort: settings.researchReasoningEffort,
-    utilityModel: settings.utilityModel,
-    utilityReasoningEffort: settings.utilityReasoningEffort,
-    disableResponseStorage: settings.disableResponseStorage,
-    createdAt: now,
-    updatedAt: now,
-  })
-  if (settings.apiKey && safeStorage.isEncryptionAvailable()) {
-    profile.encryptedApiKey = safeStorage.encryptString(settings.apiKey).toString('base64')
-    profile.keyStorage = 'safeStorage'
-  }
-  return profile
-}
 
-function normalizeStoredLLMProfile(input) {
-  const profile = objectOr(input)
-  const now = new Date().toISOString()
-  const id = String(profile.id || '').trim()
-  if (!id) return undefined
-  const llmBaseUrl = String(profile.llmBaseUrl || '').trim() || 'https://api.openai.com/v1'
-  const providerPreset = normalizeProviderPreset(profile.providerPreset || inferProviderPreset(llmBaseUrl))
-  const researchModel = defaultIfBlank(profile.researchModel, 'gpt-5.5')
-  const wireApi = normalizeWireApi(profile.wireApi || defaultWireForPreset(providerPreset))
-  return {
-    id,
-    name: defaultIfBlank(profile.name, 'API Profile'),
-    providerPreset,
-    llmBaseUrl,
-    wireApi,
-    capabilities: Object.keys(objectOr(profile.capabilities)).length ? objectOr(profile.capabilities) : capabilitiesForWire(providerPreset, wireApi),
-    researchModel,
-    researchReasoningEffort: defaultIfBlank(profile.researchReasoningEffort, 'high'),
-    utilityModel: defaultIfBlank(profile.utilityModel, researchModel),
-    utilityReasoningEffort: defaultIfBlank(profile.utilityReasoningEffort, 'low'),
-    disableResponseStorage: profile.disableResponseStorage !== false,
-    encryptedApiKey: String(profile.encryptedApiKey || '').trim() || undefined,
-    keyStorage: profile.keyStorage === 'safeStorage' ? 'safeStorage' : undefined,
-    createdAt: String(profile.createdAt || now),
-    updatedAt: String(profile.updatedAt || now),
-  }
-}
 
-function profileForRenderer(profile, state = {}) {
-  const hasApiKey = Boolean(profile.encryptedApiKey)
-  return {
-    id: profile.id,
-    name: profile.name,
-    providerPreset: profile.providerPreset,
-    llmBaseUrl: profile.llmBaseUrl,
-    wireApi: profile.wireApi,
-    capabilities: profile.capabilities,
-    researchModel: profile.researchModel,
-    researchReasoningEffort: profile.researchReasoningEffort,
-    utilityModel: profile.utilityModel,
-    utilityReasoningEffort: profile.utilityReasoningEffort,
-    disableResponseStorage: profile.disableResponseStorage,
-    hasApiKey,
-    keyFormat: hasApiKey ? apiKeyFormat(decryptLLMProfileKey(profile)) : providerRequiresApiKey(profile.providerPreset, profile.llmBaseUrl) ? 'missing' : 'not_required',
-    useForBuyer: profile.id === state.buyerLLMProfileId,
-    useForSeller: profile.id === state.sellerLLMProfileId,
-    createdAt: profile.createdAt,
-    updatedAt: profile.updatedAt,
-  }
-}
 
-function decryptLLMProfileKey(profile) {
-  if (!profile?.encryptedApiKey) return ''
-  if (profile.keyStorage !== 'safeStorage' || !safeStorage.isEncryptionAvailable()) return ''
-  try {
-    return safeStorage.decryptString(Buffer.from(profile.encryptedApiKey, 'base64'))
-  } catch {
-    return ''
-  }
-}
 
-function llmProfileToSellerInput(profile, current, apiKey) {
-  return {
-    ...current,
-    llmBaseUrl: profile.llmBaseUrl,
-    apiKey,
-    clearApiKey: !apiKey,
-    providerPreset: profile.providerPreset,
-    wireApi: profile.wireApi,
-    capabilities: profile.capabilities,
-    researchModel: profile.researchModel,
-    researchReasoningEffort: profile.researchReasoningEffort,
-    utilityModel: profile.utilityModel,
-    utilityReasoningEffort: profile.utilityReasoningEffort,
-    disableResponseStorage: profile.disableResponseStorage,
-  }
-}
 
-function updateRoleLLMSettingsYaml(raw, profile, apiKey, roles, previousRoles = {}) {
-  const value = objectOr(YAML.parse(raw) || {})
-  if (roles.buyer) value.buyer_llm = llmProfileYamlBlock(profile, apiKey)
-  else if (previousRoles.buyer) delete value.buyer_llm
-  if (roles.seller) value.seller_llm = llmProfileYamlBlock(profile, apiKey)
-  else if (previousRoles.seller) delete value.seller_llm
-  if (roles.buyer || roles.seller) writeTopLevelLLMFields(value, profile, apiKey)
-  return ensureTrailingNewline(YAML.stringify(value))
-}
 
-function llmProfileYamlBlock(profile, apiKey) {
-  return {
-    base_url: String(profile.llmBaseUrl || '').trim(),
-    api_key: String(apiKey || '').trim(),
-    provider_preset: normalizeProviderPreset(profile.providerPreset || inferProviderPreset(profile.llmBaseUrl)),
-    model: defaultIfBlank(profile.researchModel, 'gpt-5.5'),
-    wire_api: normalizeWireApi(profile.wireApi || defaultWireForPreset(profile.providerPreset)),
-    capabilities: capabilitiesToYaml(profile.capabilities || capabilitiesForWire(profile.providerPreset, profile.wireApi)),
-    research_model: defaultIfBlank(profile.researchModel, 'gpt-5.5'),
-    research_reasoning_effort: defaultIfBlank(profile.researchReasoningEffort, 'high'),
-    utility_model: defaultIfBlank(profile.utilityModel, profile.researchModel || 'gpt-5.5'),
-    utility_reasoning_effort: defaultIfBlank(profile.utilityReasoningEffort, 'low'),
-    disable_response_storage: profile.disableResponseStorage !== false,
-  }
-}
 
-function writeTopLevelLLMFields(value, profile, apiKey) {
-  const block = llmProfileYamlBlock(profile, apiKey)
-  value.llm_base_url = block.base_url
-  value.llm_api_key = block.api_key
-  value.llm_provider_preset = block.provider_preset
-  value.llm_wire_api = block.wire_api
-  value.llm_capabilities = block.capabilities
-  value.llm_research_model = block.research_model
-  value.llm_research_reasoning_effort = block.research_reasoning_effort
-  value.llm_utility_model = block.utility_model
-  value.llm_utility_reasoning_effort = block.utility_reasoning_effort
-  value.llm_disable_response_storage = block.disable_response_storage
-  value.llm_model = block.research_model
-}
 
-function llmProfileRolesFromInput(input) {
-  const hasBuyer = Object.prototype.hasOwnProperty.call(input, 'useForBuyer')
-  const hasSeller = Object.prototype.hasOwnProperty.call(input, 'useForSeller')
-  let buyer = hasBuyer ? Boolean(input.useForBuyer) : false
-  let seller = hasSeller ? Boolean(input.useForSeller) : false
-  if (!hasBuyer && !hasSeller) {
-    buyer = true
-    seller = true
-  }
-  return { buyer, seller }
-}
 
-function updateSellerSettingsYaml(raw, input) {
-  const value = objectOr(YAML.parse(raw) || {})
-  value.seller_agent = objectOr(value.seller_agent)
-  value.seller_agent.enabled = Boolean(input.enabled)
-  const quotePublishMode = input.quotePublishMode === 'manual_review' ? 'manual_review' : 'auto'
-  value.seller_agent.quote_publish_mode = quotePublishMode
-  value.seller_agent.auto_quote = quotePublishMode === 'auto'
-  value.seller_agent.auto_accept_low_risk = Boolean(input.autoAcceptLowRisk ?? input.autoCompleteTextTasks)
-  delete value.seller_agent.auto_complete_text_tasks
-  value.seller_agent.provider_pubkey = String(input.providerId || '').trim()
-  value.seller_agent.poll_interval_sec = 2
-  value.seller_agent.default_quote_price = Math.max(0, Number(input.quotePrice || 0))
-  value.seller_agent.default_quote_currency = defaultIfBlank(input.currency, 'USDC')
-  value.seller_agent.default_estimated_seconds = Math.max(1, Math.trunc(Number(input.estimatedSeconds || 60)))
-  if (sellerInputHasDockerSettings(input)) {
-    value.provider = objectOr(value.provider)
-    value.provider.docker = objectOr(value.provider.docker)
-    value.provider.docker.enabled = Boolean(input.dockerEnabled)
-    value.provider.docker.default_image = String(input.dockerDefaultImage || '').trim()
-    value.provider.docker.allowed_images = csvList(input.dockerAllowedImages)
-    value.provider.docker.network_mode = defaultIfBlank(input.dockerNetworkMode, 'none')
-    value.provider.docker.allowed_network_modes = csvList(input.dockerAllowedNetworkModes, ['none'])
-    value.provider.docker.allow_gpu = Boolean(input.dockerAllowGpu)
-    value.provider.docker.max_cpus = Math.max(0, Number(input.dockerMaxCpus || 0))
-    value.provider.docker.max_memory_mb = Math.max(0, Math.trunc(Number(input.dockerMaxMemoryMb || 0)))
-    value.provider.docker.pull_policy = defaultIfBlank(input.dockerPullPolicy, 'missing')
-  }
-  return ensureTrailingNewline(YAML.stringify(value))
-}
 
-function sellerInputHasDockerSettings(input) {
-  return [
-    'dockerEnabled',
-    'dockerDefaultImage',
-    'dockerAllowedImages',
-    'dockerNetworkMode',
-    'dockerAllowedNetworkModes',
-    'dockerAllowGpu',
-    'dockerMaxCpus',
-    'dockerMaxMemoryMb',
-    'dockerPullPolicy',
-  ].some((key) => Object.prototype.hasOwnProperty.call(input, key))
-}
 
-function apiKeyFormat(apiKey) {
-  const trimmed = String(apiKey || '').trim()
-  if (!trimmed) return 'missing'
-  if (trimmed.startsWith('sk-')) return 'sk'
-  return 'other'
-}
 
-function normalizeWireApi(value) {
-  const normalized = String(value || '').trim().toLowerCase().replace(/-/g, '_')
-  if (normalized === 'chat' || normalized === 'chat_completions') return 'chat_completions'
-  if (normalized === 'responses') return 'responses'
-  return 'responses'
-}
 
-function normalizeProviderPreset(value) {
-  const normalized = String(value || '').trim().toLowerCase().replace(/-/g, '_').replace(/\s+/g, '_')
-  const aliases = {
-    openai_chat_completions: 'openai_chat',
-    lite_llm: 'litellm',
-    litellm_proxy: 'litellm',
-    lmstudio: 'lm_studio',
-    'llama.cpp': 'llama_cpp',
-    text_generation_webui: 'textgen',
-    text_generation_web_ui: 'textgen',
-    oobabooga: 'textgen',
-    kobold: 'koboldcpp',
-  }
-  if (!normalized) return 'openai_responses'
-  return aliases[normalized] || normalized
-}
 
-function inferProviderPreset(baseUrl) {
-  const base = String(baseUrl || '').trim().toLowerCase()
-  if (base.includes('openrouter.ai')) return 'openrouter'
-  if (base.includes('api.openai.com')) return 'openai_responses'
-  if (base.includes('127.0.0.1:11434') || base.includes('localhost:11434')) return 'ollama'
-  if (base.includes('127.0.0.1:1234') || base.includes('localhost:1234')) return 'lm_studio'
-  if (base.includes('127.0.0.1') || base.includes('localhost') || base.includes('[::1]')) return 'custom_openai_compatible'
-  return 'custom_openai_compatible'
-}
 
-function defaultWireForPreset(preset) {
-  return normalizeProviderPreset(preset) === 'openai_responses' ? 'responses' : 'chat_completions'
-}
 
-function providerRequiresApiKey(preset, baseUrl) {
-  const normalized = normalizeProviderPreset(preset)
-  const base = String(baseUrl || '').trim().toLowerCase()
-  if (['openai_responses', 'openai_chat', 'openrouter'].includes(normalized)) return true
-  if (['litellm', 'ollama', 'lm_studio', 'vllm', 'localai', 'llama_cpp', 'textgen', 'koboldcpp', 'custom_openai_compatible'].includes(normalized)) return false
-  return !(base.includes('127.0.0.1') || base.includes('localhost') || base.includes('[::1]'))
-}
 
-function llmCapabilitiesFromYaml(value) {
-  const caps = objectOr(value.llm_capabilities)
-  const parsed = {
-    supportsResponses: boolAt(caps, 'supports_responses', false),
-    supportsChatCompletions: boolAt(caps, 'supports_chat_completions', false),
-    supportsSystemMessage: boolAt(caps, 'supports_system_message', false),
-    supportsJsonResponseFormat: boolAt(caps, 'supports_json_response_format', false),
-    supportsStreaming: boolAt(caps, 'supports_streaming', false),
-    supportsTools: boolAt(caps, 'supports_tools', false),
-    supportsReasoningEffort: boolAt(caps, 'supports_reasoning_effort', false),
-  }
-  if (Object.values(parsed).some(Boolean)) return parsed
-  return presetCapabilities(stringAt(value, 'llm_provider_preset', 'openai_responses'))
-}
 
-function roleLLMCapabilitiesFromYaml(role, preset, wire) {
-  const caps = objectOr(role.capabilities)
-  const parsed = {
-    supportsResponses: boolAt(caps, 'supports_responses', false),
-    supportsChatCompletions: boolAt(caps, 'supports_chat_completions', false),
-    supportsSystemMessage: boolAt(caps, 'supports_system_message', false),
-    supportsJsonResponseFormat: boolAt(caps, 'supports_json_response_format', false),
-    supportsStreaming: boolAt(caps, 'supports_streaming', false),
-    supportsTools: boolAt(caps, 'supports_tools', false),
-    supportsReasoningEffort: boolAt(caps, 'supports_reasoning_effort', false),
-  }
-  if (Object.values(parsed).some(Boolean)) return parsed
-  return capabilitiesForWire(preset, wire)
-}
 
-function presetCapabilities(preset) {
-  const normalized = normalizeProviderPreset(preset)
-  if (normalized === 'openai_responses') {
-    return {
-      supportsResponses: true,
-      supportsChatCompletions: true,
-      supportsSystemMessage: true,
-      supportsJsonResponseFormat: true,
-      supportsStreaming: true,
-      supportsTools: true,
-      supportsReasoningEffort: true,
-    }
-  }
-  if (['openai_chat', 'openrouter', 'litellm'].includes(normalized)) {
-    return {
-      supportsResponses: false,
-      supportsChatCompletions: true,
-      supportsSystemMessage: true,
-      supportsJsonResponseFormat: true,
-      supportsStreaming: true,
-      supportsTools: true,
-      supportsReasoningEffort: false,
-    }
-  }
-  return {
-    supportsResponses: false,
-    supportsChatCompletions: true,
-    supportsSystemMessage: true,
-    supportsJsonResponseFormat: true,
-    supportsStreaming: true,
-    supportsTools: false,
-    supportsReasoningEffort: false,
-  }
-}
 
-function capabilitiesForWire(preset, wire) {
-  const caps = { ...presetCapabilities(preset) }
-  if (normalizeWireApi(wire) === 'responses') {
-    caps.supportsResponses = true
-    caps.supportsChatCompletions = true
-    caps.supportsSystemMessage = true
-    caps.supportsJsonResponseFormat = true
-    caps.supportsStreaming = true
-    caps.supportsTools = true
-    caps.supportsReasoningEffort = true
-    return caps
-  }
-  caps.supportsResponses = false
-  caps.supportsChatCompletions = true
-  caps.supportsReasoningEffort = false
-  return caps
-}
 
-function capabilitiesToYaml(caps) {
-  return {
-    supports_responses: capValue(caps, 'supportsResponses'),
-    supports_chat_completions: capValue(caps, 'supportsChatCompletions'),
-    supports_system_message: capValue(caps, 'supportsSystemMessage'),
-    supports_json_response_format: capValue(caps, 'supportsJsonResponseFormat'),
-    supports_streaming: capValue(caps, 'supportsStreaming'),
-    supports_tools: capValue(caps, 'supportsTools'),
-    supports_reasoning_effort: capValue(caps, 'supportsReasoningEffort'),
-  }
-}
 
-function capValue(caps, key) {
-  return Boolean(caps && caps[key])
-}
 
-function defaultIfBlank(value, fallback) {
-  const trimmed = String(value || '').trim()
-  return trimmed || fallback
-}
 
-function defaultLLMProfileName(input) {
-  const baseUrl = String(input.llmBaseUrl || '').trim()
-  const model = String(input.researchModel || input.utilityModel || '').trim()
-  let host = 'API'
-  try {
-    host = new URL(baseUrl).host || host
-  } catch {
-    host = baseUrl.replace(/^https?:\/\//, '').split('/')[0] || host
-  }
-  return [host, model].filter(Boolean).join(' / ') || 'API Profile'
-}
 
-function uniqueLLMProfileName(name, profiles, currentId) {
-  const requested = defaultIfBlank(name, 'API Profile')
-  const current = String(currentId || '').trim()
-  const existingNames = new Set(
-    asArray(profiles)
-      .filter((profile) => String(profile?.id || '').trim() !== current)
-      .map((profile) => String(profile?.name || '').trim().toLowerCase())
-      .filter(Boolean),
-  )
-  if (!existingNames.has(requested.toLowerCase())) return requested
 
-  const numbered = requested.match(/^(.*?)\s+(\d+)$/)
-  const numberedBase = numbered?.[1]?.trim()
-  const base = numberedBase && existingNames.has(numberedBase.toLowerCase()) ? numberedBase : requested
-  let index = numberedBase && base === numberedBase ? Math.max(2, Number(numbered[2]) + 1) : 2
-  let candidate = `${base} ${index}`
-  while (existingNames.has(candidate.toLowerCase())) {
-    index += 1
-    candidate = `${base} ${index}`
-  }
-  return candidate
-}
-
-function uniqueList(values) {
-  return [...new Set(values.filter(Boolean))]
-}
 
 function quoteCommandArg(value) {
   const text = String(value)
@@ -1972,68 +1439,19 @@ function discoveryManifestJson(baseUrl, helperPath, configPath, startCommand) {
 
 function defaultLocalConfig(paths) {
   return `# Exora Dock local desktop config
-rpc_url: "https://api.mainnet-beta.solana.com"
 listen_addr: "127.0.0.1:8080"
-key_path: ""
 cache_max_mb: 256
 data_dir: ${yamlQuote(paths.dataDir)}
-fetch_interval_sec: 10
-program_id: ""
 mode: "hybrid"
 cloud_url: ""
 dock_id: ""
-wallet_path: ${yamlQuote(path.join(paths.dataDir, 'wallet'))}
 auth_token_path: ${yamlQuote(path.join(paths.dataDir, 'auth.json'))}
-payment_pin_path: ${yamlQuote(path.join(paths.dataDir, 'payment-pin.json'))}
 cloud_token_path: ${yamlQuote(path.join(paths.dataDir, 'cloud-token.json'))}
-cloud_poll_interval_sec: 3
-
-provider:
-  workspace_dir: ${yamlQuote(path.join(paths.dataDir, 'provider-workspace'))}
-  allow_command_executor: false
-  allowed_commands: []
-  max_job_seconds: 300
-  max_input_mb: 128
-  docker:
-    enabled: false
-    default_image: ""
-    allowed_images: []
-    network_mode: "none"
-    allowed_network_modes: ["none"]
-    allow_gpu: false
-    max_cpus: 0
-    max_memory_mb: 0
-    pull_policy: "missing"
-
-llm_base_url: "https://api.openai.com/v1"
-llm_api_key: ""
-llm_provider_preset: "openai_responses"
-llm_wire_api: "responses"
-llm_capabilities:
-  supports_responses: true
-  supports_chat_completions: true
-  supports_system_message: true
-  supports_json_response_format: true
-  supports_streaming: true
-  supports_tools: true
-  supports_reasoning_effort: true
-llm_research_model: "gpt-5.5"
-llm_research_reasoning_effort: "high"
-llm_utility_model: "gpt-5.5"
-llm_utility_reasoning_effort: "low"
-llm_disable_response_storage: true
-llm_model: "gpt-5.5"
-
-seller_agent:
-  enabled: false
-  auto_quote: true
-  quote_publish_mode: auto
-  auto_accept_low_risk: false
-  provider_pubkey: ""
-  poll_interval_sec: 2
-  default_quote_price: 0
-  default_quote_currency: "USDC"
-  default_estimated_seconds: 60
+cors_allowed_origins:
+  - "http://localhost:*"
+  - "http://127.0.0.1:*"
+  - "https://exoradock.com"
+  - "https://www.exoradock.com"
 `
 }
 
@@ -2043,12 +1461,6 @@ async function localOwnerToken(paths) {
   return tokens.ownerToken
 }
 
-async function localAgentToken(paths) {
-  const tokens = await localAuthTokens(paths)
-  const token = tokens.agentToken || tokens.ownerToken
-  if (!String(token || '').trim()) throw new Error('agent token missing')
-  return token
-}
 
 async function localAuthTokens(paths) {
   const authPath = authPathForConfig(paths)
@@ -2093,17 +1505,6 @@ async function catalog_listings(payload = {}) {
   return httpJson('GET', `/v3/catalog/listings${query.size ? `?${query}` : ''}`, undefined, await localOwnerToken(await dockPaths()))
 }
 
-async function cloudConsumerConnection(paths) {
-  const raw = fs.existsSync(paths.configPath) ? await fsp.readFile(paths.configPath, 'utf8') : defaultLocalConfig(paths)
-  let config = {}
-  try { config = YAML.parse(raw) || {} } catch {}
-  const tokenPath = String(config.cloud_token_path || path.join(paths.dataDir, 'cloud-token.json')).trim()
-  let token = {}
-  try { token = JSON.parse(await fsp.readFile(tokenPath, 'utf8')) || {} } catch {}
-  const cloudURL = String(config.cloud_url || token.cloudUrl || '').trim().replace(/\/$/, '')
-  if (!cloudURL) throw new Error('Exora Cloud is not configured')
-  return { cloudURL }
-}
 
 async function configuredCloudURL(paths, state = {}) {
   let config = {}
@@ -2942,13 +2343,11 @@ function apiBridgeMaterialRoot(draftId) {
 }
 async function readAPIBridgeMaterialManifest(draftId) {
   const root = apiBridgeMaterialRoot(draftId)
-  try { return JSON.parse(await fsp.readFile(path.join(root, 'manifest.json'), 'utf8')) }
-  catch { return { draftId, files: [] } }
+  return readStoredAPIBridgeMaterialManifest(root, draftId)
 }
 async function writeAPIBridgeMaterialManifest(draftId, manifest) {
   const root = apiBridgeMaterialRoot(draftId)
-  await fsp.mkdir(root, { recursive: true })
-  await fsp.writeFile(path.join(root, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8')
+  await writeJSONAtomically(path.join(root, 'manifest.json'), manifest)
 }
 async function provider_api_bridge_materials_get(payload = {}) {
   return readAPIBridgeMaterialManifest(payload?.input?.draftId)
@@ -2962,6 +2361,8 @@ async function apiBridgeFileOperation(label, operation, timeoutMs = 15000) {
   finally { clearTimeout(timeout) }
 }
 async function storeAPIBridgeMaterials(draftId, sourcePaths) {
+  const root = apiBridgeMaterialRoot(draftId)
+  return withAPIBridgeMaterialMutation(root, async () => {
   const current = await readAPIBridgeMaterialManifest(draftId)
   const uniquePaths = [...new Set((sourcePaths || []).map((value) => String(value || '').trim()).filter(Boolean))]
   if (!uniquePaths.length) throw new Error('Choose or drop at least one API material')
@@ -2983,7 +2384,7 @@ async function storeAPIBridgeMaterials(draftId, sourcePaths) {
     candidate.contents = await apiBridgeFileOperation(`Reading ${candidate.name}`, fsp.readFile(candidate.sourcePath))
     if (candidate.contents.length !== candidate.sizeBytes) throw new Error(`${candidate.name} changed while it was being imported`)
   }))
-  const root = apiBridgeMaterialRoot(draftId); await fsp.mkdir(root, { recursive: true })
+  await fsp.mkdir(root, { recursive: true })
   const files = []
   for (const file of combined) {
     if (file.sourcePath) {
@@ -3012,6 +2413,7 @@ async function storeAPIBridgeMaterials(draftId, sourcePaths) {
     } catch { /* best-effort discovery; the material remains available to the Agent */ }
   }
   const manifest = { draftId, files, discovery, updatedAt: new Date().toISOString() }; await writeAPIBridgeMaterialManifest(draftId, manifest); return manifest
+  })
 }
 async function provider_api_bridge_materials_choose(payload = {}) {
   const draftId = String(payload?.input?.draftId || '')
@@ -3027,9 +2429,7 @@ async function provider_api_bridge_materials_add(payload = {}) {
 }
 async function provider_api_bridge_material_remove(payload = {}) {
   const draftId = String(payload?.input?.draftId || ''); const id = String(payload?.input?.id || '')
-  const manifest = await readAPIBridgeMaterialManifest(draftId); const target = (manifest.files || []).find(file => file.id === id)
-  if (target?.localPath && path.dirname(path.resolve(target.localPath)) === path.resolve(apiBridgeMaterialRoot(draftId))) await fsp.rm(target.localPath, { force: true })
-  manifest.files = (manifest.files || []).filter(file => file.id !== id); manifest.updatedAt = new Date().toISOString(); await writeAPIBridgeMaterialManifest(draftId, manifest); return manifest
+  return removeAPIBridgeMaterial({ root: apiBridgeMaterialRoot(draftId), draftId, id })
 }
 
 async function provider_api_bridge_draft_get(payload = {}) {
@@ -3204,10 +2604,6 @@ async function httpJson(method, route, body, token, options = {}) {
   }
 }
 
-async function ensureDockReady() {
-  if (await healthOk()) return
-  await start_dock()
-}
 
 function isLocalConnectionFailure(error) {
   const message = errorMessage(error).toLowerCase()
@@ -3231,131 +2627,15 @@ function localRequestError(error, route, timeoutMs) {
   return error instanceof Error ? error : new Error(message)
 }
 
-function effectiveLlmApiKey(rawConfig, input) {
-  const provided = explicitApiKeyInput(input)
-  if (provided) return provided
-  let value = {}
-  try {
-    value = YAML.parse(rawConfig) || {}
-  } catch {
-    value = {}
-  }
-  return stringAt(value, 'llm_api_key', '')
-}
 
-async function effectiveLlmApiKeyForInput(paths, rawConfig, input) {
-  const provided = explicitApiKeyInput(input)
-  if (provided) return provided
-  if (input.clearApiKey) return ''
-  const profileId = String(input.profileId || '').trim()
-  if (profileId) {
-    await ensureLLMProfiles(paths)
-    const state = await readDesktopState(paths)
-    const profile = (Array.isArray(state.llmProfiles) ? state.llmProfiles : []).find((item) => item.id === profileId)
-    if (profile) return decryptLLMProfileKey(profile)
-  }
-  return effectiveLlmApiKey(rawConfig, input)
-}
 
-function explicitApiKeyInput(input = {}) {
-  const provided = String(input.apiKey || '').trim()
-  return provided === MASKED_API_KEY_VALUE ? '' : provided
-}
 
-function llmBaseCandidates(baseUrl) {
-  const base = String(baseUrl || '').trim().replace(/\/+$/, '')
-  if (!base) return ['']
-  const candidates = base.endsWith('/v1') ? [base] : [`${base}/v1`, base]
-  try {
-    const url = new URL(base)
-    const pathName = url.pathname.replace(/\/+$/, '')
-    if (pathName && pathName !== '/v1') candidates.push(`${url.origin}/v1`)
-  } catch {
-    // Keep the literal user-entered candidates for non-URL local gateways.
-  }
-  return uniqueList(candidates)
-}
 
-async function llmPostJson(baseUrl, route, apiKey, body) {
-  const result = await llmPostJsonWithBase(baseUrl, route, apiKey, body)
-  return result.body
-}
 
-async function llmPostJsonWithBase(baseUrl, route, apiKey, body) {
-  let lastError
-  for (const base of llmBaseCandidates(baseUrl)) {
-    const url = `${base}${route}`
-    try {
-      const headers = { 'Content-Type': 'application/json' }
-      if (String(apiKey || '').trim()) headers.Authorization = `Bearer ${String(apiKey).trim()}`
-      const { response, text } = await fetchTextWithTimeout(url, { method: 'POST', headers, body: JSON.stringify(body) }, 20000)
-      if (!response.ok) {
-        lastError = new Error(`LLM API ${route} returned ${response.status}: ${text}`)
-        if (response.status === 404 || response.status === 405) continue
-        break
-      }
-      try {
-        return { body: JSON.parse(text), baseUrl: base }
-      } catch (error) {
-        throw new Error(`LLM API returned non-JSON: ${error.message}`)
-      }
-    } catch (error) {
-      lastError = error
-    }
-  }
-  throw lastError || new Error('LLM request failed')
-}
 
-async function llmGetModels(baseUrl, apiKey) {
-  const result = await llmGetModelsWithBase(baseUrl, apiKey)
-  return result.models
-}
 
-async function llmGetModelsWithBase(baseUrl, apiKey) {
-  let lastError
-  for (const base of llmBaseCandidates(baseUrl)) {
-    const url = `${base}/models`
-    try {
-      const headers = {}
-      if (String(apiKey || '').trim()) headers.Authorization = `Bearer ${String(apiKey).trim()}`
-      const { response, text } = await fetchTextWithTimeout(url, { method: 'GET', headers }, 12000)
-      if (!response.ok) {
-        lastError = new Error(`LLM models endpoint returned ${response.status}: ${text}`)
-        if (response.status === 404 || response.status === 405) continue
-        break
-      }
-      let value
-      try {
-        value = JSON.parse(text)
-      } catch (error) {
-        throw new Error(`LLM models returned non-JSON: ${error.message}`)
-      }
-      return { models: parseLlmModels(value), baseUrl: base }
-    } catch (error) {
-      lastError = error
-    }
-  }
-  throw lastError || new Error('LLM models request failed')
-}
 
-function parseLlmModels(value) {
-  const array = Array.isArray(value?.data) ? value.data : Array.isArray(value?.models) ? value.models : []
-  const models = []
-  for (const item of array) {
-    if (typeof item === 'string') models.push(item)
-    else if (item?.id) models.push(String(item.id))
-    else if (item?.name) models.push(String(item.name))
-  }
-  return [...new Set(models)].sort()
-}
 
-function classifyLlmError(error) {
-  const lower = String(error || '').toLowerCase()
-  if (lower.includes('401') || lower.includes('403') || lower.includes('unauthorized')) return 'auth_failed'
-  if (lower.includes('404')) return 'wrong_endpoint_or_model'
-  if (lower.includes('/responses')) return 'provider_does_not_support_responses'
-  return 'failed'
-}
 
 async function fetchWithTimeout(url, options, timeoutMs) {
   const controller = new AbortController()
@@ -3419,33 +2699,7 @@ async function openPath(target) {
   if (error) throw new Error(error)
 }
 
-async function openFolderPath(target) {
-  await fsp.mkdir(target, { recursive: true })
-  const error = await shell.openPath(target)
-  if (!error) return
-  if (process.platform !== 'win32') {
-    throw new Error(error)
-  }
-  try {
-    const child = spawn('explorer.exe', [target], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: false,
-    })
-    child.unref()
-    return
-  } catch {
-    throw new Error(error)
-  }
-}
 
-async function readTextOr(file, fallback) {
-  try {
-    return await fsp.readFile(file, 'utf8')
-  } catch {
-    return fallback
-  }
-}
 
 function objectOr(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
@@ -3458,32 +2712,10 @@ function stringAt(value, key, fallback) {
   return fallback
 }
 
-function arrayAt(value, key, fallback = []) {
-  const raw = value && value[key]
-  if (Array.isArray(raw)) return raw.map((item) => String(item || '').trim()).filter(Boolean)
-  if (typeof raw === 'string') return raw.split(',').map((item) => item.trim()).filter(Boolean)
-  return fallback
-}
 
-function csvList(value, fallback = []) {
-  if (Array.isArray(value)) return value.map((item) => String(item || '').trim()).filter(Boolean)
-  const items = String(value || '').split(',').map((item) => item.trim()).filter(Boolean)
-  return items.length ? items : fallback
-}
 
-function boolAt(value, key, fallback) {
-  return typeof value?.[key] === 'boolean' ? value[key] : fallback
-}
 
-function integerAt(value, key, fallback) {
-  const next = Number(value?.[key])
-  return Number.isFinite(next) ? Math.trunc(next) : fallback
-}
 
-function numberAt(value, key, fallback) {
-  const next = Number(value?.[key])
-  return Number.isFinite(next) ? next : fallback
-}
 
 function yamlQuote(value) {
   return `'${String(value).replace(/'/g, "''")}'`

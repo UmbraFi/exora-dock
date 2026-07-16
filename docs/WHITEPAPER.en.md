@@ -1,4 +1,4 @@
-<!-- Source: WHITEPAPER.md; normalized-sha256: 9782052c58c84d695197e104a556a84f3e4f477e6659588faa9ac61f9259b676 -->
+<!-- Source: WHITEPAPER.md; normalized-sha256: 1bb017149f37d5c5b76c1d31e061b06a97b19952abe54f6546b12d2b59591db7 -->
 
 # Exora V3.2 AI-First Resource Market Protocol Whitepaper
 
@@ -84,11 +84,12 @@ The Provider uploads data, connects a physical computer, or publishes an Endpoin
 
 ### 3.3 Exora Dock
 
-One Dock program supports three capabilities that may run together:
+One Dock program supports four formal capabilities that may run together:
 
 - **Consumer MCP:** exposes Exora tools to the local Agent and enforces local budget and approval policy.
 - **Seller Draft MCP:** exposes policy-gated, draft-only tools for authorized roots, registered services, and verified VM runtimes.
 - **Provider Worker:** runs outside the Consumer environment, validates Linux KVM or managed Windows WSL2 capacity, maintains the single InventorySlot, fulfills Leases, meters usage, and resets the environment.
+- **Endpoint Tunnel:** keeps private service URLs and credentials in Dock and carries only declared operations while Dock is online and healthy.
 
 Dock device keys use operating-system secure storage. Worker always runs outside the Consumer VM that it creates and destroys.
 
@@ -263,7 +264,7 @@ A Lease binds Consumer, Listing, Slot, image version, maximum budget, capabiliti
   "expiresAt": "2026-07-12T10:38:00Z",
   "billingStartedAt": "2026-07-12T10:08:12Z",
   "maxBudget": {"currency": "USD", "amount": 5000},
-  "capabilities": ["guest_ssh", "run_command", "transfer", "artifacts"],
+  "capabilities": ["guest_ssh", "sftp", "rsync"],
   "version": 5
 }
 ```

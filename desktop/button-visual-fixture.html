@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <link rel="stylesheet" href="/src/styles/v3-shell.css" />
+    <link rel="stylesheet" href="/src/styles/v3-api.css" />
+    <link rel="stylesheet" href="/src/styles/v3-environment.css" />
+    <link rel="stylesheet" href="/src/styles/v3-listings.css" />
+    <link rel="stylesheet" href="/src/styles/policy.css" />
+    <title>Button visual fixture</title>
+    <style>
+      body { min-width: 0; min-height: 0; padding: 24px; }
+      .fixture { width: 620px; }
+      .fixture .v3-api-price-component { margin-top: 16px; grid-template-columns: minmax(150px, 1fr) auto; }
+    </style>
+  </head>
+  <body>
+    <main class="fixture app-shell seller-surface-mode">
+      <div class="v3-shared-file-row">
+        <span class="v3-shared-file-type">JSON</span>
+        <span class="v3-shared-file-name"><strong>openapi.json</strong><small>1.2 KB · stored locally</small></span>
+        <button class="danger ghost" type="button" data-test-remove="material">Remove</button>
+      </div>
+      <div class="v3-api-price-component">
+        <label>Meter<select><option>request</option></select></label>
+        <button class="danger ghost" type="button" data-test-remove="price">Remove</button>
+      </div>
+    </main>
+  </body>
+</html>

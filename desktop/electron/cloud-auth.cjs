@@ -173,15 +173,6 @@ function createCloudAuth(options = {}) {
     return pending.length + memoryPending.length
   }
 
-  async function providers(cloudURL) {
-    try {
-      const result = await request(cloudURL, 'GET', '/v1/auth/providers')
-      return { password: result.password !== false, social: Array.isArray(result.social) ? result.social : [] }
-    } catch {
-      return { password: true, social: [] }
-    }
-  }
-
   async function snapshot(settings = {}) {
     const { paths, state } = await pathsAndState()
     const pendingRevocations = await retryPendingRevocations(paths, state)
@@ -191,7 +182,7 @@ function createCloudAuth(options = {}) {
     } catch (error) {
       return publicState({ phase: 'configuration_error', error, storageAvailable: encryptionAvailable() })
     }
-    const providerResult = await providers(cloudURL)
+    const providerResult = { password: true }
     const token = await loadSession(state)
     const cachedAccount = sanitizeAccount(state.cloudAuth?.account)
     if (!token) {
@@ -436,25 +427,6 @@ function createCloudAuth(options = {}) {
     return result
   }
 
-  async function socialStart(payload = {}) {
-    const input = payload.input || payload
-    const { paths, state } = await pathsAndState()
-    const cloudURL = await resolveCloudURL(paths, state)
-    return request(cloudURL, 'POST', `/v1/auth/social/${encodeURIComponent(String(input.provider || ''))}/start`, input)
-  }
-
-  async function socialComplete(payload = {}) {
-    const input = payload.input || payload
-    const { paths, state } = await pathsAndState()
-    const cloudURL = await resolveCloudURL(paths, state)
-    const installID = await installationID(paths, state)
-    const result = await request(cloudURL, 'POST', `/v1/auth/social/${encodeURIComponent(String(input.provider || ''))}/complete`, {
-      ...input, clientKind: 'electron', deviceId: installID, deviceName: String(options.deviceName?.() || 'Exora Dock'),
-    })
-    await persistSession(paths, state, cloudURL, result)
-    return snapshot()
-  }
-
   async function connection() {
     const { paths, state } = await pathsAndState()
     const cloudURL = await resolveCloudURL(paths, state)
@@ -491,8 +463,6 @@ function createCloudAuth(options = {}) {
     changePIN,
     resetPIN,
     logout,
-    socialStart,
-    socialComplete,
     connection,
     apiRequest,
     unauthorized,
@@ -523,7 +493,7 @@ function publicState(value = {}) {
     offline: value.offline === true,
     account: sanitizeAccount(value.account),
     cloudURL: String(value.cloudURL || ''),
-    providers: value.providers || { password: true, social: [] },
+    providers: value.providers || { password: true },
     pinStatus: value.pinStatus,
     dock: value.dock,
     pendingRevocation: value.pendingRevocation === true,

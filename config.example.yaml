@@ -1,68 +1,15 @@
-# Exora Dock Configuration
-rpc_url: "https://api.mainnet-beta.solana.com"
+# Exora Dock V3 Configuration
 listen_addr: ":8080"
 cache_max_mb: 256
 data_dir: "./data"
-fetch_interval_sec: 10
-escrow_program_id: ""  # Solana escrow program ID for chain-backed payments
-solana_network: "devnet"
-usdc_mint: ""          # USDC mint for SPL-token escrow (devnet/mainnet-specific)
-usdc_decimals: 6
-mode: "hybrid"         # requester, provider, or hybrid
-legacy_market_enabled: false # Explicit opt-in for legacy miner/product/market compatibility
-cloud_url: ""          # Exora Cloud URL; empty keeps MVP flows local
-cloud_token_path: ""   # Defaults to data_dir/cloud-token.json
-cloud_poll_interval_sec: 3
-dock_id: ""            # Defaults to this Dock's provider id
-wallet_path: ""        # Defaults to data_dir/wallet
-auth_token_path: ""    # Defaults to data_dir/auth.json
-payment_pin_path: ""   # Defaults to data_dir/payment-pin.json
-run_capability_path: "" # Defaults to data_dir/run-capabilities.json
+mode: "hybrid"
+cloud_url: ""
+cloud_token_path: "" # Defaults to data_dir/cloud-token.json
+dock_id: ""
+auth_token_path: "" # Defaults to data_dir/auth.json
 cors_allowed_origins:
   - "http://localhost:*"
   - "http://127.0.0.1:*"
   - "tauri://localhost"
   - "https://exoradock.com"
   - "https://www.exoradock.com"
-
-provider:
-  workspace_dir: ""              # Defaults to data_dir/jobs
-  allow_command_executor: false  # Must be true before provider runs local commands
-  allowed_commands: []           # Example: ["python", "node"]
-  max_job_seconds: 300
-  max_input_mb: 128
-  docker:
-    enabled: false                # Must be true before provider runs Docker jobs
-    default_image: ""             # Example: "python:3.12-alpine"
-    allowed_images: []            # Example: ["python:3.12-alpine", "node:22-alpine"]
-    network_mode: "none"          # Default container network mode
-    allowed_network_modes: ["none"]
-    allow_gpu: false
-    max_cpus: 0                   # 0 means no provider-level cap
-    max_memory_mb: 0              # 0 means no provider-level cap
-    pull_policy: "missing"        # missing, always, or never
-
-local_agents:
-  codex:
-    enabled: true
-    command: "codex"
-    roles: ["buyer", "seller", "verifier"]
-    automation_mode: "manual"          # manual, guarded, or autonomous
-    workspace_roots: []                 # Defaults to [data_dir/automation]
-    automation: false                   # Legacy alias: true maps to guarded
-    workspace: ""                      # Legacy alias for the first workspace root
-    permission_profile: "workspace-write"
-    max_concurrency: 1
-    request_timeout_sec: 30
-    probe_timeout_sec: 8
-
-seller_agent:
-  enabled: false
-  auto_quote: true
-  quote_publish_mode: "auto"       # auto or manual_review; overrides legacy auto_quote
-  auto_accept_low_risk: false
-  provider_pubkey: ""              # Defaults to this Dock's local provider id
-  poll_interval_sec: 2
-  default_quote_price: 0
-  default_quote_currency: "USDC"
-  default_estimated_seconds: 60

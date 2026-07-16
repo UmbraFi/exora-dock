@@ -331,3 +331,22 @@ button.v3-environment-cloud-scrim:hover {
   background: var(--color-danger-soft);
   box-shadow: none;
 }
+
+.app-shell.seller-surface-mode :is(
+  .v3-step-heading > button,
+  .v3-form-actions > button,
+  .v3-api-prompt-footer > div > button,
+  .v3-api-connection-summary > button,
+  .v3-api-review-workspace > main > footer > button,
+  .v3-api-publish-actions > button,
+  .v3-listings-head > button,
+  .v3-listing-actions > button,
+  .v3-wizard-inline-action > button,
+  .v3-environment-save-bar > button
+).danger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-danger) 62%, var(--color-border));
+  color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 16%, var(--color-surface));
+  box-shadow: none;
+  transform: none;
+}

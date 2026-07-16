@@ -26,7 +26,7 @@ var sellerDraftToolNames = map[string]bool{
 func isSellerDraftTool(name string) bool { return sellerDraftToolNames[strings.TrimSpace(name)] }
 
 func (s *Server) sellerToolsEnabled(ctx context.Context) bool {
-	if s.interactiveSession() || s.v2Automation() || strings.TrimSpace(s.opts.ProviderAgentToken) == "" {
+	if strings.TrimSpace(s.opts.ProviderAgentToken) == "" {
 		return false
 	}
 	checkCtx, cancel := context.WithTimeout(ctx, sellerCapabilityTimeout)

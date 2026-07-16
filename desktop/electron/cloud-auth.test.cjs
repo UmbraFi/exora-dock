@@ -54,7 +54,6 @@ test('times out when a Cloud response body stalls', async () => {
       session: { sessionId: 'sess_1' },
       sessionToken: 'session_token',
     }),
-    'GET /v1/auth/providers': jsonResponse(200, { password: true, social: [] }),
     'GET /v1/me': jsonResponse(200, { account: { accountId: 'acct_1', email: 'user@example.com' }, session: { sessionId: 'sess_1' } }),
     'GET /v3/stalled': { ok: true, text: () => new Promise(() => undefined) },
   }
@@ -77,7 +76,6 @@ test('registration does not retain a PIN while email verification is pending', a
       session: { sessionId: 'sess_1', expiresAt: '2026-08-13T12:00:00Z' },
       sessionToken: 'exora_sess_secret',
     }),
-	'GET /v1/auth/providers': () => jsonResponse(200, { password: true, social: [] }),
 	'GET /v1/me': () => jsonResponse(200, {
       account: { accountId: 'acct_1', email: 'user@example.com', emailVerifiedAt: '2026-07-14T12:00:00Z' },
       session: { sessionId: 'sess_1', expiresAt: '2026-08-13T12:00:00Z' },
@@ -115,7 +113,6 @@ test('safeStorage unavailability uses a process-only session', async () => {
       session: { sessionId: 'sess_1', expiresAt: '2026-08-13T12:00:00Z' },
       sessionToken: 'memory_only_token',
     }),
-    'GET /v1/auth/providers': jsonResponse(200, { password: true, social: [] }),
     'GET /v1/me': jsonResponse(200, { account: { accountId: 'acct_1', email: 'user@example.com' }, session: { sessionId: 'sess_1' } }),
   }
   const h = harness(routes, { safeStorage: { isEncryptionAvailable: () => false } })
@@ -137,7 +134,6 @@ test('a Cloud PIN write failure preserves the verified Cloud account', async () 
         account: { accountId: 'acct_1', email: 'pin@example.com' }, session: { sessionId: 'sess_pin' }, sessionToken: 'pin_session_token',
       })
 	},
-	'GET /v1/auth/providers': jsonResponse(200, { password: true, social: [] }),
 	'GET /v1/me': jsonResponse(200, { account: { accountId: 'acct_1', email: 'pin@example.com' }, session: { sessionId: 'sess_pin' } }),
 	'GET /v1/auth/payment-pin': jsonResponse(200, { configured: false }),
 	'PUT /v1/auth/payment-pin': jsonResponse(500, { code: 'pin_write_failed', error: 'Cloud PIN unavailable' }),
@@ -161,7 +157,6 @@ test('a 401 clears the encrypted session and broadcasts expiry', async () => {
     'POST /v1/auth/sessions/password': jsonResponse(200, {
       account: { accountId: 'acct_1', email: 'user@example.com' }, session: { sessionId: 'sess_1' }, sessionToken: 'token',
     }),
-    'GET /v1/auth/providers': jsonResponse(200, { password: true, social: [] }),
     'GET /v1/me': () => {
       meCalls += 1
       return meCalls === 1
@@ -195,7 +190,6 @@ test('offline logout stores an encrypted pending revocation and retries it', asy
     'POST /v1/auth/sessions/password': jsonResponse(200, {
       account: { accountId: 'acct_1', email: 'user@example.com' }, session: { sessionId: 'sess_1' }, sessionToken: 'token-to-revoke',
     }),
-    'GET /v1/auth/providers': jsonResponse(200, { password: true, social: [] }),
     'GET /v1/me': jsonResponse(200, { account: { accountId: 'acct_1', email: 'user@example.com' }, session: { sessionId: 'sess_1' } }),
     'DELETE /v1/auth/sessions/current': () => {
       revokeAttempts += 1

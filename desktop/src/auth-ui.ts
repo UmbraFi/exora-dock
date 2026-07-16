@@ -10,7 +10,7 @@ export type CloudAuthState = {
   offline?: boolean
   account?: CloudAuthAccount
   cloudURL?: string
-  providers?: { password?: boolean; social?: Array<{ id: string; name: string; enabled?: boolean }> }
+  providers?: { password?: boolean }
   storageAvailable?: boolean
   dock?: { linked?: boolean; error?: { code?: string; message?: string } }
   error?: { code?: string; message?: string; status?: number }
@@ -229,7 +229,6 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
   }
 
   function renderLogin(c: typeof enCopy) {
-    const social = (status.providers?.social || []).filter((provider) => provider.enabled !== false)
     return `
       <div class="auth-heading"><span>${c.welcomeEyebrow}</span><h1>${c.signInTitle}</h1><p>${c.signInDetail}</p></div>
       ${renderMessage()}
@@ -240,7 +239,6 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
         <button class="auth-primary" type="submit" ${busy ? 'disabled' : ''}>${busy ? c.working : c.signIn}</button>
         <button class="auth-secondary auth-register-button" type="button" data-auth-action="register">${c.createAccount}</button>
       </form>
-      ${social.length ? `<div class="auth-divider"><span>${c.orContinue}</span></div><div class="auth-social">${social.map((provider) => `<button type="button" data-auth-social="${escapeAttr(provider.id)}">${escapeHTML(provider.name || provider.id)}</button>`).join('')}</div>` : ''}
       <div class="auth-security-note">${shieldIcon()}<span><strong>${c.securityNoticeTitle}</strong><small>${c.securityNoticeDetail}</small></span></div>
     `
   }
@@ -389,9 +387,6 @@ export function createAuthGate(root: HTMLElement, options: AuthGateOptions) {
       void options.invoke(button.dataset.authWindow === 'minimize' ? 'window_minimize' : 'window_close')
     }))
     element.querySelectorAll<HTMLButtonElement>('[data-auth-action]').forEach((button) => button.addEventListener('click', () => void handleAction(button.dataset.authAction || '')))
-    element.querySelectorAll<HTMLButtonElement>('[data-auth-social]').forEach((button) => button.addEventListener('click', () => void run(async () => {
-      await options.invoke('auth_social_start', { input: { provider: button.dataset.authSocial, redirectUri: 'exora://auth/callback' } })
-    })))
     element.querySelectorAll<HTMLButtonElement>('[data-auth-language]').forEach((button) => button.addEventListener('click', () => {
       const nextLanguage = button.dataset.authLanguage
       if (nextLanguage !== 'en' && nextLanguage !== 'zh') return
