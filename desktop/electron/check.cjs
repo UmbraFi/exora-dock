@@ -262,7 +262,7 @@ if (/pin\s*:\s*pendingRegistration\.pin/.test(cloudAuthMain)) throw new Error('L
 if (!cloudAuthMain.includes('validateRegistrationInput(email, password, passwordConfirm)')) throw new Error('Registration must validate only email and the two password entries before email verification')
 if (/data-auth-form="register"[\s\S]{0,1400}field\('pin'/.test(authUI)) throw new Error('Registration UI must not request a payment PIN')
 if (!authUI.includes("next.phase === 'authenticated' || next.phase === 'needs_pin'")) throw new Error('PIN setup must open after entering the workspace')
-for (const marker of ["authState?.phase === 'needs_pin'", 'openPINSetupModal()', "state.pinSettingsMode === 'setup'", "invoke<CloudAuthState>('auth_pin_set'"]) {
+for (const marker of ["authState?.phase === 'needs_pin'", 'openPINSetupModal()', "state.pinSettingsMode === 'setup'", "'auth_pin_set'"]) {
   if (!renderer.includes(marker)) throw new Error(`Required post-registration PIN modal flow missing: ${marker}`)
 }
 for (const marker of ["pinSettingsSetupStep: 'current' | 'entry' | 'confirmation'", "state.pinSettingsSetupStep === 'current'", "state.pinSettingsSetupStep === 'entry'", "advancePINSettingsStep('confirmation')", 'renderPINSettingsCodeInput()', "app.addEventListener('click', reopenPINSetupForPayment, true)", "app.addEventListener('submit', reopenPINSetupForPayment, true)"]) {
@@ -272,8 +272,16 @@ if (!rendererStyles.includes('.pin-settings-code-control .wallet-code-cells')) t
 for (const marker of ['activity_sessions', 'activity_session', '/v3/activity-sessions']) {
   if (!electronMain.includes(marker)) throw new Error(`V3 history IPC missing: ${marker}`)
 }
-for (const marker of ['v3-application-flow', 'v3-shared-file-picker', 'v3-shared-file-empty', 'v3AgentMaterialsCurrent', 'Review Agent draft', 'data-v3-review-confirm', 'Public endpoint and seller confirmation', 'Submit to Listings']) {
+for (const marker of ['v3-application-flow', 'v3-shared-file-picker', 'v3-shared-file-empty', 'v3AgentMaterialsCurrent', 'Import materials and prepare contract', 'Review service contract and pricing', 'Configure private Dock runtime and submit', 'Configure private Cloud connection and submit', 'data-v3-service-policy', 'data-v3-service-meter', 'data-v3-service-pricing-mode', 'Submit to Listings']) {
   if (!renderer.includes(marker)) throw new Error(`API bridge seller surface missing: ${marker}`)
+}
+for (const marker of ['provider_service_material_note_save', 'oauth2_client_credentials', 'header_api_key', 'query_api_key', 'cookie_api_key', 'mtls']) {
+  if (!electronMain.includes(marker) && !renderer.includes(marker)) throw new Error(`service material or private Runtime capability missing: ${marker}`)
+}
+if (!renderer.includes("return renderV3ServiceWizard('endpoint')") || !renderer.includes("return renderV3ServiceWizard('api_bridge')")) throw new Error('Endpoint and API Bridge must share the Service Wizard renderer')
+if (!renderer.includes("const activeIssues = draft ? v3ServiceReviewIssues(mode, activeID) : []")) throw new Error('incomplete Operation Policies must not be confirmable')
+for (const retiredServiceWizard of ['normalizeV3AgentWizardMarkup', 'renderV3EndpointAgentPageCore', 'renderV3APIBridgePageCore', 'data-v3-price-rate', 'data-v3-endpoint-price', 'data-v3-endpoint-route', 'data-v3-readiness-target', 'Maximum charge per invocation (atomic)', 'Rate atomic']) {
+  if (renderer.includes(retiredServiceWizard)) throw new Error(`retired Service Wizard implementation returned: ${retiredServiceWizard}`)
 }
 if (renderer.includes('original.outerHTML = renderV3AgentMaterialPicker')) throw new Error('Agent file picker must be rendered directly, not patched after mount')
 for (const removedWizard of ['renderV3ResourcesPageLegacy', 'renderV3EndpointAgentPageLegacy', 'function renderV3EndpointPage()', 'updateV3WindowsPricingLayout']) {
@@ -289,16 +297,25 @@ for (const marker of ['provider_environment_catalog', 'provider_environment_down
   if (!renderer.includes(marker) && !fs.readFileSync(path.join(__dirname, 'main.cjs'), 'utf8').includes(marker)) throw new Error(`Windows WSL provider surface missing: ${marker}`)
 }
 for (const marker of ['safeStorage.encryptString', 'safeStorage.decryptString']) {
-	if (!electronCloudAuth.includes(marker)) throw new Error(`secure Cloud session support missing: ${marker}`)
+	if (!electronCloudAuth.includes(marker) && !electronMain.includes(marker)) throw new Error(`secure secret storage support missing: ${marker}`)
 }
-for (const marker of ['account_key_status', 'account_key_save', 'account_key_delete', 'payload?.input?.key']) {
-	if (electronMain.includes(marker)) throw new Error(`retired account-wide key support remains: ${marker}`)
+for (const marker of ['account_api_key_status', 'account_api_key_import', 'account_api_key_rotate', 'account_api_key_revoke', 'agent_session_status', 'agent_session_policy_get', 'agent_session_policy_save', 'agent_session_revoke']) {
+	if (!electronMain.includes(marker)) throw new Error(`unified account or session key support missing: ${marker}`)
 }
-for (const marker of ['order_access_key_status', 'order_access_key_create', 'order_access_key_rotate', 'order_access_key_revoke', 'consumer_approval_decide', 'wallet_spend_policy_save']) {
-	if (!electronMain.includes(marker)) throw new Error(`order-scoped access or spend policy IPC missing: ${marker}`)
+for (const marker of ['probeMCPConnectivity', 'mcp_connectivity_test', "syncStoredAccountKeyToDock({ retryOnOffline: false })"]) {
+  if (!electronMain.includes(marker)) throw new Error(`MCP runtime connectivity support missing: ${marker}`)
 }
-for (const marker of ['data-wallet-tab="agent-limit"', 'data-wallet-tab="history"', 'data-v3-order-key-action', 'data-v3-approval-form']) {
-	if (!renderer.includes(marker)) throw new Error(`wallet or order security surface missing: ${marker}`)
+if (!renderer.includes("('mcp_connectivity_test')")) {
+  throw new Error('Settings connection test must exercise MCP and all four marketplace categories')
+}
+for (const marker of ['order_access_key_status', 'order_access_key_create', 'order_access_key_rotate', 'order_access_key_revoke']) {
+	if (electronMain.includes(marker)) throw new Error(`retired order-scoped key support remains: ${marker}`)
+}
+for (const marker of ['consumer_approval_decide', 'wallet_spend_policy_save', 'api_order_status', 'api_order_deactivate', 'api_order_reactivation_request']) {
+	if (!electronMain.includes(marker)) throw new Error(`wallet, approval, or API Order IPC missing: ${marker}`)
+}
+for (const marker of ['data-wallet-tab="agent-limit"', 'data-wallet-tab="history"', 'data-v3-api-order-action', 'data-v3-approval-form']) {
+	if (!renderer.includes(marker)) throw new Error(`wallet or API Order security surface missing: ${marker}`)
 }
 for (const marker of ['actionBusyControls', 'walletStatusRequest', 'walletModalRefreshRequest', 'void refreshWalletModalStatus()']) {
   if (!renderer.includes(marker)) throw new Error(`recoverable local busy state is missing: ${marker}`)
@@ -312,8 +329,15 @@ for (const marker of ['data-account-key-section', 'data-account-key-save', 'data
 }
 if (!electronMain.includes('provider_api_probe')) throw new Error('API bridge connection probe is missing')
 if (!electronMain.includes('provider_endpoint_test_route')) throw new Error('Local Endpoint route smoke test is missing')
-for (const marker of ['provider_asset_clear_selection', 'asset_packaging', 'application/zip', 'MAX_RESOURCE_ARCHIVE_BYTES']) {
-  if (!fs.readFileSync(path.join(__dirname, 'main.cjs'), 'utf8').includes(marker)) throw new Error(`single ZIP resource upload is missing: ${marker}`)
+for (const marker of ['provider_service_draft_get', 'provider_service_draft_save', 'provider_service_draft_submit', '/v3/provider/service-drafts']) {
+  if (!electronMain.includes(marker)) throw new Error(`unified service-draft IPC missing: ${marker}`)
+}
+for (const marker of ['provider_openapi_import', 'provider_api_bridge_import', 'provider_endpoint_import', '/v3/provider/api-imports', '/v3/provider/endpoint-imports', '/v3/provider/api-bridge-drafts', 'grpcTarget', 'generic_http', 'interfaceMode', 'protocol_adapter']) {
+  if (electronMain.includes(marker) || renderer.includes(marker)) throw new Error(`retired API interface surface remains: ${marker}`)
+}
+if (renderer.includes('product.manifest?.routes') || renderer.includes('product.manifest?.operations')) throw new Error('Catalog UI must derive Operations only from serviceManifest.interface')
+for (const marker of ['provider_asset_clear_selection', 'asset_hashing', '/v3/provider/resource-sheets', '/multipart', 'MAX_RESOURCE_FILE_BYTES']) {
+  if (!fs.readFileSync(path.join(__dirname, 'main.cjs'), 'utf8').includes(marker) && !fs.readFileSync(path.join(__dirname, 'resource-files.cjs'), 'utf8').includes(marker)) throw new Error(`independent resource-file upload is missing: ${marker}`)
 }
 const packageConfig = fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')
 if (!packageConfig.includes('resources/wsl')) throw new Error('Windows installer does not embed the locked WSL Runtime resource')

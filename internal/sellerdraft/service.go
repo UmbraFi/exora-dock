@@ -94,11 +94,12 @@ func (s *Service) Capabilities() (map[string]any, error) {
 		roots = append(roots, map[string]any{"id": root.ID, "displayName": firstNonEmpty(root.DisplayName, root.ID), "kinds": root.Kinds})
 	}
 	host := map[string]any{"platform": runtime.GOOS, "vmSupported": runtime.GOOS == "windows" || runtime.GOOS == "linux"}
+	vmSlot := s.vmListingSlot()
 	return map[string]any{
 		"schemaVersion": "provider.listing_drafts.mcp.v1", "enabled": policy.Enabled,
 		"enabledKinds": policy.EnabledKinds, "allowedRoots": roots, "allowedServices": policy.AllowedServices,
 		"defaults": policy.Defaults, "limits": policy.Limits, "policyReceipt": Receipt(policy),
-		"credentials": credentials, "host": host,
+		"credentials": credentials, "host": host, "constraints": map[string]any{"vmListing": vmSlot},
 		"permissions": map[string]any{"createPrivateDraft": true, "publish": false, "pause": false, "resumeListing": false, "retire": false, "readPlaintextCredentials": false},
 	}, nil
 }
@@ -131,6 +132,12 @@ func (s *Service) Create(request CreateRequest) (Run, error) {
 			return Run{}, errors.New("idempotencyKey reused with different input")
 		}
 		return previous, nil
+	}
+	if request.Kind == KindVM {
+		slot := s.vmListingSlot()
+		if available, _ := slot["available"].(bool); !available {
+			return Run{}, fmt.Errorf("device_vm_listing_exists: this device already has VM Listing %v (%v); delete it before creating another", slot["listingId"], slot["status"])
+		}
 	}
 	if len(request.CandidateIDs) == 0 {
 		return Run{}, errors.New("at least one discovered candidateId is required")
@@ -169,6 +176,21 @@ func (s *Service) Create(request CreateRequest) (Run, error) {
 	}
 	s.start(run.RunID)
 	return run, nil
+}
+
+func (s *Service) vmListingSlot() map[string]any {
+	result := map[string]any{"limit": 1, "used": 0, "available": true}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var response struct {
+		Constraints struct {
+			VMListing map[string]any `json:"vmListing"`
+		} `json:"constraints"`
+	}
+	if err := s.cloud.JSON(ctx, http.MethodGet, "/v3/provider/listings", nil, &response); err == nil && response.Constraints.VMListing != nil {
+		return response.Constraints.VMListing
+	}
+	return result
 }
 
 func (s *Service) Get(runID string) (Run, bool) { return s.store.GetRun(runID) }
@@ -379,10 +401,8 @@ func (s *Service) execute(ctx context.Context, runID string) {
 		err = s.runResources(ctx, runID, policy, candidates, normalized)
 	case KindVM:
 		err = s.runVM(ctx, runID, policy, candidates[0], normalized)
-	case KindEndpoint:
-		err = s.runEndpoint(ctx, runID, policy, candidates[0], normalized)
-	case KindAPIBridge:
-		err = s.runAPIBridge(ctx, runID, policy, candidates[0], normalized)
+	case KindEndpoint, KindAPIBridge:
+		err = errors.New("Endpoint and API Bridge are created through Agent-normalized service drafts")
 	}
 	if err != nil && !errors.Is(err, context.Canceled) {
 		s.fail(runID, err)

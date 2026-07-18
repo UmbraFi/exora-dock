@@ -73,7 +73,20 @@ func TestRouteSmokeTestBoundsSSEPreview(t *testing.T) {
 	defer server.Close()
 	route := Route{OperationID: "events", Method: "GET", Path: "/events"}
 	result := TestRoute(context.Background(), RouteTestInput{Config: Config{LocalBaseURL: server.URL, Routes: []Route{route}, TimeoutSeconds: 5}, Route: route, TestPath: "/events"})
-	if !result.OK || len(result.SSEEvents) != 10 || !result.Truncated {
+	if !result.OK || len(result.SSEEvents) != 10 || !result.Truncated || result.StreamEndStatus != "preview_limit" || result.FirstEventLatencyMS < 0 {
 		t.Fatalf("SSE limits were not applied: %+v", result)
+	}
+}
+
+func TestRouteSmokeTestRecognizesOpenAIDoneEvent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"delta\":\"hello\"}\n\ndata: [DONE]\n\n")
+	}))
+	defer server.Close()
+	route := Route{OperationID: "chat", Method: "GET", Path: "/chat"}
+	result := TestRoute(context.Background(), RouteTestInput{Config: Config{LocalBaseURL: server.URL, Routes: []Route{route}, TimeoutSeconds: 5}, Route: route, TestPath: "/chat"})
+	if !result.OK || len(result.SSEEvents) != 2 || result.StreamEndStatus != "done" || result.Truncated {
+		t.Fatalf("OpenAI SSE completion was not reported: %+v", result)
 	}
 }

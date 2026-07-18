@@ -76,7 +76,7 @@ import './styles/modal.css'
 import './styles/policy.css'
 
 type OrderSide = 'buyer' | 'seller'
-type V3SellerTab = 'vm' | 'resources' | 'endpoint' | 'api_bridge' | 'openapi' | 'listings'
+type V3SellerTab = 'vm' | 'resources' | 'endpoint' | 'api_bridge' | 'listings'
 type V3WizardStepState = 'locked' | 'available' | 'busy' | 'complete' | 'error'
 
 type V3Product = {
@@ -97,10 +97,14 @@ type V3Listing = {
   productId: string
   status: string
   price?: Record<string, unknown>
+  limits?: Record<string, unknown>
+  workloadPolicy?: Record<string, unknown>
+  performancePolicy?: Record<string, unknown>
   availability?: Record<string, unknown>
   validation?: Record<string, unknown>
   version?: number
   updatedAt?: string
+  deletedAt?: string
   applicationSource?: V3ApplicationSource
   creationActor?: 'agent' | 'human' | string
   draftRunId?: string
@@ -132,17 +136,22 @@ type V3ListingApplication = {
   product: V3Product
   source: V3ApplicationSource | 'unclassified'
   readiness: { ready: boolean; checks: V3ReadinessCheck[] }
-  runtime?: { tunnelOnline: boolean; endpointHealthy: boolean; lastSeenAt?: string; routeFingerprint?: string; error?: string }
+  runtime?: { tunnelOnline: boolean; endpointHealthy: boolean; lastSeenAt?: string; contractSha256?: string; error?: string }
+  resourceItems?: V3CatalogResourceItem[]
+  lifecycle: { listed: boolean; allowedActions: string[]; statusReason?: string }
 }
+type V3VMListingConstraint = { limit: number; used: number; available: boolean; listingId?: string; status?: string; deletedAt?: string }
 type V3CatalogListing = {
   listing: V3Listing
   productManifest: V3Product
   availability?: Record<string, unknown>
   ownerMetadata?: { providerDockId?: string; isOwner?: boolean }
+  resourceItems?: V3CatalogResourceItem[]
 }
-type OrderAccessKeyStatus = { tokenId?: string; status?: string; credentialKind?: 'account_key' | 'order_key'; credentialFormat?: 'native' | 'openai_sk'; baseUrl?: string; activitySessionId?: string; listingId?: string; allowedActions?: string[]; maskedKey?: string; createdAt?: string; lastUsedAt?: string; expiresAt?: string; revokedAt?: string }
+type V3CatalogResourceItem = { resourceItemId: string; productId: string; listingId: string; title: string; description: string; fileName: string; contentType?: string; license: string; tags?: string[]; price: Record<string, any>; grantHours: number; sizeBytes: number; sha256: string; status: string; version: number }
+type V3APIOrder = { orderId: string; listingId: string; status: 'active' | 'inactive'; activatedAt?: string; deactivatedAt?: string; lastUsedAt?: string; createdAt?: string; updatedAt?: string }
 type V3ConsumerBalance = { accountId?: string; asset: string; availableAtomic: number; reservedAtomic: number; pendingAtomic: number }
-type V3LocalEndpoint = { endpointId: string; localBaseUrl: string; healthPath: string; routeFingerprint: string; lastProbeHealthy: boolean; lastProbeAt?: string; timeoutSeconds: number; concurrency: number }
+type V3LocalEndpoint = { endpointId: string; localBaseUrl: string; healthPath: string; contractSha256: string; lastProbeHealthy: boolean; lastProbeAt?: string; timeoutSeconds: number; concurrency: number }
 
 type V3ActivitySession = {
   sessionId: string
@@ -218,7 +227,7 @@ type V3ActivityDetail = V3ActivitySession & {
   identifiers?: Record<string, string>
 }
 
-type V3ResourceSource = { name: string; sizeBytes: number }
+type V3ResourceSource = { token: string; name: string; sizeBytes: number; sha256: string; title: string; description: string; price: number; tags: string[]; license: string; grantHours: number; status?: 'ready' | 'uploading' | 'verified' | 'failed' }
 type V3ResourceArchive = { token: string; name: string; sizeBytes: number; sourceBytes: number; sourceCount: number; format: 'zip'; status?: 'ready' | 'uploading' | 'verified' | 'failed' }
 type V3AssetProgress = { phase: 'selecting' | 'packaging' | 'complete' | 'uploading'; percent: number; completedFiles?: number; totalFiles?: number; inputBytes?: number; sourceBytes?: number; outputBytes?: number; completed?: number; total?: number }
 type V3ResourceSelectName = 'license'
@@ -226,12 +235,12 @@ type V3ListingProject = 'vm' | 'resources' | 'api'
 type V3EnvironmentImage = { imageId: string; version: string; status: string; signature?: string; cloudAvailable?: boolean; manifest: Record<string, any> }
 type V3ImageProgress = { imageId: string; phase: string; bytesDownloaded?: number; sizeBytes?: number }
 type V3HostScanProgress = { phase: string; percent: number; bytes?: number; samples?: number }
-type V3APIBridgeProtocol = 'openapi' | 'openai' | 'generic_http' | 'sse'
-type V3InterfaceMode = 'passthrough' | 'agent_managed'
-type V3APIPricingComponent = { dimension: 'request' | 'successful_request' | 'input_tokens' | 'output_tokens' | 'input_bytes' | 'output_bytes' | 'execution_second' | 'image' | 'provider_reported'; rateAtomic: number; per: number; meterSource: string; selector?: string; chargeOn: string }
-type V3APIRoute = { id: string; routeId: string; operationId: string; method: string; path: string; title: string; selected: boolean; price: number; pricing?: V3APIPricingComponent[]; maxChargePerInvocationAtomic?: number }
+type V3UpstreamAuthType = 'none' | 'bearer' | 'basic' | 'api_key' | 'header_api_key' | 'query_api_key' | 'cookie_api_key' | 'oauth2_client_credentials' | 'mtls'
+type V3APIPricingComponent = { dimension: 'request' | 'successful_request' | 'input_tokens' | 'output_tokens' | 'input_bytes' | 'output_bytes' | 'execution_second' | 'image' | 'provider_reported'; rateAtomic: number; per: number; meterSource: string; selector?: string; chargeOn: 'started' | 'succeeded' | 'completed' }
+type V3APIOperationReview = { id: string; operationId: string; method: string; path: string; title: string; displayName?: string; selected: boolean; price: number; pricingMode: 'default' | 'override'; pricing: V3APIPricingComponent[]; maxChargePerInvocationAtomic?: number; streaming: 'request_response' | 'server_stream'; sideEffect: boolean; idempotent: boolean; limits: { timeoutSeconds: number; maxRequestBytes: number; maxResponseBytes: number; maxConcurrency: number }; meteringCapabilities: string[] }
 type V3APIMaterial = { id: string; name: string; extension: string; sizeBytes: number; localPath: string; sha256?: string }
-type V3APIBridgeDraft = { draftId: string; version: number; status: string; bridgeMode?: 'transparent' | 'dock_tunnel'; interfaceMode: V3InterfaceMode; title: string; description: string; protocol: V3APIBridgeProtocol; baseUrl: string; healthPath: string; routes: Array<{ routeId: string; operationId: string; method: string; path: string; displayName: string; pricing: V3APIPricingComponent[]; maxChargePerInvocationAtomic: number }>; contract?: Record<string, any>; adapter?: Record<string, any>; agentNotes?: string; unresolvedFields?: string[] }
+type V3ServiceManifest = { interface: Record<string, any>; delivery: 'dock_tunnel' | 'cloud_direct'; operationPolicies: Array<{ operationId: string; interaction: 'request_response' | 'server_stream'; sideEffect: boolean; idempotent: boolean; limits: { timeoutSeconds: number; maxRequestBytes: number; maxResponseBytes: number; maxConcurrency: number }; meteringCapabilities: string[] }>; pricingTemplate: { currency: 'USDC'; defaults: V3APIPricingComponent[]; defaultMaxChargePerInvocationAtomic?: number; overrides?: Record<string, { components: V3APIPricingComponent[]; maxChargePerInvocationAtomic?: number }> } }
+type V3APIBridgeDraft = { draftId: string; version: number; status: string; applicationSource: 'endpoint' | 'api_bridge'; title: string; description: string; serviceManifest: V3ServiceManifest; normalization: { mode: 'agent' | 'manual_fallback'; runId?: string; failedRunId?: string; fallbackReason?: string; sourceSha256: string; outputSha256: string; actor: string }; unresolvedFields?: string[]; operationReviews: V3APIOperationReview[]; agentNotes?: string }
 type V3APIProbe = { ok: boolean; status?: number; latencyMs?: number; contentType?: string; checkedURL?: string; checkedAt?: string; error?: string }
 type SettingsView = 'general' | 'account-security' | 'agent-permissions' | 'notifications' | 'data-storage' | 'system-about'
 type WalletPanel = 'receive' | 'withdraw' | 'agent-limit' | 'history'
@@ -258,6 +267,9 @@ type DesktopSystemStatus = {
   cloudURL?: string
   update?: { supported?: boolean; channel?: string; automatic?: boolean; state?: string; version?: string; progress?: number; checkedAt?: string; message?: string }
 }
+type AccountAPIKeyStatus = { accessKey?: { tokenId?: string; maskedKey?: string; status?: string; createdAt?: string; lastUsedAt?: string } | null; secureStorageAvailable?: boolean; stored?: boolean; dockConfigured?: boolean; requiresImport?: boolean }
+type AgentSessionStatus = { sessionId: string; clientName?: string; scopes?: string[]; createdAt?: string; lastUsedAt?: string; idleAt?: string; expiresAt?: string }
+type AgentSessionPolicy = { scopes: string[]; idleSeconds: number; maxLifetimeSeconds: number; restBaseUrl?: string }
 type ProfileSubmenu = 'language' | 'theme'
 type PermissionMode = 'ask' | 'approve' | 'full' | 'custom'
 
@@ -802,12 +814,22 @@ app.innerHTML = `
                     <label class="wallet-limit-toggle"><input type="checkbox" data-wallet-limit-enabled /><span></span><strong>Enable</strong></label>
                   </header>
                   <div class="wallet-limit-usage" data-wallet-limit-usage></div>
-                  <form class="wallet-limit-form" data-wallet-limit-form>
-                    <label class="wallet-field"><span>Per payment limit</span><div class="wallet-money-input"><input name="singleLimit" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" /><em>USDC</em></div></label>
-                    <label class="wallet-field"><span>24-hour limit</span><div class="wallet-money-input"><input name="periodLimit" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" /><em>USDC</em></div></label>
-                    <label class="wallet-field wallet-code-field"><span>Cloud payment PIN</span><span class="wallet-code-control masked" data-wallet-code-control><input name="paymentPin" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="6" aria-label="Six digit Cloud payment PIN" /><span class="wallet-code-cells" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span></span><small>Required to save this policy</small></label>
-                    <div class="wallet-limit-actions"><span data-wallet-limit-error aria-live="polite"></span><button type="submit" data-wallet-limit-save>Save limits</button></div>
-                  </form>
+                  <section class="wallet-limit-config" aria-labelledby="wallet-limit-config-title">
+                    <div class="wallet-limit-config-heading">
+                      <div><strong id="wallet-limit-config-title">Policy thresholds</strong><span>Set the maximum amount an agent can spend automatically.</span></div>
+                      <span>USDC</span>
+                    </div>
+                    <form class="wallet-limit-form" data-wallet-limit-form>
+                      <div class="wallet-limit-thresholds">
+                        <label class="wallet-field"><span>Per payment limit</span><div class="wallet-money-input"><input name="singleLimit" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" /><em>USDC</em></div></label>
+                        <label class="wallet-field"><span>24-hour limit</span><div class="wallet-money-input"><input name="periodLimit" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00" /><em>USDC</em></div></label>
+                      </div>
+                      <div class="wallet-limit-authorization">
+                        <label class="wallet-field wallet-code-field"><span>Cloud payment PIN</span><span class="wallet-code-control masked" data-wallet-code-control><input name="paymentPin" type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="6" aria-label="Six digit Cloud payment PIN" /><span class="wallet-code-cells" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span></span><small>Required to save this policy</small></label>
+                        <div class="wallet-limit-actions"><span data-wallet-limit-error aria-live="polite"></span><button type="submit" data-wallet-limit-save>Save limits</button></div>
+                      </div>
+                    </form>
+                  </section>
                 </section>
 
                 <section class="wallet-panel wallet-history-panel hidden" id="wallet-panel-history" role="tabpanel" aria-labelledby="wallet-tab-history" data-wallet-panel="history">
@@ -1119,6 +1141,9 @@ const state: {
   pinSettingsCurrentValue: string
   pinSettingsSetupValue: string
   cloudPaymentPINConfigured?: boolean
+  accountAPIKeyStatus?: AccountAPIKeyStatus
+  agentSessions: AgentSessionStatus[]
+  agentSessionPolicy?: AgentSessionPolicy
   mcpInfoModalOpen: boolean
   walletModalOpen: boolean
   walletPanel: WalletPanel
@@ -1159,9 +1184,10 @@ const state: {
   v3ConsumerTransferProgress?: { phase: string; bytesDownloaded: number; sizeBytes: number }
   v3ConsumerPurchase?: Record<string, any>
   v3ConsumerLease?: Record<string, any>
-  v3OrderAccessKey?: OrderAccessKeyStatus
-  v3OrderAccessKeySessionId?: string
-  v3OrderAccessKeyBusy: boolean
+  v3ConsumerEstimate?: Record<string, any>
+  v3ConsumerEstimateLoading: boolean
+  v3APIOrder?: V3APIOrder
+  v3APIOrderBusy: boolean
   v3ApprovalBusyId?: string
   v3ActivitySessions: Record<OrderSide, V3ActivitySession[]>
   v3ActivityLoaded: Record<OrderSide, boolean>
@@ -1177,10 +1203,12 @@ const state: {
   v3SellerTab: V3SellerTab
   v3Listings: V3Listing[]
   v3ListingApplications: V3ListingApplication[]
+  v3VMListingConstraint: V3VMListingConstraint
   v3ListingsLoading: boolean
   v3ListingsLoaded: boolean
   v3HighlightedListingId?: string
   v3ExpandedListingId?: string
+  v3EditingListingId?: string
   v3PublishConfirmListingId?: string
   v3ApplicationAttemptKeys: Record<string, { fingerprint: string; key: string }>
   v3LocalEndpoints: V3LocalEndpoint[]
@@ -1200,10 +1228,12 @@ const state: {
   v3BaseFeeEnabled: boolean
   v3PricePerMinute: number
   v3MinimumMinutes: number
+  v3MaximumMinutes: number
   v3LongDiscountAfterMinutes: number
   v3LongDiscountPercent: number
   v3LongDiscountMinimumPricePercent: number
   v3LongDiscountEnabled: boolean
+  v3AllowSustainedCompute: boolean
   v3EnvironmentSaving: boolean
   v3InstalledEnvironments: Array<Record<string, any>>
   v3ImageProgress?: V3ImageProgress
@@ -1212,41 +1242,56 @@ const state: {
   v3HostScanProgress?: V3HostScanProgress
   v3ResourceArchive?: V3ResourceArchive
   v3ResourceSources: V3ResourceSource[]
+  v3SelectedResourceToken?: string
   v3AssetProgress?: V3AssetProgress
   v3ResourceLicense: string
   v3ResourceTitle: string
   v3ResourceDescription: string
+  v3ResourceCategory: string
   v3ResourceVersion: string
   v3ResourceGrantHours: number
   v3ResourcePrice: number
   v3ResourceSubmitting: boolean
-  v3APIProtocol: V3APIBridgeProtocol
+  v3ResourceTargetSheet?: { listingId: string; productId: string; title: string; description: string }
   v3APITitle: string
   v3APIDescription: string
   v3APIBaseURL: string
   v3APIHealthPath: string
-  v3APIAuthType: 'bearer' | 'api_key' | 'basic' | 'none'
+  v3APIAuthType: V3UpstreamAuthType
   v3APIKeyHeader: string
   v3APIDefaultPrice: number
   v3APIPriceUnit: 'request' | 'successful_request' | 'tokens' | 'image' | 'second'
-  v3APIRoutes: V3APIRoute[]
+  v3APIOperations: V3APIOperationReview[]
   v3APIProbe?: V3APIProbe
   v3APIProbing: boolean
   v3APIStep: 1 | 2 | 3
   v3APIDraftId: string
-  v3APIInterfaceMode: V3InterfaceMode
   v3APIDraft?: V3APIBridgeDraft
   v3APIDraftVersion: number
   v3APIMaterials: V3APIMaterial[]
   v3APIMaterialsImporting: boolean
   v3APIUnresolvedFields: string[]
   v3APIAgentNotes: string
+  v3APIFailedRunId: string
+  v3APIFallbackReason: string
+  v3APIFallbackManifest: string
   v3APISellerAttestation: boolean
   v3APIAttestPricing: boolean
   v3APIAttestUsage: boolean
   v3APIAttestRights: boolean
   v3APICredentialConfigured: boolean
+  v3APISecret: string
   v3APIBasicUsername: string
+  v3APIOAuthTokenURL: string
+  v3APIOAuthClientID: string
+  v3APIOAuthClientSecret: string
+  v3APIOAuthScope: string
+  v3APIOAuthAudience: string
+  v3APIMTLSCertificate: string
+  v3APIMTLSPrivateKey: string
+  v3APIMTLSCA: string
+  v3APIMTLSServerName: string
+  v3APIMaterialNote: string
   v3APISavingListing: boolean
   v3APISaveAttemptKey?: string
   v3APIMaterialsLoaded: boolean
@@ -1257,8 +1302,10 @@ const state: {
   v3APIDraftMaterialFingerprint: string
   v3APIRequiredDraftVersion: number
   v3EndpointDraftId: string
-  v3EndpointInterfaceMode: V3InterfaceMode
   v3EndpointAgentReady: boolean
+  v3EndpointFailedRunId: string
+  v3EndpointFallbackReason: string
+  v3EndpointFallbackManifest: string
   v3EndpointDraftDirty: boolean
   v3EndpointDraft?: V3APIBridgeDraft
   v3EndpointMaterials: V3APIMaterial[]
@@ -1275,10 +1322,20 @@ const state: {
   v3EndpointProbing: boolean
   v3EndpointLocalURL: string
   v3EndpointHealthPath: string
-  v3EndpointAuthType: 'bearer' | 'api_key' | 'basic' | 'none'
+  v3EndpointAuthType: V3UpstreamAuthType
   v3EndpointSecret: string
   v3EndpointAPIKeyHeader: string
   v3EndpointBasicUsername: string
+  v3EndpointOAuthTokenURL: string
+  v3EndpointOAuthClientID: string
+  v3EndpointOAuthClientSecret: string
+  v3EndpointOAuthScope: string
+  v3EndpointOAuthAudience: string
+  v3EndpointMTLSCertificate: string
+  v3EndpointMTLSPrivateKey: string
+  v3EndpointMTLSCA: string
+  v3EndpointMTLSServerName: string
+  v3EndpointMaterialNote: string
   v3EndpointConcurrency: number
   v3EndpointTimeout: number
   v3EndpointProbe?: V3APIProbe
@@ -1287,10 +1344,12 @@ const state: {
   v3EndpointRouteTestContentType: string
   v3EndpointRouteTestBody: string
   v3EndpointRouteTestDangerConfirmed: boolean
-  v3EndpointRouteTestResult?: { ok: boolean; status?: number; latencyMs?: number; contentType?: string; bytesRead?: number; truncated?: boolean; preview?: string; sseEvents?: string[]; checkedAt?: string; error?: string }
+  v3EndpointRouteTestResult?: { ok: boolean; status?: number; latencyMs?: number; firstEventLatencyMs?: number; streamEndStatus?: string; contentType?: string; bytesRead?: number; truncated?: boolean; preview?: string; sseEvents?: string[]; checkedAt?: string; error?: string }
   v3EndpointAttestPricing: boolean
   v3EndpointAttestRuntime: boolean
   v3EndpointAttestRights: boolean
+  v3ServiceAgentSessionsLoaded: boolean
+  v3ServiceAgentSessionsLoading: boolean
 } = {
   busy: false,
   profileMenuOpen: false,
@@ -1325,6 +1384,9 @@ const state: {
   pinSettingsCurrentValue: '',
   pinSettingsSetupValue: '',
   cloudPaymentPINConfigured: undefined,
+  accountAPIKeyStatus: undefined,
+  agentSessions: [],
+  agentSessionPolicy: undefined,
   mcpInfoModalOpen: false,
   walletModalOpen: false,
   walletPanel: 'receive',
@@ -1361,9 +1423,10 @@ const state: {
   v3ConsumerTransferProgress: undefined,
   v3ConsumerPurchase: undefined,
   v3ConsumerLease: undefined,
-  v3OrderAccessKey: undefined,
-  v3OrderAccessKeySessionId: undefined,
-  v3OrderAccessKeyBusy: false,
+  v3ConsumerEstimate: undefined,
+  v3ConsumerEstimateLoading: false,
+  v3APIOrder: undefined,
+  v3APIOrderBusy: false,
   v3ApprovalBusyId: undefined,
   v3ActivitySessions: { buyer: [], seller: [] },
   v3ActivityLoaded: { buyer: false, seller: false },
@@ -1379,10 +1442,12 @@ const state: {
   v3SellerTab: 'listings',
   v3Listings: [],
   v3ListingApplications: [],
+  v3VMListingConstraint: { limit: 1, used: 0, available: true },
   v3ListingsLoading: false,
   v3ListingsLoaded: false,
   v3HighlightedListingId: undefined,
   v3ExpandedListingId: undefined,
+  v3EditingListingId: undefined,
   v3PublishConfirmListingId: undefined,
   v3ApplicationAttemptKeys: {},
   v3LocalEndpoints: [],
@@ -1399,22 +1464,26 @@ const state: {
   v3BaseFeeEnabled: false,
   v3PricePerMinute: 0,
   v3MinimumMinutes: 10,
+  v3MaximumMinutes: 240,
   v3LongDiscountAfterMinutes: 60,
   v3LongDiscountPercent: 0,
   v3LongDiscountMinimumPricePercent: 50,
   v3LongDiscountEnabled: false,
+  v3AllowSustainedCompute: true,
   v3EnvironmentSaving: false,
   v3InstalledEnvironments: [],
   v3HostScanning: false,
   v3ResourceSources: [],
+  v3SelectedResourceToken: undefined,
   v3ResourceLicense: 'commercial',
   v3ResourceTitle: '',
   v3ResourceDescription: '',
+  v3ResourceCategory: 'software',
   v3ResourceVersion: '1.0.0',
   v3ResourceGrantHours: 24,
   v3ResourcePrice: 0,
   v3ResourceSubmitting: false,
-  v3APIProtocol: 'openapi',
+  v3ResourceTargetSheet: undefined,
   v3APITitle: '',
   v3APIDescription: '',
   v3APIBaseURL: '',
@@ -1423,23 +1492,36 @@ const state: {
   v3APIKeyHeader: 'X-API-Key',
   v3APIDefaultPrice: 0.01,
   v3APIPriceUnit: 'request',
-  v3APIRoutes: [],
+  v3APIOperations: [],
   v3APIProbing: false,
   v3APIStep: 1,
   v3APIDraftId: localStorage.getItem('exora.apiBridgeDraftId') || `apid_${crypto.randomUUID().replace(/-/g, '')}`,
-  v3APIInterfaceMode: 'passthrough',
   v3APIDraft: undefined,
   v3APIDraftVersion: 0,
   v3APIMaterials: [],
   v3APIMaterialsImporting: false,
   v3APIUnresolvedFields: [],
   v3APIAgentNotes: '',
+  v3APIFailedRunId: '',
+  v3APIFallbackReason: '',
+  v3APIFallbackManifest: '',
   v3APISellerAttestation: false,
   v3APIAttestPricing: false,
   v3APIAttestUsage: false,
   v3APIAttestRights: false,
   v3APICredentialConfigured: false,
+  v3APISecret: '',
   v3APIBasicUsername: '',
+  v3APIOAuthTokenURL: '',
+  v3APIOAuthClientID: '',
+  v3APIOAuthClientSecret: '',
+  v3APIOAuthScope: '',
+  v3APIOAuthAudience: '',
+  v3APIMTLSCertificate: '',
+  v3APIMTLSPrivateKey: '',
+  v3APIMTLSCA: '',
+  v3APIMTLSServerName: '',
+  v3APIMaterialNote: '',
   v3APISavingListing: false,
   v3APISaveAttemptKey: undefined,
   v3APIMaterialsLoaded: false,
@@ -1450,8 +1532,10 @@ const state: {
   v3APIDraftMaterialFingerprint: '',
   v3APIRequiredDraftVersion: 0,
   v3EndpointDraftId: localStorage.getItem('exora.endpointDraftId') || `apid_${crypto.randomUUID().replace(/-/g, '')}`,
-  v3EndpointInterfaceMode: 'agent_managed',
   v3EndpointAgentReady: false,
+  v3EndpointFailedRunId: '',
+  v3EndpointFallbackReason: '',
+  v3EndpointFallbackManifest: '',
   v3EndpointDraftDirty: false,
   v3EndpointDraft: undefined,
   v3EndpointMaterials: [],
@@ -1472,6 +1556,16 @@ const state: {
   v3EndpointSecret: '',
   v3EndpointAPIKeyHeader: 'X-API-Key',
   v3EndpointBasicUsername: '',
+  v3EndpointOAuthTokenURL: '',
+  v3EndpointOAuthClientID: '',
+  v3EndpointOAuthClientSecret: '',
+  v3EndpointOAuthScope: '',
+  v3EndpointOAuthAudience: '',
+  v3EndpointMTLSCertificate: '',
+  v3EndpointMTLSPrivateKey: '',
+  v3EndpointMTLSCA: '',
+  v3EndpointMTLSServerName: '',
+  v3EndpointMaterialNote: '',
   v3EndpointConcurrency: 1,
   v3EndpointTimeout: 120,
   v3EndpointRouteTestPath: '',
@@ -1483,6 +1577,8 @@ const state: {
   v3EndpointAttestPricing: false,
   v3EndpointAttestRuntime: false,
   v3EndpointAttestRights: false,
+  v3ServiceAgentSessionsLoaded: false,
+  v3ServiceAgentSessionsLoading: false,
 }
 
 let settingsPersistenceReady = false
@@ -2390,16 +2486,97 @@ function v3AtomicFromPrice(price: Record<string, any>, keys: string[]) {
   return amount > 0 ? Math.round(amount * 1_000_000) : 0
 }
 
+function v3ServiceManifestOperations(productManifest: Record<string, any>) {
+  const serviceManifest = productManifest?.serviceManifest as V3ServiceManifest | undefined
+  if (!serviceManifest?.interface || !Array.isArray(serviceManifest.operationPolicies)) return []
+  const policies = new Map(serviceManifest.operationPolicies.map((policy) => [policy.operationId, policy]))
+  const overrides = serviceManifest.pricingTemplate?.overrides || {}
+  const operations: Array<Record<string, any>> = []
+  for (const [operationPath, rawPathItem] of Object.entries(serviceManifest.interface.paths || {})) {
+    const pathItem = rawPathItem as Record<string, any>
+    for (const method of ['get', 'post', 'put', 'patch', 'delete', 'head', 'options']) {
+      const operation = pathItem[method] as Record<string, any> | undefined
+      if (!operation?.operationId) continue
+      const operationId = String(operation.operationId)
+      const pricing = overrides[operationId]
+      operations.push({
+        operationId,
+        method: method.toUpperCase(),
+        path: operationPath,
+        title: String(operation.summary || operationId),
+        policy: policies.get(operationId),
+        pricing: pricing?.components?.length ? pricing.components : serviceManifest.pricingTemplate.defaults || [],
+        maxChargePerInvocationAtomic: pricing?.maxChargePerInvocationAtomic || serviceManifest.pricingTemplate.defaultMaxChargePerInvocationAtomic || 0,
+      })
+    }
+  }
+  return operations
+}
+
 function v3ConsumerMaxCharge(listing: V3Listing, product: V3Product, quantity = 1) {
   const price = listing.price || {}
   if (product.productKind === 'compute') return v3AtomicFromPrice(price, ['amountAtomicPerMinute', 'pricePerMinuteAtomic', 'amountAtomic']) * Math.max(1, quantity)
   if (product.productKind === 'api_operation') {
-    const operations = Array.isArray(product.manifest?.operations)
-      ? product.manifest.operations as Array<Record<string, any>>
-      : Array.isArray(product.manifest?.routes) ? product.manifest.routes as Array<Record<string, any>> : []
+    const operations = v3ServiceManifestOperations(product.manifest || {})
     return Math.max(v3AtomicFromPrice(price, ['maxChargePerInvocationAtomic', 'amountAtomic']), ...operations.map((operation) => Number(operation.maxChargePerInvocationAtomic || 0)))
   }
   return v3AtomicFromPrice(price, ['amountAtomic', 'fixedAmountAtomic'])
+}
+
+let v3ComputeEstimateTimer: number | undefined
+let v3ComputeEstimateSequence = 0
+
+function v3ComputeListingLimits(listing: V3Listing, product: V3Product) {
+  const limits = (listing.limits || product.manifest?.limits || {}) as Record<string, any>
+  const v2 = (listing.price as Record<string, any> | undefined)?.model === 'compute_time_v2'
+  const minMinutes = v2 ? Math.max(1, Number(limits.minMinutes || 10)) : 1
+  const maxMinutes = v2 ? Math.max(minMinutes, Number(limits.maxMinutes || 240)) : 10080
+  return { minMinutes, maxMinutes }
+}
+
+function syncV3ComputeEstimateDOM() {
+  const estimate = state.v3ConsumerEstimate
+  const charge = fields.actionView.querySelector<HTMLElement>('.v3-consumer-charge strong')
+  const detail = fields.actionView.querySelector<HTMLElement>('[data-v3-compute-estimate-detail]')
+  const submit = fields.actionView.querySelector<HTMLButtonElement>('[data-v3-compute-submit]')
+  const error = fields.actionView.querySelector<HTMLElement>('[data-v3-compute-estimate-error]')
+  if (charge) charge.textContent = state.v3ConsumerEstimateLoading ? 'Calculating…' : estimate ? v3AtomicMoney(Number(estimate.amountAtomic || 0), 'USDC') : '—'
+  if (detail) detail.textContent = estimate ? `${Number(estimate.baseFeeAtomic || 0) > 0 ? `${v3AtomicMoney(Number(estimate.baseFeeAtomic), 'USDC')} start · ` : ''}${Number(estimate.discountAtomic || 0) > 0 ? `${v3AtomicMoney(Number(estimate.discountAtomic), 'USDC')} discount · ` : ''}${Number(estimate.cumulativeMinutes || estimate.durationMinutes || 0)} cumulative min` : 'Cloud-authoritative quote required'
+  if (submit) {
+    const form = submit.closest<HTMLFormElement>('[data-v3-consumer-form]')
+    const expectedMode = form?.dataset.v3ConsumerForm === 'compute-extension' ? 'extension' : 'initial'
+    submit.disabled = state.v3ConsumerEstimateLoading || !estimate || estimate.mode !== expectedMode || state.v3ConsumerBusy
+  }
+  if (error) error.textContent = state.v3ConsumerError || ''
+}
+
+async function refreshV3ComputeEstimate(listingId: string, durationMinutes: number, purchaseId?: string) {
+  const sequence = ++v3ComputeEstimateSequence
+  state.v3ConsumerEstimateLoading = true
+  state.v3ConsumerEstimate = undefined
+  state.v3ConsumerError = undefined
+  syncV3ComputeEstimateDOM()
+  try {
+    const response = purchaseId
+      ? await invoke<{ estimate?: Record<string, any> }>('consumer_estimate_compute_extension', { input: { purchaseId, durationMinutes } })
+      : await invoke<{ estimate?: Record<string, any> }>('consumer_purchase_estimate', { input: { listingId, durationMinutes } })
+    if (sequence !== v3ComputeEstimateSequence) return undefined
+    state.v3ConsumerEstimate = { ...(response.estimate || {}), mode: purchaseId ? 'extension' : 'initial' }
+    return state.v3ConsumerEstimate
+  } catch (error) {
+    if (sequence === v3ComputeEstimateSequence) state.v3ConsumerError = humanizeError(error)
+    return undefined
+  } finally {
+    if (sequence === v3ComputeEstimateSequence) {
+      state.v3ConsumerEstimateLoading = false
+      syncV3ComputeEstimateDOM()
+    }
+  }
+}
+
+function scheduleV3ComputeEstimate(listingId: string, durationMinutes: number, purchaseId?: string) {
+  if (v3ComputeEstimateTimer !== undefined) window.clearTimeout(v3ComputeEstimateTimer)
+  v3ComputeEstimateTimer = window.setTimeout(() => { void refreshV3ComputeEstimate(listingId, durationMinutes, purchaseId) }, 250)
 }
 
 async function loadV3ActivitySessions(side: OrderSide = state.workOrderSide, force = false) {
@@ -2489,8 +2666,7 @@ async function loadV3ActivityDetail(displayId: string) {
     const details = await Promise.all(display.sessionIds.map(fetchV3ActivitySessionDetail))
     if (state.selectedV3ActivitySessionId !== displayId) return
     state.v3ActivityDetail = mergeV3ActivityDetails(display, details)
-    const activitySessionId = display.role === 'buyer' && display.sessionIds.length === 1 ? display.activitySessionId : undefined
-    if (activitySessionId) void loadOrderAccessKeyStatus(activitySessionId)
+    if (display.role === 'buyer' && state.v3ActivityDetail.productKind === 'api_operation') void loadAPIOrderStatus(state.v3ActivityDetail.listingId)
   } catch (error) {
     if (state.selectedV3ActivitySessionId === displayId) state.v3ActivityDetailError = humanizeError(error)
   } finally {
@@ -2505,14 +2681,12 @@ async function loadV3ActivityDetail(displayId: string) {
 function selectV3ActivityDisplayRecord(displayId: string) {
   const display = findV3ActivityDisplayRecord(displayId)
   if (!display) return
-  state.v3ActivityBucket[display.role] = display.bucket
   state.selectedV3ActivitySessionId = displayId
   state.v3SelectedProduct = undefined
   state.v3ActivityDetail = display
   state.v3ActivityDetailError = undefined
-  state.v3OrderAccessKey = undefined
-  state.v3OrderAccessKeySessionId = display.sessionIds.length === 1 ? display.activitySessionId : undefined
-  state.v3OrderAccessKeyBusy = false
+  state.v3APIOrder = undefined
+  state.v3APIOrderBusy = false
   renderLedger()
   void loadV3ActivityDetail(displayId)
 }
@@ -2523,26 +2697,24 @@ function closeV3ActivityDetail() {
   state.v3ActivityDetail = undefined
   state.v3ActivityDetailError = undefined
   state.v3ActivityDetailLoading = false
-  state.v3OrderAccessKey = undefined
-  state.v3OrderAccessKeySessionId = undefined
-  state.v3OrderAccessKeyBusy = false
+  state.v3APIOrder = undefined
+  state.v3APIOrderBusy = false
   renderAll()
 }
 
-async function loadOrderAccessKeyStatus(activitySessionId: string) {
-  if (!activitySessionId) return
-  state.v3OrderAccessKeySessionId = activitySessionId
-  state.v3OrderAccessKeyBusy = true
+async function loadAPIOrderStatus(listingId: string) {
+  if (!listingId) return
+  state.v3APIOrderBusy = true
   renderDecisionPanel()
   try {
-    const response = await invoke<{ accessKey?: OrderAccessKeyStatus }>('order_access_key_status', { input: { activitySessionId } })
-    if (state.v3ActivityDetail?.activitySessionId !== activitySessionId) return
-    state.v3OrderAccessKey = response.accessKey
+    const response = await invoke<{ order?: V3APIOrder }>('api_order_status', { input: { listingId } })
+    if (state.v3ActivityDetail?.listingId !== listingId) return
+    state.v3APIOrder = response.order
   } catch (error) {
-    if (state.v3ActivityDetail?.activitySessionId === activitySessionId) showToast(humanizeError(error))
+    if (state.v3ActivityDetail?.listingId === listingId) showToast(humanizeError(error))
   } finally {
-    if (state.v3ActivityDetail?.activitySessionId === activitySessionId) {
-      state.v3OrderAccessKeyBusy = false
+    if (state.v3ActivityDetail?.listingId === listingId) {
+      state.v3APIOrderBusy = false
       renderDecisionPanel()
     }
   }
@@ -2555,12 +2727,13 @@ async function loadV3Listings() {
   renderDecisionPanel()
   try {
     const [response, local, draftRuns] = await Promise.all([
-      invoke<{ listings?: V3Listing[]; applications?: V3ListingApplication[]; offline?: boolean }>('provider_listings'),
+      invoke<{ listings?: V3Listing[]; applications?: V3ListingApplication[]; constraints?: { vmListing?: V3VMListingConstraint }; offline?: boolean }>('provider_listings'),
       invoke<{ endpoints?: V3LocalEndpoint[] }>('provider_endpoint_local_list').catch(() => ({ endpoints: [] })),
       invoke<{ runs?: SellerDraftRunSummary[] }>('seller_automation_draft_runs', { input: { limit: 20 } }).catch(() => ({ runs: [] })),
     ])
     state.v3Listings = response.listings || []
     state.v3ListingApplications = response.applications || []
+    state.v3VMListingConstraint = response.constraints?.vmListing || { limit: 1, used: 0, available: true }
     state.v3LocalEndpoints = local.endpoints || []
     state.sellerAutomation = { ...(state.sellerAutomation || { configured: false, credentials: [] }), runs: draftRuns.runs || [] }
     state.v3ListingsLoaded = true
@@ -2573,6 +2746,45 @@ async function loadV3Listings() {
   }
 }
 
+function v3EnvironmentImageKey(image: Pick<V3EnvironmentImage, 'imageId' | 'version'>) {
+  return `${String(image.imageId || '').trim()}@${String(image.version || '').trim()}`
+}
+
+function v3InstalledEnvironmentCatalogImage(environment: Record<string, any>): V3EnvironmentImage | undefined {
+  const attestation = environment.attestation || {}
+  if (attestation.status !== 'ready' || !attestation.imageId || !attestation.imageVersion) return undefined
+  const report = attestation.report || {}
+  const suppliedManifest = environment.manifest || attestation.manifest || report.manifest || {}
+  const cuda = Boolean(report.cuda || suppliedManifest.gpu?.required)
+  return {
+    imageId: String(attestation.imageId),
+    version: String(attestation.imageVersion),
+    status: 'ready_local',
+    cloudAvailable: false,
+    manifest: {
+      schema: 'exora.environment_image.v3alpha1',
+      name: String(suppliedManifest.name || report.imageName || attestation.imageId),
+      description: String(suppliedManifest.description || sx('Installed and validated environment on this PC.', '已在本机安装并验证的环境。')),
+      architecture: suppliedManifest.architecture || 'amd64',
+      runtimeBackends: suppliedManifest.runtimeBackends || ['wsl2'],
+      os: suppliedManifest.os || { distribution: String(report.osDistribution || (String(attestation.imageId).includes('ubuntu') ? 'Ubuntu' : 'Linux')), version: String(report.osVersion || '') },
+      components: suppliedManifest.components || [cuda ? 'NVIDIA CUDA' : 'CPU', 'Exora Guest Contract'],
+      gpu: suppliedManifest.gpu || { required: cuda, vendor: cuda ? 'nvidia' : 'none' },
+      artifact: suppliedManifest.artifact || { format: 'wsl', sizeBytes: Number(report.imageSizeBytes || 0) },
+    },
+  }
+}
+
+function v3MergeEnvironmentImages(catalogImages: V3EnvironmentImage[], installedEnvironments: Array<Record<string, any>>) {
+  const images = new Map<string, V3EnvironmentImage>()
+  catalogImages.forEach((image) => images.set(v3EnvironmentImageKey(image), image))
+  installedEnvironments.forEach((environment) => {
+    const localImage = v3InstalledEnvironmentCatalogImage(environment)
+    if (localImage && !images.has(v3EnvironmentImageKey(localImage))) images.set(v3EnvironmentImageKey(localImage), localImage)
+  })
+  return Array.from(images.values())
+}
+
 async function loadV3WindowsEnvironments() {
   if (state.v3EnvironmentImagesLoaded) return
   state.v3EnvironmentImagesLoaded = true
@@ -2580,16 +2792,16 @@ async function loadV3WindowsEnvironments() {
     const [runtime, catalog, installed] = await Promise.all([
       invoke<{ result?: Record<string, unknown>; measuredAt?: string }>('provider_host_snapshot'),
       invoke<{ images?: V3EnvironmentImage[]; offline?: boolean }>('provider_environment_catalog'),
-      invoke<{ local?: { environments?: Array<Record<string, any>> }; attestations?: Array<Record<string, any>>; storage?: { rootPath?: string; workspaceGiB?: number; freeBytes?: number; pricing?: { baseFee?: number; baseFeeEnabled?: boolean; pricePerMinute?: number; minimumMinutes?: number; longDiscountAfterMinutes?: number; longDiscountPercent?: number; longDiscountMinimumPricePercent?: number; longDiscountEnabled?: boolean } } }>('provider_environment_installed'),
+      invoke<{ local?: { environments?: Array<Record<string, any>> }; attestations?: Array<Record<string, any>>; storage?: { rootPath?: string; workspaceGiB?: number; freeBytes?: number; pricing?: { baseFee?: number; baseFeeEnabled?: boolean; pricePerMinute?: number; minimumMinutes?: number; maximumMinutes?: number; longDiscountAfterMinutes?: number; longDiscountPercent?: number; longDiscountMinimumPricePercent?: number; longDiscountEnabled?: boolean; allowSustainedCompute?: boolean } } }>('provider_environment_installed'),
     ])
     if (runtime.result && Object.keys(runtime.result).length) state.v3VMProbe = runtime.result
-    state.v3EnvironmentImages = catalog.images || []
     state.v3EnvironmentCatalogOffline = Boolean(catalog.offline)
     const attestations = installed.attestations || []
     state.v3InstalledEnvironments = (installed.local?.environments || []).map((environment) => ({
       ...environment,
-      attestation: attestations.find((item) => item.report?.environmentId === environment.environmentId),
+      attestation: attestations.find((item) => item.report?.environmentId === environment.environmentId || `${item.imageId}-${item.imageVersion}`.replace(/[^a-zA-Z0-9._-]/g, '-') === environment.environmentId),
     }))
+    state.v3EnvironmentImages = v3MergeEnvironmentImages(catalog.images || [], state.v3InstalledEnvironments)
     state.v3EnvironmentRoot = installed.storage?.rootPath || ''
     state.v3EnvironmentWorkspaceGiB = Math.max(20, Number(installed.storage?.workspaceGiB || 100))
     state.v3EnvironmentRootFreeBytes = Number(installed.storage?.freeBytes || 0)
@@ -2597,10 +2809,12 @@ async function loadV3WindowsEnvironments() {
     state.v3BaseFeeEnabled = installed.storage?.pricing?.baseFeeEnabled ?? state.v3BaseFee > 0
     state.v3PricePerMinute = Math.max(0, Number(installed.storage?.pricing?.pricePerMinute || 0))
     state.v3MinimumMinutes = Math.max(1, Number(installed.storage?.pricing?.minimumMinutes || 10))
+    state.v3MaximumMinutes = Math.max(state.v3MinimumMinutes, Math.min(10080, Number(installed.storage?.pricing?.maximumMinutes || 240)))
     state.v3LongDiscountAfterMinutes = Math.max(1, Number(installed.storage?.pricing?.longDiscountAfterMinutes || 60))
     state.v3LongDiscountPercent = Math.max(0, Number(installed.storage?.pricing?.longDiscountPercent || 0))
     state.v3LongDiscountMinimumPricePercent = Math.max(1, Math.min(100, Number(installed.storage?.pricing?.longDiscountMinimumPricePercent || 50)))
     state.v3LongDiscountEnabled = installed.storage?.pricing?.longDiscountEnabled ?? state.v3LongDiscountPercent > 0
+    state.v3AllowSustainedCompute = installed.storage?.pricing?.allowSustainedCompute ?? true
     const ready = state.v3InstalledEnvironments.find((item) => item.attestation?.status === 'ready')
     if (ready) state.v3VMTemplate = { ...ready.attestation.report, imageId: ready.attestation.imageId, imageVersion: ready.attestation.imageVersion, environmentId: ready.environmentId, valid: true, runtimeBackend: 'wsl2' }
     state.v3EnvironmentImagesLoaded = true
@@ -2610,6 +2824,29 @@ async function loadV3WindowsEnvironments() {
     state.v3SellerError = humanizeError(error)
   }
   renderDecisionPanel()
+}
+
+let v3LinuxPricingLoaded = false
+async function loadV3LinuxPricingSettings() {
+  if (v3LinuxPricingLoaded) return
+  v3LinuxPricingLoaded = true
+  try {
+    const storage = await invoke<Record<string, any>>('provider_environment_storage')
+    const pricing = storage.pricing || {}
+    state.v3BaseFee = Math.max(0, Number(pricing.baseFee || 0))
+    state.v3BaseFeeEnabled = pricing.baseFeeEnabled ?? state.v3BaseFee > 0
+    state.v3PricePerMinute = Math.max(0, Number(pricing.pricePerMinute || 0))
+    state.v3MinimumMinutes = Math.max(1, Number(pricing.minimumMinutes || 10))
+    state.v3MaximumMinutes = Math.max(state.v3MinimumMinutes, Math.min(10080, Number(pricing.maximumMinutes || 240)))
+    state.v3LongDiscountAfterMinutes = Math.max(1, Number(pricing.longDiscountAfterMinutes || 60))
+    state.v3LongDiscountPercent = Math.max(0, Number(pricing.longDiscountPercent || 0))
+    state.v3LongDiscountMinimumPricePercent = Math.max(1, Math.min(100, Number(pricing.longDiscountMinimumPricePercent || 50)))
+    state.v3LongDiscountEnabled = pricing.longDiscountEnabled ?? state.v3LongDiscountPercent > 0
+    state.v3AllowSustainedCompute = pricing.allowSustainedCompute ?? true
+    renderDecisionPanel()
+  } catch {
+    v3LinuxPricingLoaded = false
+  }
 }
 
 async function runV3WindowsHostScan() {
@@ -2767,45 +3004,15 @@ function renderV3ActivityDelivery(detail: V3ActivityDetail) {
   `
 }
 
-function v3OrderAccessActions(detail: V3ActivityDetail) {
-  if (detail.productKind === 'api_operation') return ['invoke_operation', 'get_balance']
-  if (detail.productKind === 'compute') return ['extend_compute_minutes', 'get_lease', 'release_lease', 'get_balance']
-  return ['create_download_transfer', 'get_balance']
-}
-
-function v3OrderAccessActionLabel(action: string) {
-  const labels: Record<string, [string, string]> = {
-    invoke_operation: ['Invoke operation', '调用操作'],
-    get_balance: ['Read balance', '读取余额'],
-    extend_compute_minutes: ['Extend minutes', '延长时长'],
-    get_lease: ['Read lease', '读取租约'],
-    release_lease: ['Release lease', '释放租约'],
-    create_download_transfer: ['Retry download', '重试下载'],
-  }
-  const label = labels[action]
-  return label ? v3HistoryCopy(label[0], label[1]) : action.replaceAll('_', ' ')
-}
-
-function renderV3OrderAccessKey(detail: V3ActivityDetail) {
-  if (detail.role !== 'buyer' || !detail.activitySessionId) return ''
-  const key = state.v3OrderAccessKeySessionId === detail.activitySessionId ? state.v3OrderAccessKey : undefined
-  const expired = Boolean(key?.expiresAt && new Date(key.expiresAt).getTime() <= Date.now())
-  const active = key?.status === 'active' && !expired
-  const retainUntil = v3ActivityRetainUntil(detail)
-  const orderAccessOpen = detail.status === 'active' || Boolean(retainUntil && sortTime(retainUntil) > Date.now())
-  if (!orderAccessOpen && !active) return ''
-  const busy = state.v3OrderAccessKeyBusy
-  const actionSummary = (key?.allowedActions || v3OrderAccessActions(detail)).map(v3OrderAccessActionLabel).join(' · ')
-  const connectionSummary = key?.baseUrl ? `Current listing OpenAI base URL: ${key.baseUrl}` : v3HistoryCopy('One SK works across every Exora API', '一个 SK 可用于所有 Exora API')
+function renderV3APIOrder(detail: V3ActivityDetail) {
+  if (detail.role !== 'buyer' || detail.productKind !== 'api_operation') return ''
+  const order = state.v3APIOrder
+  const active = order?.status === 'active'
   return `<section class="v3-activity-panel v3-order-access-key ${active ? 'is-active' : ''}">
-    <header><span>${escapeHTML(v3HistoryCopy('API ACCESS', 'API 访问'))}</span><h3>${escapeHTML(v3HistoryCopy('Unified buyer SK', '买家统一 SK'))}</h3></header>
-    ${busy && !key ? `<div class="v3-order-key-loading"><span class="v3-history-spinner"></span>${escapeHTML(v3HistoryCopy('Checking order access…', '正在检查订单访问权限…'))}</div>` : active ? `
-      <div class="v3-order-key-status"><span>${icon(KeyRound)}</span><div><strong>${escapeHTML(key?.maskedKey || 'exa_…')}</strong><small>${escapeHTML(connectionSummary)}</small></div><em>${escapeHTML(v3HistoryCopy('Active', '有效'))}</em></div>
-      <dl><div><dt>${escapeHTML(v3HistoryCopy('Allowed', '允许操作'))}</dt><dd>${escapeHTML(actionSummary)}</dd></div><div><dt>${escapeHTML(v3HistoryCopy('Expires', '有效期至'))}</dt><dd>${key?.expiresAt ? escapeHTML(new Date(key.expiresAt).toLocaleString()) : escapeHTML(v3HistoryCopy('Until you rotate or revoke it', '直到你手动轮换或撤销'))}</dd></div><div><dt>${escapeHTML(v3HistoryCopy('Last used', '最近使用'))}</dt><dd>${key?.lastUsedAt ? escapeHTML(new Date(key.lastUsedAt).toLocaleString()) : escapeHTML(v3HistoryCopy('Never', '从未使用'))}</dd></div></dl>
-      <p>${escapeHTML(v3HistoryCopy('The raw key is copied directly to the system clipboard, shown only once, and cleared after 60 seconds.', '原始密钥仅会直接复制到系统剪贴板一次，并在 60 秒后清除。'))}</p>
-      <div class="v3-order-key-actions"><button type="button" data-v3-order-key-action="rotate" ${busy ? 'disabled' : ''}>${escapeHTML(v3HistoryCopy('Randomize & copy', '重新随机并复制'))}</button><button class="ghost danger" type="button" data-v3-order-key-action="revoke" ${busy ? 'disabled' : ''}>${escapeHTML(v3HistoryCopy('Revoke', '撤销'))}</button></div>` : `
-      <div class="v3-order-key-empty"><span>${icon(KeyRound)}</span><div><strong>${escapeHTML(v3HistoryCopy(key ? 'No active key' : 'Create your unified SK', key ? '当前没有有效密钥' : '创建你的统一 SK'))}</strong><p>${escapeHTML(v3HistoryCopy('Use the same SK for every Exora API; charges still go to your unified prepaid balance.', '同一个 SK 可用于所有 Exora API，费用仍从统一预付余额扣除。'))}</p></div></div>
-      <button type="button" data-v3-order-key-action="create" ${busy ? 'disabled' : ''}>${escapeHTML(busy ? v3HistoryCopy('Creating…', '正在创建…') : v3HistoryCopy('Create & copy key', '创建并复制密钥'))}</button>`}
+    <header><span>${escapeHTML(v3HistoryCopy('API ORDER', 'API 订单'))}</span><h3>${escapeHTML(v3HistoryCopy('Persistent access state', '持久访问状态'))}</h3></header>
+    <div class="v3-order-key-status"><span>${icon(KeyRound)}</span><div><strong>${escapeHTML(order?.orderId || v3HistoryCopy('Loading order', '正在加载订单'))}</strong><small>${escapeHTML(v3HistoryCopy('This state is shared by human clients and every local Agent session.', '此状态由真人客户端和全部本地 Agent 会话共享。'))}</small></div><em>${escapeHTML(order?.status || '—')}</em></div>
+    ${order ? `<dl><div><dt>${escapeHTML(v3HistoryCopy('Listing', '商品'))}</dt><dd>${escapeHTML(order.listingId)}</dd></div><div><dt>${escapeHTML(v3HistoryCopy('Last used', '最近使用'))}</dt><dd>${escapeHTML(compactTimestamp(order.lastUsedAt) || v3HistoryCopy('Never', '从未使用'))}</dd></div></dl>` : ''}
+    ${active ? `<button class="ghost danger" type="button" data-v3-api-order-action="deactivate" ${state.v3APIOrderBusy ? 'disabled' : ''}>${escapeHTML(v3HistoryCopy('Deactivate API Order', '停用 API 订单'))}</button>` : order ? `<button type="button" data-v3-api-order-action="request-reactivation" ${state.v3APIOrderBusy ? 'disabled' : ''}>${escapeHTML(v3HistoryCopy('Request PIN reactivation', '申请 PIN 恢复'))}</button>` : ''}
   </section>`
 }
 
@@ -2818,26 +3025,21 @@ function renderV3ActivityEvents(events: NonNullable<V3ActivityDetail['events']>)
   }).join('')
 }
 
-async function updateOrderAccessKey(action: 'create' | 'rotate' | 'revoke') {
+async function updateAPIOrder(action: 'deactivate' | 'request-reactivation') {
   const detail = state.v3ActivityDetail
-  const activitySessionId = detail?.activitySessionId || ''
-  if (!detail || detail.role !== 'buyer' || !activitySessionId || state.v3OrderAccessKeyBusy) return
-  state.v3OrderAccessKeyBusy = true
+  if (!detail || detail.role !== 'buyer' || !detail.listingId || state.v3APIOrderBusy) return
+  state.v3APIOrderBusy = true
   renderDecisionPanel()
   try {
-    if (action === 'revoke') {
-      await invoke('order_access_key_revoke', { input: { activitySessionId } })
-      state.v3OrderAccessKey = state.v3OrderAccessKey ? { ...state.v3OrderAccessKey, status: 'revoked', revokedAt: new Date().toISOString() } : undefined
-      showToast(t('toast.orderKeyRevoked'))
-    } else {
-      const response = await invoke<{ accessKey?: OrderAccessKeyStatus; copied?: boolean }>(`order_access_key_${action}`, { input: { activitySessionId, listingId: detail.listingId, allowedActions: v3OrderAccessActions(detail) } })
-      state.v3OrderAccessKey = response.accessKey
-      showToast(t(response.copied ? 'toast.orderKeyCopied' : 'toast.orderKeyCreated'))
-    }
+    if (action === 'deactivate' && !window.confirm(v3HistoryCopy('Deactivate this API Order? Existing sessions will be blocked immediately.', '停用此 API 订单吗？现有会话会立即被阻止。'))) return
+    const command = action === 'deactivate' ? 'api_order_deactivate' : 'api_order_reactivation_request'
+    await invoke(command, { input: { listingId: detail.listingId } })
+    showToast(action === 'deactivate' ? v3HistoryCopy('API Order deactivated.', 'API 订单已停用。') : v3HistoryCopy('Reactivation approval created. Enter your PIN in Approvals.', '已创建恢复审批，请在 Approvals 中输入 PIN。'))
+    await loadAPIOrderStatus(detail.listingId)
   } catch (error) {
     showToast(humanizeError(error))
   } finally {
-    state.v3OrderAccessKeyBusy = false
+    state.v3APIOrderBusy = false
     renderDecisionPanel()
   }
 }
@@ -2960,7 +3162,7 @@ function renderV3ActivityDetail() {
           </section>
         </div>
         <aside class="v3-activity-side-column">
-          ${renderV3OrderAccessKey(detail)}
+          ${renderV3APIOrder(detail)}
           <section class="v3-activity-panel v3-activity-money">
             <header><span>${escapeHTML(v3HistoryCopy('MONEY', '资金'))}</span><h3>${escapeHTML(v3HistoryCopy('Ledger summary', '账本摘要'))}</h3></header>
             <dl>${ledgerRows.map(([label, value, className]) => `<div class="${className}"><dt>${escapeHTML(label)}</dt><dd>${escapeHTML(value)}</dd></div>`).join('')}</dl>
@@ -2991,7 +3193,7 @@ function renderV3ActivityDetail() {
 
 function renderV3SellerTabs() {
   state.v3SellerTab = normalizeV3SellerTab(state.v3SellerTab)
-  const applicationCount = state.v3ListingApplications.filter(({ listing }) => ['draft', 'unhealthy', 'provider_busy', 'capacity_insufficient'].includes(listing.status)).length
+  const applicationCount = state.v3ListingApplications.filter(({ listing }) => ['draft', 'unhealthy', 'provider_busy', 'capacity_insufficient', 'performance_degraded'].includes(listing.status)).length
   const allTabs: Array<[V3SellerTab, string, IconNode]> = [
     ['listings', 'Listings', SquareKanban],
     ['vm', 'VM', Activity],
@@ -3022,7 +3224,7 @@ function syncV3SellerTabs() {
   })
 
   const listingsLabel = fields.sellerSurfaceTabs.querySelector<HTMLElement>('[data-v3-seller-tab="listings"] > span')
-  const applicationCount = state.v3ListingApplications.filter(({ listing }) => ['draft', 'unhealthy', 'provider_busy', 'capacity_insufficient'].includes(listing.status)).length
+  const applicationCount = state.v3ListingApplications.filter(({ listing }) => ['draft', 'unhealthy', 'provider_busy', 'capacity_insufficient', 'performance_degraded'].includes(listing.status)).length
   const existingCount = listingsLabel?.querySelector<HTMLElement>('.v3-tab-count')
   if (applicationCount > 0) {
     const count = existingCount || document.createElement('em')
@@ -3141,20 +3343,27 @@ function updateV3DiskSpeedFact() {
   if (detail) detail.textContent = read && write ? 'Sequential unbuffered test' : 'Run Scan again to benchmark'
 }
 
+function v3ReadyInstalledEnvironment(image?: V3EnvironmentImage) {
+  if (!image) return undefined
+  return state.v3InstalledEnvironments.find((item) => item.attestation?.imageId === image.imageId && item.attestation?.imageVersion === image.version && item.attestation?.status === 'ready')
+}
+
 function renderV3EnvironmentSaveControls() {
   const selectedImage = state.v3EnvironmentImages.find((item) => item.imageId === state.v3SelectedEnvironmentImageId)
+  const selectedInstalled = v3ReadyInstalledEnvironment(selectedImage)
   const imageSizeBytes = Number(selectedImage?.manifest?.artifact?.sizeBytes || 0)
   const maximumWorkspaceGiB = Math.floor((state.v3EnvironmentRootFreeBytes - 10 * 1024 ** 3 - imageSizeBytes) / 1024 ** 3)
   const capacityAllowed = maximumWorkspaceGiB >= 20 && state.v3EnvironmentWorkspaceGiB <= maximumWorkspaceGiB
   const savePhase = state.v3ImageProgress?.phase || 'saving'
-  const saveLabel = state.v3EnvironmentSaving ? ({ reserving: 'Reserving space…', starting: 'Starting download…', downloading: 'Downloading…', verifying: 'Verifying…', importing: 'Installing…', validating: 'Validating…', saving: 'Saving…' } as Record<string, string>)[savePhase] || 'Preparing…' : 'Save'
-  return `<div class="v3-environment-save-bar"><button type="button" data-v3-action="environment-save" ${selectedImage && state.v3EnvironmentRoot && capacityAllowed && !state.v3EnvironmentSaving ? '' : 'disabled'}>${escapeHTML(saveLabel)}</button></div>`
+  const saveLabel = state.v3EnvironmentSaving ? ({ reserving: sx('Reserving space…', '正在预留空间…'), starting: sx('Starting download…', '正在开始下载…'), downloading: sx('Downloading…', '正在下载…'), verifying: sx('Verifying…', '正在校验…'), importing: sx('Installing…', '正在安装…'), validating: sx('Validating…', '正在验证…'), saving: sx('Saving…', '正在保存…') } as Record<string, string>)[savePhase] || sx('Preparing…', '正在准备…') : selectedInstalled ? sx('Use ready environment', '使用已就绪环境') : sx('Download and save', '下载并保存')
+  const available = Boolean(selectedImage && (selectedInstalled || selectedImage.cloudAvailable !== false))
+  return `<div class="v3-environment-save-bar"><button type="button" data-v3-action="environment-save" ${available && state.v3EnvironmentRoot && capacityAllowed && !state.v3EnvironmentSaving ? '' : 'disabled'}>${escapeHTML(saveLabel)}</button></div>`
 }
 
 function renderV3EnvironmentCloudLauncher() {
   const localPackageCount = state.v3InstalledEnvironments.length
   const selectedImage = state.v3EnvironmentImages.find((item) => item.imageId === state.v3SelectedEnvironmentImageId)
-  const selectedInstalled = selectedImage && state.v3InstalledEnvironments.some((item) => item.attestation?.imageId === selectedImage.imageId && item.attestation?.status === 'ready')
+  const selectedInstalled = v3ReadyInstalledEnvironment(selectedImage)
   const selectedName = selectedImage ? String(selectedImage.manifest?.name || selectedImage.imageId) : 'Choose an environment configuration'
   const freeGiB = Math.floor(state.v3EnvironmentRootFreeBytes / 1024 ** 3)
   const imageBytes = Number(selectedImage?.manifest?.artifact?.sizeBytes || 0)
@@ -3181,18 +3390,138 @@ function renderV3EnvironmentCloudModal() {
     const compatible = !needsGPU || Boolean(gpu.name)
     const components = Array.isArray(manifest.components) ? manifest.components : []
     const selected = state.v3SelectedEnvironmentImageId === image.imageId
-    const action = `<button type="button" data-v3-image-pick="${escapeAttr(image.imageId)}" ${compatible ? '' : 'disabled'}>${compatible ? selected ? 'Selected' : 'Select configuration' : 'NVIDIA GPU required'}</button>`
-    return `<article class="v3-cloud-image-card ${needsGPU ? 'gpu' : 'cpu'} ${state.v3SelectedEnvironmentImageId === image.imageId ? 'selected' : ''}" data-v3-image-select="${escapeAttr(image.imageId)}" tabindex="0"><header><span>${needsGPU ? 'CUDA' : 'LINUX'}</span><em>${image.cloudAvailable === false ? 'Cloud preview' : 'Official · signed'}</em></header><div class="v3-cloud-image-symbol">${needsGPU ? 'Cu' : 'U'}</div><h3>${escapeHTML(String(manifest.name || image.imageId))}</h3><p>${escapeHTML(String(manifest.description || 'Official Exora environment'))}</p><div class="v3-cloud-image-facts"><span><small>System</small><strong>${escapeHTML(`${manifest.os?.distribution || 'Ubuntu'} ${manifest.os?.version || '24.04'}`)}</strong></span><span><small>Download</small><strong>${v3FormatBytes(Number(manifest.artifact?.sizeBytes || 0))}</strong></span><span><small>Backend</small><strong>WSL2 · amd64</strong></span><span><small>Acceleration</small><strong>${needsGPU ? `NVIDIA · CUDA ${escapeHTML(String(manifest.gpu?.cudaVersion || '12.8'))}` : 'CPU'}</strong></span></div><div class="v3-cloud-components">${components.map((item: string) => `<span>${escapeHTML(item)}</span>`).join('')}</div>${action}</article>`
+    const installed = v3ReadyInstalledEnvironment(image)
+    const downloadable = image.cloudAvailable !== false
+    const selectable = compatible && Boolean(installed || downloadable)
+    const statusKind = installed ? 'ready' : downloadable ? 'downloadable' : 'unavailable'
+    const statusLabel = installed ? sx('Ready locally', '已就绪') : downloadable ? sx('Available to download', '可下载') : sx('Preview only', '暂不可下载')
+    const actionLabel = !compatible ? sx('NVIDIA GPU required', '需要 NVIDIA GPU') : !selectable ? sx('Unavailable', '暂不可用') : installed ? selected ? sx('Selected · ready', '已选择 · 已就绪') : sx('Use ready environment', '使用已就绪环境') : selected ? sx('Selected · downloads on save', '已选择 · 保存时下载') : sx('Select to download', '选择并下载')
+    const selectionAttributes = selectable ? `data-v3-image-select="${escapeAttr(image.imageId)}" tabindex="0"` : 'aria-disabled="true"'
+    const action = `<button type="button" ${selectable ? `data-v3-image-pick="${escapeAttr(image.imageId)}"` : ''} ${selectable ? '' : 'disabled'}>${escapeHTML(actionLabel)}</button>`
+    return `<article class="v3-cloud-image-card ${needsGPU ? 'gpu' : 'cpu'} ${selected ? 'selected' : ''} ${statusKind}" ${selectionAttributes}><header><span>${needsGPU ? 'CUDA' : 'LINUX'}</span><em class="v3-cloud-image-status ${statusKind}">${escapeHTML(statusLabel)}</em></header><div class="v3-cloud-image-symbol">${needsGPU ? 'Cu' : 'U'}</div><h3>${escapeHTML(String(manifest.name || image.imageId))}</h3><p>${escapeHTML(String(manifest.description || 'Official Exora environment'))}</p><div class="v3-cloud-image-facts"><span><small>System</small><strong>${escapeHTML(`${manifest.os?.distribution || 'Ubuntu'} ${manifest.os?.version || '24.04'}`)}</strong></span><span><small>Download</small><strong>${v3FormatBytes(Number(manifest.artifact?.sizeBytes || 0))}</strong></span><span><small>Backend</small><strong>WSL2 · amd64</strong></span><span><small>Acceleration</small><strong>${needsGPU ? `NVIDIA · CUDA ${escapeHTML(String(manifest.gpu?.cudaVersion || '12.8'))}` : 'CPU'}</strong></span></div><div class="v3-cloud-components">${components.map((item: string) => `<span>${escapeHTML(item)}</span>`).join('')}</div>${action}</article>`
   }).join('')
-  return `<div class="v3-environment-cloud" role="dialog" aria-modal="true" aria-labelledby="v3-environment-cloud-title"><button class="v3-environment-cloud-scrim" type="button" data-v3-action="environment-cloud-close" aria-label="Close environment cloud"></button><section class="v3-environment-cloud-panel"><header class="v3-environment-cloud-head"><div><span>EXORA CLOUD</span><h2 id="v3-environment-cloud-title">Environment library</h2><p>Copy a complete, signed system package from Exora Cloud into this PC. Exora downloads, verifies, imports and validates it automatically.</p></div><button class="ghost" type="button" data-v3-action="environment-cloud-close" aria-label="Close">×</button></header><nav class="v3-environment-cloud-filters"><button class="${state.v3EnvironmentCloudFilter === 'all' ? 'active' : ''}" type="button" data-v3-environment-filter="all">All environments <em>2</em></button><button class="${state.v3EnvironmentCloudFilter === 'ubuntu' ? 'active' : ''}" type="button" data-v3-environment-filter="ubuntu">Ubuntu</button><button class="${state.v3EnvironmentCloudFilter === 'cuda' ? 'active' : ''}" type="button" data-v3-environment-filter="cuda">CUDA</button><span>WSL2 · Windows x64</span></nav><div class="v3-environment-cloud-grid">${cards}</div><footer><span>More systems and framework stacks will be added through the signed cloud catalog.</span><strong>Version 1 · Ubuntu + CUDA</strong></footer></section></div>`
+  return `<div class="v3-environment-cloud" role="dialog" aria-modal="true" aria-labelledby="v3-environment-cloud-title"><button class="v3-environment-cloud-scrim" type="button" data-v3-action="environment-cloud-close" aria-label="Close environment cloud"></button><section class="v3-environment-cloud-panel"><header class="v3-environment-cloud-head"><div><span>EXORA CLOUD</span><h2 id="v3-environment-cloud-title">${escapeHTML(sx('Environment library', '环境库'))}</h2><p>${escapeHTML(sx('Choose a ready local environment or download a signed environment from Exora Cloud.', '选择本地已就绪环境，或从 Exora Cloud 下载签名环境。'))}</p></div><button class="ghost" type="button" data-v3-action="environment-cloud-close" aria-label="Close">×</button></header><nav class="v3-environment-cloud-filters"><button class="${state.v3EnvironmentCloudFilter === 'all' ? 'active' : ''}" type="button" data-v3-environment-filter="all">${escapeHTML(sx('All environments', '全部环境'))} <em>${state.v3EnvironmentImages.length}</em></button><button class="${state.v3EnvironmentCloudFilter === 'ubuntu' ? 'active' : ''}" type="button" data-v3-environment-filter="ubuntu">Ubuntu</button><button class="${state.v3EnvironmentCloudFilter === 'cuda' ? 'active' : ''}" type="button" data-v3-environment-filter="cuda">CUDA</button><span>WSL2 · Windows x64</span></nav><div class="v3-environment-cloud-grid">${cards}</div><footer><span>${escapeHTML(sx('Ready environments are already installed and validated on this PC.', '已就绪环境已在本机安装并通过验证。'))}</span><strong>${escapeHTML(sx('Signed cloud catalog', '签名云目录'))}</strong></footer></section></div>`
 }
 
-function renderV3WindowsPricing(recommendedPrice: string) {
+function v3ComputePriceFromState() {
+  return {
+    model: 'compute_time_v2', currency: 'USDC', unit: 'minute',
+    amountAtomicPerMinute: Math.max(1, Math.round(state.v3PricePerMinute * 1_000_000)),
+    baseFeeAtomic: state.v3BaseFeeEnabled ? Math.max(0, Math.round(state.v3BaseFee * 1_000_000)) : 0,
+    ...(state.v3LongDiscountEnabled && state.v3LongDiscountPercent > 0 ? { longDurationDiscount: {
+      everyMinutes: state.v3LongDiscountAfterMinutes,
+      additionalBpsOff: Math.round(state.v3LongDiscountPercent * 100),
+      minimumRateBps: Math.round(state.v3LongDiscountMinimumPricePercent * 100),
+    } } : {}),
+  }
+}
+
+function v3ComputeLimitsFromState() {
+  return { minMinutes: state.v3MinimumMinutes, maxMinutes: state.v3MaximumMinutes }
+}
+
+function v3ComputeWorkloadPolicy() {
+  return { policyVersion: 'compute_load_v1', sustainedCompute: state.v3AllowSustainedCompute ? 'allowed' : 'burst_only', cryptocurrencyMining: 'prohibited' }
+}
+
+function v3ComputePerformancePolicy() {
+  return { probeVersion: 'dual_probe_v1', minimumDeliveryBps: 8500 }
+}
+
+function v3EnvironmentPricingSettings() {
+  return {
+    baseFee: state.v3BaseFee, baseFeeEnabled: state.v3BaseFeeEnabled,
+    pricePerMinute: state.v3PricePerMinute, minimumMinutes: state.v3MinimumMinutes, maximumMinutes: state.v3MaximumMinutes,
+    longDiscountAfterMinutes: state.v3LongDiscountAfterMinutes, longDiscountPercent: state.v3LongDiscountPercent,
+    longDiscountMinimumPricePercent: state.v3LongDiscountMinimumPricePercent, longDiscountEnabled: state.v3LongDiscountEnabled,
+    allowSustainedCompute: state.v3AllowSustainedCompute,
+  }
+}
+
+function v3ComputePreviewAtomic(durationMinutes: number) {
+  const price = v3ComputePriceFromState()
+  const rate = price.amountAtomicPerMinute
+  const duration = Math.max(1, Math.round(durationMinutes))
+  let weighted = 0
+  const discount = price.longDurationDiscount
+  if (discount) {
+    let position = 0
+    while (position < duration) {
+      const step = Math.floor(position / discount.everyMinutes)
+      const rateBps = Math.max(discount.minimumRateBps, 10000 - step * discount.additionalBpsOff)
+      const segment = Math.min(duration - position, (step + 1) * discount.everyMinutes - position)
+      weighted += rate * segment * rateBps
+      position += segment
+    }
+  }
+  const compute = discount ? Math.round(weighted / 10000) : rate * duration
+  return compute + price.baseFeeAtomic
+}
+
+function renderV3ComputeOfferFacts() {
+  const probe = state.v3VMProbe || {}
+  const hardware = (probe.hardware || {}) as Record<string, any>
+  const network = (probe.network || {}) as Record<string, any>
+  const gpu = (probe.gpu || {}) as Record<string, any>
+  const windows = probe.hostOS === 'windows' || navigator.userAgent.includes('Windows')
+  const facts = [
+    'No direct Internet · Exora terminal · WebRTC P2P files',
+    windows ? 'Managed WSL2 · shared driver' : 'KVM/libvirt · hardware isolated',
+    `${Number(hardware.Cores || 0) || 'Measured'} CPU · ${hardware.MemoryBytes ? `${Math.round(Number(hardware.MemoryBytes) / 1024 ** 3)} GiB RAM` : 'measured RAM'}`,
+    gpu.name || 'CPU environment',
+    `${state.v3EnvironmentWorkspaceGiB} GiB reset workspace`,
+    network.downloadMbps ? `${Math.round(Number(network.downloadMbps))} Mbps measured` : 'Network measured before publish',
+    'Failed provisioning refunded · early release non-refundable',
+    'Cryptocurrency mining prohibited',
+    'Dual performance monitoring',
+  ]
+  const mode = state.v3AllowSustainedCompute ? 'Sustained compute allowed' : windows ? 'Burst only · Windows monitoring-only Preview' : 'Burst only · Linux host throttling'
+  return `<div class="v3-performance-policy"><div><strong>Allow sustained high-performance workloads</strong><small>${escapeHTML(mode)}</small></div><button class="v3-discount-toggle" type="button" role="switch" aria-checked="${state.v3AllowSustainedCompute}" data-v3-action="sustained-performance-toggle"><span></span><em>${state.v3AllowSustainedCompute ? 'On' : 'Off'}</em></button></div><div class="v3-offer-facts">${facts.map((fact) => `<span>${escapeHTML(String(fact))}</span>`).join('')}</div>`
+}
+
+function renderV3ComputePricing(recommendedPrice: string) {
   if (!(state.v3PricePerMinute > 0)) state.v3PricePerMinute = Math.max(0.001, Number(recommendedPrice || 0.01))
-  return `<div class="v3-pricing-inline"><div class="v3-inline-base-fee ${state.v3BaseFeeEnabled ? 'enabled' : 'disabled'}" role="group" aria-label="Base fee settings"><span class="v3-price-field-title"><i>1</i><strong>Base fee</strong><button class="v3-discount-toggle" type="button" role="switch" aria-checked="${state.v3BaseFeeEnabled}" data-v3-action="base-fee-toggle"><span></span><em>${state.v3BaseFeeEnabled ? 'On' : 'Off'}</em></button></span><span class="v3-inline-price-input"><b>$</b><input aria-label="Base fee per lease" data-v3-pricing="baseFee" type="number" min="0" step="0.01" value="${state.v3BaseFee || ''}" placeholder="0.00" inputmode="decimal" ${state.v3BaseFeeEnabled ? '' : 'disabled'}/><em>per lease</em></span></div><label><span class="v3-price-field-title"><i>2</i><strong>Minute price</strong></span><span class="v3-inline-price-input"><b>$</b><input aria-label="Price per minute" data-v3-pricing="pricePerMinute" type="number" min="0.001" step="0.001" value="${state.v3PricePerMinute}" inputmode="decimal" required/><em>per min</em></span></label><label><span class="v3-price-field-title"><i>3</i><strong>Minimum</strong></span><span class="v3-inline-price-input"><input aria-label="Minimum rental minutes" data-v3-pricing="minimumMinutes" type="number" min="1" step="1" value="${state.v3MinimumMinutes}" inputmode="numeric" required/><em>minutes</em></span></label><div class="v3-inline-discount ${state.v3LongDiscountEnabled ? 'enabled' : 'disabled'}" role="group" aria-label="Tiered discount settings"><span class="v3-price-field-title"><i>4</i><strong>Every interval adds a discount until the price floor</strong><button class="v3-discount-toggle" type="button" role="switch" aria-checked="${state.v3LongDiscountEnabled}" data-v3-action="discount-toggle"><span></span><em>${state.v3LongDiscountEnabled ? 'On' : 'Off'}</em></button></span><span class="v3-inline-discount-inputs"><span class="v3-inline-price-input" title="Apply another discount step after every interval"><input aria-label="Discount interval in minutes" data-v3-pricing="longDiscountAfterMinutes" type="number" min="1" step="1" value="${state.v3LongDiscountAfterMinutes}" inputmode="numeric" ${state.v3LongDiscountEnabled ? '' : 'disabled'}/><em>min each</em></span><span class="v3-inline-price-input" title="Additional percentage off at each interval"><input aria-label="Additional discount percentage per interval" data-v3-pricing="longDiscountPercent" type="number" min="1" max="90" step="1" value="${state.v3LongDiscountPercent || ''}" placeholder="5" inputmode="decimal" ${state.v3LongDiscountEnabled ? '' : 'disabled'}/><em>% each</em></span><span class="v3-inline-price-input" title="Never charge less than this percentage of the normal minute price"><input aria-label="Minimum payable percentage of normal price" data-v3-pricing="longDiscountMinimumPricePercent" type="number" min="1" max="100" step="1" value="${state.v3LongDiscountMinimumPricePercent}" inputmode="decimal" ${state.v3LongDiscountEnabled ? '' : 'disabled'}/><em>% floor</em></span></span></div></div><input type="hidden" name="workspaceGiB" value="${state.v3EnvironmentWorkspaceGiB}"/><input type="hidden" name="price" value="${state.v3PricePerMinute}"/>`
+  const previewMinutes = [...new Set([state.v3MinimumMinutes, state.v3LongDiscountEnabled ? state.v3LongDiscountAfterMinutes : 60, state.v3MaximumMinutes])].filter((minutes) => minutes >= state.v3MinimumMinutes && minutes <= state.v3MaximumMinutes)
+  const previews = previewMinutes.map((minutes) => `<span><small>${minutes} min</small><strong>${v3AtomicMoney(v3ComputePreviewAtomic(minutes), 'USDC')}</strong></span>`).join('')
+  return `<div class="v3-pricing-inline"><div class="v3-inline-base-fee ${state.v3BaseFeeEnabled ? 'enabled' : 'disabled'}" role="group" aria-label="Base fee settings"><span class="v3-price-field-title"><i>1</i><strong>Start fee</strong><button class="v3-discount-toggle" type="button" role="switch" aria-checked="${state.v3BaseFeeEnabled}" data-v3-action="base-fee-toggle"><span></span><em>${state.v3BaseFeeEnabled ? 'On' : 'Off'}</em></button></span><span class="v3-inline-price-input"><b>$</b><input aria-label="Start fee per lease" data-v3-pricing="baseFee" type="number" min="0" step="0.01" value="${state.v3BaseFee || ''}" placeholder="0.00" inputmode="decimal" ${state.v3BaseFeeEnabled ? '' : 'disabled'}/><em>once</em></span></div><label><span class="v3-price-field-title"><i>2</i><strong>Minute price</strong></span><span class="v3-inline-price-input"><b>$</b><input aria-label="Price per minute" data-v3-pricing="pricePerMinute" type="number" min="0.000001" step="0.000001" value="${state.v3PricePerMinute}" inputmode="decimal" required/><em>USDC/min</em></span></label><div class="v3-inline-rental-window" role="group" aria-label="Rental time limits"><span class="v3-price-field-title"><i>3</i><strong>Rental time</strong></span><span class="v3-inline-rental-inputs"><span class="v3-inline-price-input"><input aria-label="Minimum rental minutes" data-v3-pricing="minimumMinutes" type="number" min="1" max="10080" step="1" value="${state.v3MinimumMinutes}" required/><em>min</em></span><span class="v3-inline-price-input"><input aria-label="Maximum cumulative rental minutes" data-v3-pricing="maximumMinutes" type="number" min="1" max="10080" step="1" value="${state.v3MaximumMinutes}" required/><em>max</em></span></span></div><div class="v3-inline-discount ${state.v3LongDiscountEnabled ? 'enabled' : 'disabled'}" role="group" aria-label="Tiered discount settings"><span class="v3-price-field-title"><i>4</i><strong>Long-rental discount</strong><button class="v3-discount-toggle" type="button" role="switch" aria-checked="${state.v3LongDiscountEnabled}" data-v3-action="discount-toggle"><span></span><em>${state.v3LongDiscountEnabled ? 'On' : 'Off'}</em></button></span><span class="v3-inline-discount-inputs"><span class="v3-inline-price-input"><input aria-label="Discount interval in minutes" data-v3-pricing="longDiscountAfterMinutes" type="number" min="1" max="${state.v3MaximumMinutes}" step="1" value="${state.v3LongDiscountAfterMinutes}" ${state.v3LongDiscountEnabled ? '' : 'disabled'}/><em>min each</em></span><span class="v3-inline-price-input"><input aria-label="Additional discount percentage per interval" data-v3-pricing="longDiscountPercent" type="number" min="1" max="90" step="1" value="${state.v3LongDiscountPercent || ''}" placeholder="5" ${state.v3LongDiscountEnabled ? '' : 'disabled'}/><em>% each</em></span><span class="v3-inline-price-input"><input aria-label="Minimum payable percentage of normal price" data-v3-pricing="longDiscountMinimumPricePercent" type="number" min="1" max="100" step="1" value="${state.v3LongDiscountMinimumPricePercent}" ${state.v3LongDiscountEnabled ? '' : 'disabled'}/><em>% floor</em></span></span></div></div><div class="v3-price-preview"><div><strong>Buyer price preview</strong><small>Start fee included · settled in USDC</small></div>${previews}</div>${renderV3ComputeOfferFacts()}<input type="hidden" name="workspaceGiB" value="${state.v3EnvironmentWorkspaceGiB}"/><input type="hidden" name="price" value="${state.v3PricePerMinute}"/>`
+}
+
+function loadV3ComputeTermsForEditing(listing: V3Listing) {
+  const price = (listing.price || {}) as Record<string, any>
+  const limits = (listing.limits || {}) as Record<string, any>
+  const isV2 = price.model === 'compute_time_v2'
+  state.v3PricePerMinute = isV2
+    ? Math.max(0.000001, Number(price.amountAtomicPerMinute || 0) / 1_000_000)
+    : Math.max(0.000001, Number(price.amount || price.rate || 0.01))
+  state.v3BaseFee = isV2 ? Math.max(0, Number(price.baseFeeAtomic || 0) / 1_000_000) : 0
+  state.v3BaseFeeEnabled = state.v3BaseFee > 0
+  state.v3MinimumMinutes = Math.max(1, Math.min(10080, Math.trunc(Number(limits.minMinutes || 10))))
+  state.v3MaximumMinutes = Math.max(state.v3MinimumMinutes, Math.min(10080, Math.trunc(Number(limits.maxMinutes || 240))))
+  const discount = isV2 && price.longDurationDiscount && typeof price.longDurationDiscount === 'object'
+    ? price.longDurationDiscount as Record<string, any>
+    : undefined
+  state.v3LongDiscountEnabled = Boolean(discount)
+  state.v3LongDiscountAfterMinutes = Math.max(1, Math.trunc(Number(discount?.everyMinutes || 60)))
+  state.v3LongDiscountPercent = Math.max(0, Number(discount?.additionalBpsOff || 0) / 100)
+  state.v3LongDiscountMinimumPricePercent = Math.max(1, Math.min(100, Number(discount?.minimumRateBps || 5000) / 100))
+  state.v3AllowSustainedCompute = String(listing.workloadPolicy?.sustainedCompute || 'allowed') !== 'burst_only'
+}
+
+function renderV3ComputeTermsEditor(listing: V3Listing) {
+  if (state.v3EditingListingId !== listing.listingId) return ''
+  return `<form class="v3-listing-detail-section v3-listing-terms-editor" data-v3-compute-terms-form data-listing-id="${escapeAttr(listing.listingId)}"><header><span>COMMERCIAL TERMS</span><strong>Changes apply only to new leases</strong></header>${renderV3ComputePricing('0.01')}<div class="v3-form-actions"><button class="ghost" type="button" data-v3-compute-terms-cancel>Cancel</button><button type="submit">Save terms</button></div></form>`
 }
 
 function renderV3VMPage() {
+  if (!state.v3ListingsLoaded) {
+    const failed = Boolean(state.v3SellerError)
+    return `<div class="v3-vm-onboarding v3-application-flow"><section class="v3-console-panel v3-vm-slot-check"><div class="v3-step-heading"><span>${icon(failed ? ShieldAlert : RefreshCw)}</span><div><strong>${failed ? 'Could not verify this device\'s VM Listing slot' : 'Checking this device\'s VM Listing slot'}</strong><small>${escapeHTML(failed ? state.v3SellerError || 'Cloud verification failed.' : 'Cloud must confirm that this Dock has no existing VM Listing before scanning or reserving disk space.')}</small></div><button type="button" data-v3-vm-slot-refresh ${failed ? '' : 'disabled'}>${failed ? 'Try again' : 'Checking…'}</button></div></section></div>`
+  }
+  const slot = state.v3VMListingConstraint
+  if (!slot.available && slot.listingId) {
+    const status = v3ListingStatusMeta(slot.status || 'draft')
+    return `<div class="v3-vm-onboarding v3-application-flow"><section class="v3-console-panel v3-vm-slot-occupied"><div class="v3-step-heading"><span>${icon(ShieldCheck)}</span><div><strong>This device already has a VM Listing</strong><small>One Dock can keep one VM offer. Manage or delete the existing Listing before creating another.</small></div><button type="button" data-v3-vm-existing-listing="${escapeAttr(slot.listingId)}">Manage Listing</button></div><div class="v3-host-facts"><span><small>Listing</small><strong>${escapeHTML(slot.listingId)}</strong><em>Provider device slot</em></span><span><small>Status</small><strong>${escapeHTML(status.label)}</strong><em>The slot is released only after deletion</em></span></div></section></div>`
+  }
   const probe = state.v3VMProbe
   const windows = probe?.hostOS === 'windows'
   if (windows || (!probe && navigator.userAgent.includes('Windows'))) {
@@ -3211,12 +3540,12 @@ function renderV3VMPage() {
     const step3: V3WizardStepState = !environmentReady ? 'locked' : 'available'
     return `<div class="v3-vm-onboarding v3-application-flow"><section class="v3-console-panel v3-host-scan ${v3WizardStepClass(step1)}"><div class="v3-step-heading"><span>1</span><div><strong>Scan this PC</strong><small>Hardware, available capacity, network speed and public location</small></div>${renderV3HostScanButton(Boolean(probe))}</div>${probe ? `<div class="v3-host-facts"><span><small>Processor</small><strong>${escapeHTML(String(hardware.Cpu || 'Unknown CPU'))}</strong><em>${Number(hardware.Cores || 0)} cores · ${Number(hardware.LogicalProcessors || 0)} threads</em></span><span><small>Memory</small><strong>${memoryGiB.toFixed(0)} GiB</strong><em>${(Number(hardware.FreeMemoryBytes || 0) / 1024 ** 3).toFixed(0)} GiB currently free</em></span><span><small>GPU</small><strong>${escapeHTML(String(gpu.name || 'No NVIDIA GPU detected'))}</strong><em>${gpu.memoryMiB ? `${(Number(gpu.memoryMiB) / 1024).toFixed(0)} GiB VRAM · driver ${escapeHTML(String(gpu.driverVersion || ''))}` : 'CPU environments available'}</em></span><span><small>Storage</small><strong>${freeDiskGiB} GiB free</strong><em>Fixed reservation before listing</em></span><span><small>Network</small><strong>↓ ${Number(network.downloadMbps || 0)} · ↑ ${Number(network.uploadMbps || 0)} Mbps</strong><em>${Number(network.latencyMs || 0)} ms to Exora Cloud</em></span><span><small>Public location</small><strong>${escapeHTML([network.city, network.region, network.country].filter(Boolean).join(', ') || 'Location unavailable')}</strong><em>${escapeHTML(String(network.publicIp || 'IP unavailable'))}</em></span></div>` : '<div class="v3-scan-empty"><strong>Know exactly what can be listed</strong><span>Exora reads capacity locally and measures the route to Exora Cloud. No hardware names need to be entered manually.</span></div>'}</section>
       <section class="v3-console-panel ${v3WizardStepClass(step2)}" ${step2 === 'locked' ? 'inert aria-disabled="true"' : ''}><div class="v3-step-heading v3-environment-step-heading"><span>2</span><div><strong>Choose an environment</strong><small>${step2 === 'locked' ? 'Complete Step 1 to choose storage and a signed environment' : 'Install and validate a signed, disposable Linux package'}</small></div>${renderV3EnvironmentSaveControls()}</div><div class="v3-environment-list">${images || (state.v3EnvironmentCatalogOffline ? '<div class="v3-scan-empty"><strong>Connect Exora Cloud to load environments</strong><span>The local hardware scan remains available, but signed Ubuntu and CUDA packages require a linked Dock account.</span></div>' : '<p class="empty-copy">Scan this PC to load compatible environments.</p>')}</div></section>
-      <form class="v3-console-panel v3-provider-form ${v3WizardStepClass(step3)}" data-v3-form="vm" ${step3 === 'locked' ? 'inert aria-disabled="true"' : ''}><div class="v3-step-heading"><span>3</span><div><strong>Price and submit</strong><small>${step3 === 'locked' ? 'Complete Step 2 to configure pricing' : 'Creates a private Listing draft; publication happens only in Listings'}</small></div><button type="submit" class="v3-direct-publish" ${environmentReady ? '' : 'disabled'}>Submit to Listings</button></div>${renderV3WindowsPricing(recommendedPrice)}<p class="v3-listing-note">Submission saves a private draft and does not publish it.</p></form></div>`
+      <form class="v3-console-panel v3-provider-form ${v3WizardStepClass(step3)}" data-v3-form="vm" ${step3 === 'locked' ? 'inert aria-disabled="true"' : ''}><div class="v3-step-heading"><span>3</span><div><strong>Price and submit</strong><small>${step3 === 'locked' ? 'Complete Step 2 to configure pricing' : 'Creates a private Listing draft; publication happens only in Listings'}</small></div><button type="submit" class="v3-direct-publish" ${environmentReady ? '' : 'disabled'}>Submit to Listings</button></div>${renderV3ComputePricing(recommendedPrice)}<p class="v3-listing-note">Submission saves a private draft and does not publish it.</p></form></div>`
   }
   const domains = state.v3VMDomains.map((domain) => `<label class="v3-domain-row"><input type="radio" name="domain" value="${escapeAttr(domain.name)}" ${domain.eligible ? '' : 'disabled'}/><span><strong>${escapeHTML(domain.name)}</strong><small>${escapeHTML(domain.state)}</small></span></label>`).join('')
   const linuxTemplateReady = Boolean(state.v3VMTemplate?.valid)
   return `<div class="v3-seller-grid v3-vm-onboarding"><section class="v3-console-panel ${v3WizardStepClass(probe ? 'complete' : 'available')}"><div class="v3-step-heading"><span>1</span><div><strong>Scan Linux KVM host</strong><small>Choose an eligible powered-off domain after the hardware scan.</small></div><button class="ghost" type="button" data-v3-action="vm-probe">${probe ? 'Scan again' : 'Scan host'}</button></div>${probe ? `<div class="v3-metric-grid"><span><small>KVM</small><strong>${escapeHTML(probe.kvm)}</strong></span><span><small>IOMMU</small><strong>${escapeHTML(probe.iommu)}</strong></span><span><small>GPUs</small><strong>${Array.isArray(probe.gpus) ? probe.gpus.length : 0}</strong></span><span><small>OS</small><strong>${escapeHTML(probe.os)}</strong></span></div>` : '<p class="empty-copy">Scan a Linux provider host. Windows and macOS return unsupported_host.</p>'}<div class="v3-domain-list">${domains}</div></section>
-    <form class="v3-application-flow v3-provider-form" data-v3-form="vm"><section class="v3-console-panel ${v3WizardStepClass(!probe ? 'locked' : linuxTemplateReady ? 'complete' : 'available')}" ${probe ? '' : 'inert aria-disabled="true"'}><div class="v3-step-heading"><span>2</span><div><strong>Import and validate Golden Image</strong><small>${probe ? 'Import the selected domain, then validate its disposable runtime.' : 'Complete Step 1 to import a Golden Image.'}</small></div></div><div class="v3-form-actions"><button type="button" class="ghost" data-v3-action="vm-import" ${probe ? '' : 'disabled'}>Import</button><button type="button" data-v3-action="vm-validate" ${state.v3VMTemplate ? '' : 'disabled'}>Run validation</button></div>${state.v3VMTemplate ? `<pre>${escapeHTML(JSON.stringify(state.v3VMTemplate, null, 2))}</pre>` : '<p class="empty-copy">No Golden Image has been imported.</p>'}</section><section class="v3-console-panel ${v3WizardStepClass(linuxTemplateReady ? 'available' : 'locked')}" ${linuxTemplateReady ? '' : 'inert aria-disabled="true"'}><div class="v3-step-heading"><span>3</span><div><strong>Capacity, price and submit</strong><small>${linuxTemplateReady ? 'Creates a private Listing draft; publication happens only in Listings.' : 'Complete image validation to configure the offer.'}</small></div><button type="submit" class="v3-direct-publish" ${linuxTemplateReady ? '' : 'disabled'}>Submit to Listings</button></div><label>Title<input name="title" required placeholder="H100 CUDA environment"/></label><label>Text description<textarea name="description" required></textarea></label><div class="v3-form-grid"><label>Price / minute<input name="price" type="number" min="0.001" step="0.001" required/></label><label>Currency<input name="currency" value="USD"/></label><label>Minimum minutes<input name="minMinutes" type="number" min="1" value="1"/></label><label>Maximum minutes<input name="maxMinutes" type="number" min="1" value="240"/></label><label>Workspace GiB<input name="workspaceGiB" type="number" min="1" value="100"/></label><label>Region<input name="region" placeholder="ap-east"/></label></div></section></form></div>`
+    <form class="v3-application-flow v3-provider-form" data-v3-form="vm"><section class="v3-console-panel ${v3WizardStepClass(!probe ? 'locked' : linuxTemplateReady ? 'complete' : 'available')}" ${probe ? '' : 'inert aria-disabled="true"'}><div class="v3-step-heading"><span>2</span><div><strong>Import and validate Golden Image</strong><small>${probe ? 'Import the selected domain, then validate its disposable runtime.' : 'Complete Step 1 to import a Golden Image.'}</small></div></div><div class="v3-form-actions"><button type="button" class="ghost" data-v3-action="vm-import" ${probe ? '' : 'disabled'}>Import</button><button type="button" data-v3-action="vm-validate" ${state.v3VMTemplate ? '' : 'disabled'}>Run validation</button></div>${state.v3VMTemplate ? `<pre>${escapeHTML(JSON.stringify(state.v3VMTemplate, null, 2))}</pre>` : '<p class="empty-copy">No Golden Image has been imported.</p>'}</section><section class="v3-console-panel ${v3WizardStepClass(linuxTemplateReady ? 'available' : 'locked')}" ${linuxTemplateReady ? '' : 'inert aria-disabled="true"'}><div class="v3-step-heading"><span>3</span><div><strong>Capacity, price and submit</strong><small>${linuxTemplateReady ? 'Creates a private Listing draft; publication happens only in Listings.' : 'Complete image validation to configure the offer.'}</small></div><button type="submit" class="v3-direct-publish" ${linuxTemplateReady ? '' : 'disabled'}>Submit to Listings</button></div><label>Title<input name="title" required placeholder="H100 CUDA environment"/></label><label>Text description<textarea name="description" required></textarea></label>${renderV3ComputePricing('0.01')}</section></form></div>`
 }
 
 const v3ResourceSelectOptions: Record<V3ResourceSelectName, Array<{ value: string; label: string }>> = {
@@ -3242,43 +3571,30 @@ function renderV3ResourceSelect(name: V3ResourceSelectName, label: string, value
 }
 
 function renderV3ResourcesPage() {
-  const archive = state.v3ResourceArchive
   const progress = state.v3AssetProgress
   const packaging = progress?.phase === 'selecting' || progress?.phase === 'packaging'
-  const uploading = archive?.status === 'uploading'
-  const busy = packaging || uploading || state.v3ResourceSubmitting
-  const archiveReady = Boolean(archive && !packaging && archive.status !== 'failed')
-  const detailsReady = Boolean(state.v3ResourceTitle.trim() && state.v3ResourceDescription.trim() && state.v3ResourceVersion.trim())
-  const commerceReady = state.v3ResourceGrantHours >= 1 && state.v3ResourceGrantHours <= 720 && state.v3ResourcePrice > 0
-  const step1: V3WizardStepState = packaging ? 'busy' : archiveReady ? 'complete' : archive?.status === 'failed' ? 'error' : 'available'
-  const step2: V3WizardStepState = !archiveReady ? 'locked' : detailsReady ? 'complete' : 'available'
-  const step3: V3WizardStepState = !detailsReady ? 'locked' : state.v3ResourceSubmitting || uploading ? 'busy' : 'available'
-  const canSubmit = archiveReady && detailsReady && commerceReady && !busy
-  const fileRows = state.v3ResourceSources.map((file) => renderV3SharedFileRow(file, '<span class="v3-resource-file-status included"><i></i>Included</span>')).join('')
-  const pickerTitle = packaging ? 'Creating your ZIP package…' : archive ? 'Replace or drop source files' : 'Choose or drop files here'
-  const pickerDetails = archive ? ['A new successful selection replaces the current ZIP', 'Original files stay local and are never uploaded separately'] : ['Any file type · Dock creates one immutable ZIP', 'Original files stay local and are never uploaded separately']
-  const pickerStatus = archive ? `${archive.sourceCount} selected` : packaging ? `${progress?.percent || 0}%` : 'Browse or drop'
-  const archivePanel = packaging
-    ? `<div class="v3-resource-packaging"><span class="v3-resource-spinner"></span><div><strong>${progress?.phase === 'selecting' ? 'Choose source files' : `Creating the ZIP · ${progress?.percent || 0}%`}</strong><small>${progress?.phase === 'selecting' ? 'Dock is waiting for your selection.' : `${progress?.completedFiles || 0} of ${progress?.totalFiles || 0} files · ${v3FormatBytes(progress?.outputBytes || 0)}`}</small></div><span class="v3-resource-progress"><i style="width:${Math.max(0, Math.min(100, progress?.percent || 0))}%"></i></span></div>`
-    : archive ? `<div class="v3-resource-archive-card ${escapeAttr(archive.status || 'ready')}"><span class="v3-resource-zip-mark">ZIP</span><div><strong>${escapeHTML(archive.name)}</strong><small>${archive.sourceCount} source file${archive.sourceCount === 1 ? '' : 's'} · ${v3FormatBytes(archive.sizeBytes)}</small></div><em><i></i>${archive.status === 'uploading' ? `Uploading ${progress?.percent || 0}%` : archive.status === 'failed' ? 'Retry needed' : 'Ready'}</em></div>` : ''
-  const submitLabel = uploading ? `Uploading ${progress?.percent || 0}%` : state.v3ResourceSubmitting ? 'Submitting…' : 'Submit to Listings'
+  const busy = packaging || state.v3ResourceSubmitting
+  const filesReady = state.v3ResourceSources.length > 0
+  const detailsReady = Boolean(state.v3ResourceTitle.trim() && state.v3ResourceDescription.trim() && state.v3ResourceCategory && state.v3ResourceLicense && state.v3ResourceGrantHours >= 1 && state.v3ResourceGrantHours <= 720)
+  const itemsReady = filesReady && state.v3ResourceSources.every((file) => file.price > 0)
+  const step1: V3WizardStepState = packaging ? 'busy' : itemsReady ? 'complete' : 'available'
+  const step2: V3WizardStepState = !filesReady ? 'locked' : detailsReady ? 'complete' : 'available'
+  const canSubmit = itemsReady && detailsReady && !busy
+  const itemCards = state.v3ResourceSources.map((file) => {
+    const extension = (file.name.split('.').pop() || 'FILE').slice(0, 5).toUpperCase()
+    return `<article class="v3-resource-file-config" data-resource-token="${escapeAttr(file.token)}"><div class="v3-resource-file-summary"><span class="v3-resource-file-type">${escapeHTML(extension)}</span><div class="v3-resource-file-identity"><strong>${escapeHTML(file.name)}</strong><small>${escapeHTML(v3FormatBytes(file.sizeBytes))} · SHA-256 ${escapeHTML(file.sha256.slice(0, 12))}…</small></div></div><label class="v3-resource-file-tags"><span>Tags</span><input name="itemTags:${escapeAttr(file.token)}" value="${escapeAttr(file.tags.join(', '))}" placeholder="source, windows, template"/></label><label class="v3-resource-file-price"><span>Price</span><span class="v3-resource-input-unit"><b>$</b><input name="itemPrice:${escapeAttr(file.token)}" type="number" min="0.01" step="0.01" value="${file.price || ''}" required/><em>USDC</em></span></label><button class="ghost danger v3-resource-file-remove" type="button" data-v3-resource-remove="${escapeAttr(file.token)}" aria-label="Remove ${escapeAttr(file.name)}">×</button></article>`
+  }).join('')
+  const pickerStatus = packaging ? `${progress?.percent || 0}%` : `${state.v3ResourceSources.length} selected`
+  const submitLabel = state.v3ResourceSubmitting ? `Uploading ${progress?.percent || 0}%` : state.v3ResourceTargetSheet ? 'Add files to Res sheet' : 'Create private Res sheet'
   return `<form class="v3-application-flow v3-provider-form" data-v3-form="resources">
-    <section class="v3-console-panel ${v3WizardStepClass(step1)}"><div class="v3-step-heading"><span>1</span><div><strong>Choose source files</strong><small>${step1 === 'busy' ? 'Dock is preparing one immutable ZIP' : 'Dock compresses every selection into one ZIP; maximum package size is 1 GiB'}</small></div>${archive ? `<button class="danger ghost" type="button" data-v3-action="resource-clear-files" ${busy ? 'disabled' : ''}>Clear</button>` : ''}</div><fieldset class="v3-wizard-step-content" ${busy ? 'disabled' : ''}>${renderV3SharedFilePicker('choose-files', pickerTitle, pickerDetails, pickerStatus, busy)}${archivePanel}<div class="v3-shared-file-list">${fileRows || renderV3SharedFileEmpty('No files selected', 'Choose one or more files to unlock Step 2.')}</div><div class="v3-resource-safety-strip"><span><strong>Single ZIP only</strong><small>Original files never upload separately</small></span><span><strong>1 GiB hard limit</strong><small>Oversized output stops during compression</small></span><span><strong>Immutable version</strong><small>Updates create a new bundle version</small></span></div></fieldset></section>
-    <section class="v3-console-panel ${v3WizardStepClass(step2)}"><div class="v3-step-heading"><span>2</span><div><strong>Describe the bundle</strong><small>${step2 === 'locked' ? 'Complete Step 1 to edit product details' : 'Give Agents enough structured context to select the correct fixed version'}</small></div></div><fieldset class="v3-wizard-step-content" ${step2 === 'locked' || busy ? 'disabled' : ''}><div class="v3-resource-details-grid"><label>Product title<input name="title" value="${escapeAttr(state.v3ResourceTitle)}" required placeholder="Quarterly benchmark corpus"/></label><label>Version<input name="version" value="${escapeAttr(state.v3ResourceVersion)}" required/></label><label class="v3-resource-description">Description<textarea name="description" required>${escapeHTML(state.v3ResourceDescription)}</textarea></label></div><p class="v3-resource-version-note"><strong>Immutable version</strong><span>Changing these files after submission creates a new Product version.</span></p></fieldset></section>
-    <section class="v3-console-panel ${v3WizardStepClass(step3)}"><div class="v3-step-heading"><span>3</span><div><strong>Rights, delivery and price</strong><small>${step3 === 'locked' ? 'Complete Step 2 to configure the offer' : 'Submission creates a private Listing draft and never publishes directly'}</small></div><button type="submit" class="v3-direct-publish" ${canSubmit ? '' : 'disabled'}>${escapeHTML(submitLabel)}</button></div><fieldset class="v3-wizard-step-content" ${step3 === 'locked' || busy ? 'disabled' : ''}><div class="v3-resource-commerce-grid"><label><span class="v3-price-field-title"><i>1</i><strong>License</strong></span>${renderV3ResourceSelect('license', 'License', state.v3ResourceLicense)}</label><label><span class="v3-price-field-title"><i>2</i><strong>Delivery</strong></span><span class="v3-resource-fixed-delivery"><strong>S3 object download</strong><small>Standalone DownloadGrant only</small><input type="hidden" name="delivery" value="downloadable"/></span></label><label><span class="v3-price-field-title"><i>3</i><strong>Access window</strong></span><span class="v3-resource-input-unit v3-resource-input-unit-no-prefix"><input name="grantHours" type="number" min="1" max="720" value="${state.v3ResourceGrantHours}" required/><em>hours</em></span></label><label><span class="v3-price-field-title"><i>4</i><strong>Price per grant</strong></span><span class="v3-resource-input-unit"><b>$</b><input name="price" type="number" min="0.01" step="0.01" value="${state.v3ResourcePrice || ''}" placeholder="0.00" required/><em>USD</em></span></label></div><div class="v3-resource-delivery-note"><span aria-hidden="true">↓</span><div><strong>Buyer receives a time-limited S3 DownloadGrant</strong><small>Resources are independent versioned downloads. They are never mounted into a VM or attached to a Lease.</small></div><em>Protected delivery</em></div></fieldset></section>
+    <section class="v3-console-panel ${v3WizardStepClass(step1)}"><div class="v3-step-heading"><span>1</span><div><strong>Add files, prices and tags</strong><small>Every file is sold independently, so configure its price and tags as soon as you add it.</small></div>${filesReady ? `<button class="danger ghost" type="button" data-v3-action="resource-clear-files" ${busy ? 'disabled' : ''}>Clear</button>` : ''}</div><fieldset class="v3-wizard-step-content" ${busy ? 'disabled' : ''}>${renderV3SharedFilePicker('choose-files', packaging ? 'Hashing selected files…' : 'Choose or drop files', ['Any file format · 1 GiB per file', 'Multiple files stay separate and are never auto-packaged'], pickerStatus, busy)}<div class="v3-resource-safety-strip"><span><strong>One file = one purchase</strong><small>Each item gets its own price and tags</small></span><span><strong>Folders are rejected</strong><small>Compress programs or complete datasets first</small></span><span><strong>Immutable delivery</strong><small>New content creates a new sellable item</small></span></div><div class="v3-resource-file-config-list">${itemCards || renderV3SharedFileEmpty('No sellable items', 'Choose or drop files above to configure them.')}</div></fieldset></section>
+    <section class="v3-console-panel ${v3WizardStepClass(step2)}"><div class="v3-step-heading"><span>2</span><div><strong>${state.v3ResourceTargetSheet ? 'Review existing Res sheet and submit' : 'Describe and submit the Res sheet'}</strong><small>${state.v3ResourceTargetSheet ? 'New files inherit the existing category, authorization scope and access window.' : 'Set shared context and authorization once; every file inherits it.'}</small></div><button type="submit" class="v3-direct-publish" ${canSubmit ? '' : 'disabled'}>${escapeHTML(submitLabel)}</button></div><fieldset class="v3-wizard-step-content" ${step2 === 'locked' || busy || state.v3ResourceTargetSheet ? 'disabled' : ''}><div class="v3-resource-sheet-settings"><label>Sheet title<input name="title" value="${escapeAttr(state.v3ResourceTitle)}" required placeholder="Developer tools and releases"/></label><label>Resource type<select name="category" required><option value="software" ${state.v3ResourceCategory === 'software' ? 'selected' : ''}>Software &amp; code</option><option value="dataset" ${state.v3ResourceCategory === 'dataset' ? 'selected' : ''}>Dataset</option><option value="design" ${state.v3ResourceCategory === 'design' ? 'selected' : ''}>Design assets</option><option value="document" ${state.v3ResourceCategory === 'document' ? 'selected' : ''}>Documents</option><option value="media" ${state.v3ResourceCategory === 'media' ? 'selected' : ''}>Media</option><option value="other" ${state.v3ResourceCategory === 'other' ? 'selected' : ''}>Other</option></select></label><label class="v3-resource-description">Detailed content<textarea name="description" required placeholder="Explain what this resource collection contains, prerequisites, versions and intended use.">${escapeHTML(state.v3ResourceDescription)}</textarea></label><label>Authorization scope${renderV3ResourceSelect('license', 'Authorization scope', state.v3ResourceLicense)}</label><label>Access window<input name="grantHours" type="number" min="1" max="720" step="1" value="${state.v3ResourceGrantHours}" required/><small>Hours after each file purchase</small></label></div></fieldset></section>
   </form>`
 }
 
 function endpointAgentPrompt() {
   const files = state.v3EndpointMaterials.map((file) => `- ${file.name}: ${file.localPath}`).join('\n') || '- No files selected yet'
-  return `You are preparing a seller-operated local HTTP service for an Exora Dock tunnel. Read every material and call exora.save_api_bridge_draft exactly once.\n\nDraft ID: ${state.v3EndpointDraftId}\nExpected version: ${state.v3EndpointDraft?.version || 0}\nBridge mode: dock_tunnel\nInterface mode: ${state.v3EndpointInterfaceMode}\n\nMaterials:\n${files}\n\nRules:\n- bridgeMode must be dock_tunnel and interfaceMode must be ${state.v3EndpointInterfaceMode}.\n- For passthrough preserve the complete OpenAPI contract and omit adapter.\n- For agent_managed provide a complete OpenAPI 3.1 contract and exora.adapter.v1 deterministic mappings.\n- Convert the materials into reviewed routes, metering and pricing.\n- Never include a local URL or credential in the draft.\n- Put uncertain field paths in unresolvedFields.\n- Saving the Agent draft must not create or publish a Product or Listing.`
-}
-
-function renderV3InterfaceMode(kind: 'endpoint' | 'api_bridge', mode: V3InterfaceMode) {
-  const agentManaged = mode === 'agent_managed'
-  const nextMode: V3InterfaceMode = agentManaged ? 'passthrough' : 'agent_managed'
-  const description = agentManaged ? 'Generate OpenAPI 3.1 and deterministic mappings.' : 'Preserve request, response, errors and streaming.'
-  return `<div class="v3-interface-mode" data-mode="${mode}"><div class="v3-interface-mode-copy"><strong>Interface handling</strong><small>${description}</small></div><button class="v3-interface-mode-toggle" type="button" role="switch" aria-checked="${agentManaged}" aria-label="Use Agent standardization" data-v3-interface-mode="${kind}:${nextMode}"><span class="v3-interface-mode-label passthrough">Existing API</span><span class="v3-interface-mode-track" aria-hidden="true"><i></i></span><span class="v3-interface-mode-label agent-managed">Agent standardization</span></button></div>`
+  return `You are normalizing a seller-operated local HTTP service for Exora Endpoint. Read every material and call exora.save_endpoint_draft exactly once.\n\nDraft ID: ${state.v3EndpointDraftId}\nExpected version: ${state.v3EndpointDraft?.version || 0}\n\nMaterials:\n${files}\n\nRules:\n- Produce ExoraServiceManifest v1 with exactly interface, delivery, operationPolicies, and pricingTemplate.\n- Normalize the complete interface to OpenAPI 3.1 without changing confirmed Method, Path, or Schema semantics.\n- Set delivery to dock_tunnel. Support only HTTP/JSON request_response and text/event-stream server_stream.\n- Never include a URL, endpointId, credentials, runtime settings, seller attestation, or publish instructions.\n- Every OpenAPI operationId must have exactly one policy. Variable pricing requires a per-invocation cap.\n- Include an Agent normalization audit and put uncertain fields in unresolvedFields.`
 }
 
 function renderV3SharedFilePicker(action: string, title: string, details: string[], status = '', disabled = false) {
@@ -3288,7 +3604,7 @@ function renderV3SharedFilePicker(action: string, title: string, details: string
 
 function renderV3AgentMaterialPicker(action: 'endpoint-materials-add' | 'api-materials-add') {
   const importing = action === 'endpoint-materials-add' ? state.v3EndpointMaterialsImporting : state.v3APIMaterialsImporting
-  return renderV3SharedFilePicker(action, importing ? 'Adding files…' : 'Choose or drop files here', ['Documents only · JSON, YAML, Markdown, TXT, CSV', 'Files stay local and pass the same validation for click and drag-and-drop'], importing ? 'Processing…' : 'Browse or drop', importing)
+  return renderV3SharedFilePicker(action, importing ? 'Adding files…' : 'Choose or drop files here', ['OpenAPI, docs, examples and text code files · 5 MiB each, 20 files, 20 MiB total', 'Binary files are rejected; all accepted materials remain local'], importing ? 'Processing…' : 'Browse or drop', importing)
 }
 
 function renderV3SharedFileRow(file: { name: string; sizeBytes: number; extension?: string }, trailing: string) {
@@ -3308,6 +3624,7 @@ function renderV3AgentPromptPanel(options: {
   copyAction: string
   refreshAction: string
   checkAction: string
+  checkDisabled?: boolean
 }) {
   const promptKind = options.copyAction.startsWith('endpoint-') ? 'endpoint' : 'api_bridge'
   const expanded = localStorage.getItem(`exora.agentPrompt.${promptKind}.expanded`) === 'true'
@@ -3320,46 +3637,298 @@ function renderV3AgentPromptPanel(options: {
       <div class="v3-api-prompt-summary-side"><div class="v3-api-prompt-meta"><span><small>Draft</small><code title="${escapeAttr(options.draftId)}">${escapeHTML(compactDraftId)}</code></span><span><small>Expected</small><strong>v${options.expectedVersion}</strong></span></div><span class="v3-api-prompt-toggle"><em class="show">Show prompt</em><em class="hide">Hide prompt</em><i aria-hidden="true"></i></span></div>
     </summary>
     <textarea readonly spellcheck="false" aria-label="${escapeAttr(options.title)}">${escapeHTML(options.prompt)}</textarea>
-  </details><footer class="v3-api-prompt-footer"><p><strong>Next</strong><span>Run these instructions in your connected Agent, then check the saved draft.</span></p><div><button type="button" data-v3-action="${escapeAttr(options.copyAction)}">Copy prompt</button><button class="ghost" type="button" data-v3-action="${escapeAttr(options.refreshAction)}">Refresh</button><button class="ghost" type="button" data-v3-action="${escapeAttr(options.checkAction)}">Check draft</button></div></footer></div>`
+  </details><footer class="v3-api-prompt-footer"><p><strong>Next</strong><span>Run these instructions in your connected Agent, then check the saved draft.</span></p><div><button type="button" data-v3-action="${escapeAttr(options.copyAction)}">Copy prompt</button><button class="ghost" type="button" data-v3-action="${escapeAttr(options.refreshAction)}">Refresh</button><button class="ghost" type="button" data-v3-action="${escapeAttr(options.checkAction)}" ${options.checkDisabled ? 'disabled' : ''}>Check draft</button></div></footer></div>`
+}
+
+function renderV3ManualServiceFallback(kind: 'endpoint' | 'api_bridge') {
+  const endpoint = kind === 'endpoint'
+  const failedRunId = endpoint ? state.v3EndpointFailedRunId : state.v3APIFailedRunId
+  if (!failedRunId) return ''
+  const reason = endpoint ? state.v3EndpointFallbackReason : state.v3APIFallbackReason
+  const manifest = endpoint ? state.v3EndpointFallbackManifest : state.v3APIFallbackManifest
+  const title = endpoint ? state.v3EndpointDraft?.title || '' : state.v3APITitle
+  const description = endpoint ? state.v3EndpointDraft?.description || '' : state.v3APIDescription
+  const prefix = endpoint ? 'endpoint' : 'api'
+  return `<details class="v3-api-auth-card v3-manual-fallback" open><summary><strong>Audited manual fallback</strong></summary><p>The Agent draft check failed. Paste a complete ExoraServiceManifest v1; the same deterministic OpenAPI 3.1 validation still applies.</p><div class="v3-api-connection-grid"><label>Service title<input name="${prefix}FallbackTitle" value="${escapeAttr(title)}"/></label><label>Failure reason<input name="${prefix}FallbackReason" value="${escapeAttr(reason)}" placeholder="Why manual fallback is required"/></label></div><label>Description<textarea name="${prefix}FallbackDescription">${escapeHTML(description)}</textarea></label><label>ExoraServiceManifest JSON<textarea name="${prefix}FallbackManifest" spellcheck="false">${escapeHTML(manifest)}</textarea></label><small>Failed run: ${escapeHTML(failedRunId)}. Credentials, runtime targets and seller declarations are forbidden here.</small><button type="button" data-v3-action="${prefix}-fallback-save">Validate and save manual draft</button></details>`
+}
+
+const v3ServiceMeterLabels: Record<string, string> = {
+  request: 'Requests', successful_request: 'Successful requests', input_tokens: 'Input tokens', output_tokens: 'Output tokens',
+  input_bytes: 'Input bytes', output_bytes: 'Output bytes', execution_second: 'Execution time', image: 'Images', provider_reported: 'Provider reported usage',
+}
+
+function v3ServiceAgentSession() {
+  return state.agentSessions.find((session) => (session.scopes || []).includes('seller.draft'))
+}
+
+function v3OperationCounts(manifest?: V3ServiceManifest) {
+  let json = 0
+  let sse = 0
+  for (const policy of manifest?.operationPolicies || []) policy.interaction === 'server_stream' ? sse++ : json++
+  return { total: json + sse, json, sse }
+}
+
+function v3PricingIssues(components: V3APIPricingComponent[], maximum: number, capabilities?: string[]) {
+  const issues: string[] = []
+  if (!components.length) issues.push('Add at least one pricing component.')
+  components.forEach((component, index) => {
+    const label = `Price component ${index + 1}`
+    if (!v3ServiceMeterLabels[component.dimension]) issues.push(`${label} uses an unsupported meter.`)
+    if (capabilities && !capabilities.includes(component.dimension)) issues.push(`${label} must use an enabled metering capability.`)
+    if (!Number.isFinite(component.rateAtomic) || component.rateAtomic < 0) issues.push(`${label} has an invalid USDC price.`)
+    if (!Number.isFinite(component.per) || component.per < 1) issues.push(`${label} requires a positive unit size.`)
+    if (component.dimension === 'provider_reported' && !component.selector?.trim()) issues.push(`${label} requires a provider-reported usage selector.`)
+  })
+  const variable = components.some((component) => !['request', 'successful_request'].includes(component.dimension))
+  if (variable && maximum < 1) issues.push('Variable pricing requires a maximum charge per invocation.')
+  return issues
+}
+
+function v3ServiceReviewIssues(mode: 'endpoint' | 'api_bridge', id: string) {
+  const draft = mode === 'endpoint' ? state.v3EndpointDraft : state.v3APIDraft
+  if (!draft) return ['Load a service contract first.']
+  if (id === 'service') {
+    const issues = v3PricingIssues(draft.serviceManifest.pricingTemplate.defaults || [], draft.serviceManifest.pricingTemplate.defaultMaxChargePerInvocationAtomic || 0)
+    if (!draft.title.trim()) issues.unshift('Service title is required.')
+    if (!draft.description.trim()) issues.unshift('Service description is required.')
+    return issues
+  }
+  const operation = draft.operationReviews.find((item) => `operation:${item.operationId}` === id)
+  if (!operation) return ['Operation contract is missing.']
+  const issues: string[] = []
+  const limits = operation.limits
+  if (limits.timeoutSeconds < 1 || limits.timeoutSeconds > 900) issues.push('Timeout must be between 1 and 900 seconds.')
+  if (limits.maxRequestBytes < 1 || limits.maxRequestBytes > 64 * 1024 * 1024) issues.push('Request limit must be between 1 byte and 64 MiB.')
+  if (limits.maxResponseBytes < 1 || limits.maxResponseBytes > 64 * 1024 * 1024) issues.push('Response limit must be between 1 byte and 64 MiB.')
+  if (limits.maxConcurrency < 1 || limits.maxConcurrency > 64) issues.push('Concurrency must be between 1 and 64.')
+  if (!operation.meteringCapabilities.length) issues.push('Enable at least one metering capability.')
+  issues.push(...v3PricingIssues(operation.pricing || [], operation.maxChargePerInvocationAtomic || 0, operation.meteringCapabilities))
+  return issues
+}
+
+function renderV3ServicePricingEditor(mode: 'endpoint' | 'api_bridge', operation?: V3APIOperationReview) {
+  const draft = mode === 'endpoint' ? state.v3EndpointDraft : state.v3APIDraft
+  if (!draft) return ''
+  const inherited = Boolean(operation && operation.pricingMode === 'default')
+  const components = operation ? operation.pricing || [] : draft.serviceManifest.pricingTemplate.defaults || []
+  const maximum = operation ? operation.maxChargePerInvocationAtomic || 0 : draft.serviceManifest.pricingTemplate.defaultMaxChargePerInvocationAtomic || 0
+  const target = `${mode}|${operation?.operationId || 'default'}`
+  const rows = components.map((component, index) => `<div class="v3-api-price-component ${component.dimension === 'provider_reported' ? 'seller-reported' : ''}">
+    <label>Meter<select data-v3-service-price-dimension="${escapeAttr(`${target}|${index}`)}" ${inherited ? 'disabled' : ''}>${Object.entries(v3ServiceMeterLabels).map(([value, label]) => `<option value="${value}" ${component.dimension === value ? 'selected' : ''}>${escapeHTML(label)}</option>`).join('')}</select></label>
+    <label>Price (USDC)<input type="number" min="0" step="0.000001" value="${(component.rateAtomic / 1_000_000).toFixed(6)}" data-v3-service-price-usdc="${escapeAttr(`${target}|${index}`)}" ${inherited ? 'disabled' : ''}/></label>
+    <label>Per units<input type="number" min="1" value="${component.per}" data-v3-service-price-per="${escapeAttr(`${target}|${index}`)}" ${inherited ? 'disabled' : ''}/></label>
+    <label>Measured by<select data-v3-service-price-source="${escapeAttr(`${target}|${index}`)}" ${inherited ? 'disabled' : ''}><option value="gateway" ${component.meterSource === 'gateway' ? 'selected' : ''}>Exora gateway</option><option value="openai_usage" ${component.meterSource === 'openai_usage' ? 'selected' : ''}>Standard OpenAI usage</option><option value="provider_response" ${component.meterSource === 'provider_response' ? 'selected' : ''}>Provider response</option></select></label>
+    <label>Charge when<select data-v3-service-price-charge="${escapeAttr(`${target}|${index}`)}" ${inherited ? 'disabled' : ''}><option value="started" ${component.chargeOn === 'started' ? 'selected' : ''}>Request accepted</option><option value="succeeded" ${component.chargeOn === 'succeeded' ? 'selected' : ''}>Request succeeds</option><option value="completed" ${component.chargeOn === 'completed' ? 'selected' : ''}>Response or stream completes</option></select></label>
+    ${component.dimension === 'provider_reported' ? `<label class="v3-api-selector">Usage selector<span>Seller reported</span><input value="${escapeAttr(component.selector || '')}" data-v3-service-price-selector="${escapeAttr(`${target}|${index}`)}" placeholder="usage.units" ${inherited ? 'disabled' : ''}/></label>` : ''}
+    ${inherited ? '' : `<button class="danger ghost" type="button" data-v3-service-price-remove="${escapeAttr(`${target}|${index}`)}">Remove</button>`}
+  </div>`).join('')
+  return `<div class="v3-api-components" data-v3-service-pricing="${escapeAttr(target)}"><div class="v3-api-components-heading"><div><strong>${operation ? 'Operation pricing' : 'Default pricing template'}</strong><small>${inherited ? 'Inherited from the service default.' : 'Seller-defined prices shown to buyers in USDC.'}</small></div>${inherited ? '' : `<button class="ghost" type="button" data-v3-service-price-add="${escapeAttr(target)}">Add component</button>`}</div>${rows || '<div class="v3-api-review-warning"><strong>Pricing required</strong><small>Add at least one supported pricing component.</small></div>'}<div class="v3-api-max-charge"><label>Maximum charge per invocation (USDC)<input type="number" min="0" step="0.000001" value="${(maximum / 1_000_000).toFixed(6)}" data-v3-service-price-cap="${escapeAttr(target)}" ${inherited ? 'disabled' : ''}/></label></div></div>`
+}
+
+function renderV3ServiceOperationReview(mode: 'endpoint' | 'api_bridge', operation: V3APIOperationReview) {
+  const target = `${mode}|${operation.operationId}`
+  return `<div class="v3-api-review-form" data-v3-service-operation="${escapeAttr(target)}">
+    <div class="v3-api-product-grid"><label>Operation ID<input value="${escapeAttr(operation.operationId)}" readonly/></label><label>Method<input value="${escapeAttr(operation.method)}" readonly/></label><label>Path<input value="${escapeAttr(operation.path)}" readonly/></label><label>Display name<input value="${escapeAttr(operation.title)}" data-v3-service-operation-title="${escapeAttr(target)}"/></label><label>Interaction<input value="${operation.streaming === 'server_stream' ? 'SSE server stream' : 'HTTP/JSON request-response'}" readonly/></label></div>
+    <div class="v3-api-components"><div class="v3-api-components-heading"><div><strong>Risk and behavior</strong><small>These declarations are part of the public Operation Policy.</small></div></div><div class="v3-api-connection-grid"><label><input type="checkbox" data-v3-service-policy="${escapeAttr(`${target}|sideEffect`)}" ${operation.sideEffect ? 'checked' : ''}/> Has external side effects</label><label><input type="checkbox" data-v3-service-policy="${escapeAttr(`${target}|idempotent`)}" ${operation.idempotent ? 'checked' : ''}/> Idempotent</label></div></div>
+    <div class="v3-api-components"><div class="v3-api-components-heading"><div><strong>Operation limits</strong><small>Enforced contract limits for every invocation.</small></div></div><div class="v3-api-product-grid"><label>Timeout seconds<input type="number" min="1" max="900" value="${operation.limits.timeoutSeconds}" data-v3-service-limit="${escapeAttr(`${target}|timeoutSeconds`)}"/></label><label>Request limit (bytes)<input type="number" min="1" max="67108864" value="${operation.limits.maxRequestBytes}" data-v3-service-limit="${escapeAttr(`${target}|maxRequestBytes`)}"/></label><label>Response limit (bytes)<input type="number" min="1" max="67108864" value="${operation.limits.maxResponseBytes}" data-v3-service-limit="${escapeAttr(`${target}|maxResponseBytes`)}"/></label><label>Maximum concurrency<input type="number" min="1" max="64" value="${operation.limits.maxConcurrency}" data-v3-service-limit="${escapeAttr(`${target}|maxConcurrency`)}"/></label></div></div>
+    <div class="v3-api-components"><div class="v3-api-components-heading"><div><strong>Metering capabilities</strong><small>Pricing may only use enabled meters.</small></div></div><div class="v3-api-attestations">${Object.entries(v3ServiceMeterLabels).map(([value, label]) => `<label><span><b>${escapeHTML(label)}</b></span><input type="checkbox" data-v3-service-meter="${escapeAttr(`${target}|${value}`)}" ${operation.meteringCapabilities.includes(value) ? 'checked' : ''}/></label>`).join('')}</div></div>
+    <div class="v3-api-components"><label>Pricing source<select data-v3-service-pricing-mode="${escapeAttr(target)}"><option value="default" ${operation.pricingMode === 'default' ? 'selected' : ''}>Use service default</option><option value="override" ${operation.pricingMode === 'override' ? 'selected' : ''}>Custom Operation price</option></select></label></div>
+    ${renderV3ServicePricingEditor(mode, operation)}
+  </div>`
+}
+
+function renderV3ServiceAuthFields(mode: 'endpoint' | 'api_bridge') {
+  const endpoint = mode === 'endpoint'
+  const authType = endpoint ? state.v3EndpointAuthType : state.v3APIAuthType
+  const secret = endpoint ? state.v3EndpointSecret : state.v3APISecret
+  const username = endpoint ? state.v3EndpointBasicUsername : state.v3APIBasicUsername
+  const authName = endpoint ? state.v3EndpointAPIKeyHeader : state.v3APIKeyHeader
+  const option = (value: V3UpstreamAuthType, label: string) => `<option value="${value}" ${authType === value ? 'selected' : ''}>${label}</option>`
+  let fields = ''
+  if (authType === 'bearer') fields = `<label>Bearer token<input name="secret" type="password" value="${escapeAttr(secret)}" autocomplete="off"/></label>`
+  else if (authType === 'basic') fields = `<label>Username<input name="basicUsername" value="${escapeAttr(username)}" autocomplete="username"/></label><label>Password<input name="secret" type="password" value="${escapeAttr(secret)}" autocomplete="current-password"/></label>`
+  else if (['api_key', 'header_api_key', 'query_api_key', 'cookie_api_key'].includes(authType)) fields = `<label>${authType === 'query_api_key' ? 'Query parameter' : authType === 'cookie_api_key' ? 'Cookie name' : 'Header name'}<input name="apiKeyHeader" value="${escapeAttr(authName)}"/></label><label>API key value<input name="secret" type="password" value="${escapeAttr(secret)}" autocomplete="off"/></label>`
+  else if (authType === 'oauth2_client_credentials') {
+    const tokenURL = endpoint ? state.v3EndpointOAuthTokenURL : state.v3APIOAuthTokenURL
+    const clientID = endpoint ? state.v3EndpointOAuthClientID : state.v3APIOAuthClientID
+    const clientSecret = endpoint ? state.v3EndpointOAuthClientSecret : state.v3APIOAuthClientSecret
+    const scope = endpoint ? state.v3EndpointOAuthScope : state.v3APIOAuthScope
+    const audience = endpoint ? state.v3EndpointOAuthAudience : state.v3APIOAuthAudience
+    fields = `<label>Token URL<input name="oauthTokenUrl" value="${escapeAttr(tokenURL)}" placeholder="https://provider.example/oauth/token"/></label><label>Client ID<input name="oauthClientId" value="${escapeAttr(clientID)}"/></label><label>Client secret<input name="oauthClientSecret" type="password" value="${escapeAttr(clientSecret)}" autocomplete="off"/></label><label>Scope<input name="oauthScope" value="${escapeAttr(scope)}"/></label><label>Audience<input name="oauthAudience" value="${escapeAttr(audience)}"/></label>`
+  } else if (authType === 'mtls') {
+    const certificate = endpoint ? state.v3EndpointMTLSCertificate : state.v3APIMTLSCertificate
+    const privateKey = endpoint ? state.v3EndpointMTLSPrivateKey : state.v3APIMTLSPrivateKey
+    const ca = endpoint ? state.v3EndpointMTLSCA : state.v3APIMTLSCA
+    const serverName = endpoint ? state.v3EndpointMTLSServerName : state.v3APIMTLSServerName
+    fields = `<label>Client certificate PEM<textarea name="mtlsCertificate" spellcheck="false">${escapeHTML(certificate)}</textarea></label><label>Private key PEM<textarea name="mtlsPrivateKey" spellcheck="false">${escapeHTML(privateKey)}</textarea></label><label>CA bundle PEM (optional)<textarea name="mtlsCA" spellcheck="false">${escapeHTML(ca)}</textarea></label><label>Server name (optional)<input name="mtlsServerName" value="${escapeAttr(serverName)}"/></label>`
+  }
+  return `<label>Authentication<select name="authType">${option('none', 'None')}${option('bearer', 'Bearer token')}${option('basic', 'Basic authentication')}${option('header_api_key', 'Header API key')}${option('query_api_key', 'Query API key')}${option('cookie_api_key', 'Cookie API key')}${option('oauth2_client_credentials', 'OAuth2 client credentials')}${option('mtls', 'mTLS client certificate')}</select></label>${fields}`
+}
+
+function v3CredentialReady(mode: 'endpoint' | 'api_bridge') {
+  const endpoint = mode === 'endpoint'
+  const authType = endpoint ? state.v3EndpointAuthType : state.v3APIAuthType
+  if (authType === 'none') return true
+  if (authType === 'basic') return Boolean((endpoint ? state.v3EndpointBasicUsername : state.v3APIBasicUsername).trim() && (endpoint ? state.v3EndpointSecret : state.v3APISecret))
+  if (authType === 'oauth2_client_credentials') return Boolean((endpoint ? state.v3EndpointOAuthTokenURL : state.v3APIOAuthTokenURL).trim() && (endpoint ? state.v3EndpointOAuthClientID : state.v3APIOAuthClientID).trim() && (endpoint ? state.v3EndpointOAuthClientSecret : state.v3APIOAuthClientSecret))
+  if (authType === 'mtls') return Boolean((endpoint ? state.v3EndpointMTLSCertificate : state.v3APIMTLSCertificate).trim() && (endpoint ? state.v3EndpointMTLSPrivateKey : state.v3APIMTLSPrivateKey).trim())
+  return Boolean(endpoint ? state.v3EndpointSecret : state.v3APISecret)
+}
+
+function v3RuntimeCredential(mode: 'endpoint' | 'api_bridge') {
+  const endpoint = mode === 'endpoint'
+  const authType = endpoint ? state.v3EndpointAuthType : state.v3APIAuthType
+  if (authType === 'none') return ''
+  if (authType === 'basic') return `${endpoint ? state.v3EndpointBasicUsername : state.v3APIBasicUsername}:${endpoint ? state.v3EndpointSecret : state.v3APISecret}`
+  if (authType === 'oauth2_client_credentials') return JSON.stringify({ tokenUrl: endpoint ? state.v3EndpointOAuthTokenURL : state.v3APIOAuthTokenURL, clientId: endpoint ? state.v3EndpointOAuthClientID : state.v3APIOAuthClientID, clientSecret: endpoint ? state.v3EndpointOAuthClientSecret : state.v3APIOAuthClientSecret, scope: endpoint ? state.v3EndpointOAuthScope : state.v3APIOAuthScope, audience: endpoint ? state.v3EndpointOAuthAudience : state.v3APIOAuthAudience })
+  if (authType === 'mtls') return JSON.stringify({ certificatePem: endpoint ? state.v3EndpointMTLSCertificate : state.v3APIMTLSCertificate, privateKeyPem: endpoint ? state.v3EndpointMTLSPrivateKey : state.v3APIMTLSPrivateKey, caPem: endpoint ? state.v3EndpointMTLSCA : state.v3APIMTLSCA, serverName: endpoint ? state.v3EndpointMTLSServerName : state.v3APIMTLSServerName })
+  return endpoint ? state.v3EndpointSecret : state.v3APISecret
+}
+
+function syncV3RuntimeAuthFromForm(mode: 'endpoint' | 'api_bridge', data: FormData) {
+  const endpoint = mode === 'endpoint'
+  const authType = String(data.get('authType') || 'none') as V3UpstreamAuthType
+  if (endpoint) {
+    state.v3EndpointAuthType = authType
+    state.v3EndpointSecret = String(data.get('secret') || state.v3EndpointSecret)
+    state.v3EndpointBasicUsername = String(data.get('basicUsername') || state.v3EndpointBasicUsername).trim()
+    state.v3EndpointAPIKeyHeader = String(data.get('apiKeyHeader') || state.v3EndpointAPIKeyHeader).trim() || (authType === 'query_api_key' || authType === 'cookie_api_key' ? 'api_key' : 'X-API-Key')
+    state.v3EndpointOAuthTokenURL = String(data.get('oauthTokenUrl') || state.v3EndpointOAuthTokenURL).trim()
+    state.v3EndpointOAuthClientID = String(data.get('oauthClientId') || state.v3EndpointOAuthClientID).trim()
+    state.v3EndpointOAuthClientSecret = String(data.get('oauthClientSecret') || state.v3EndpointOAuthClientSecret)
+    state.v3EndpointOAuthScope = String(data.get('oauthScope') || state.v3EndpointOAuthScope).trim()
+    state.v3EndpointOAuthAudience = String(data.get('oauthAudience') || state.v3EndpointOAuthAudience).trim()
+    state.v3EndpointMTLSCertificate = String(data.get('mtlsCertificate') || state.v3EndpointMTLSCertificate)
+    state.v3EndpointMTLSPrivateKey = String(data.get('mtlsPrivateKey') || state.v3EndpointMTLSPrivateKey)
+    state.v3EndpointMTLSCA = String(data.get('mtlsCA') || state.v3EndpointMTLSCA)
+    state.v3EndpointMTLSServerName = String(data.get('mtlsServerName') || state.v3EndpointMTLSServerName).trim()
+    return
+  }
+  state.v3APIAuthType = authType
+  state.v3APISecret = String(data.get('secret') || state.v3APISecret)
+  state.v3APIBasicUsername = String(data.get('basicUsername') || state.v3APIBasicUsername).trim()
+  state.v3APIKeyHeader = String(data.get('apiKeyHeader') || state.v3APIKeyHeader).trim() || (authType === 'query_api_key' || authType === 'cookie_api_key' ? 'api_key' : 'X-API-Key')
+  state.v3APIOAuthTokenURL = String(data.get('oauthTokenUrl') || state.v3APIOAuthTokenURL).trim()
+  state.v3APIOAuthClientID = String(data.get('oauthClientId') || state.v3APIOAuthClientID).trim()
+  state.v3APIOAuthClientSecret = String(data.get('oauthClientSecret') || state.v3APIOAuthClientSecret)
+  state.v3APIOAuthScope = String(data.get('oauthScope') || state.v3APIOAuthScope).trim()
+  state.v3APIOAuthAudience = String(data.get('oauthAudience') || state.v3APIOAuthAudience).trim()
+  state.v3APIMTLSCertificate = String(data.get('mtlsCertificate') || state.v3APIMTLSCertificate)
+  state.v3APIMTLSPrivateKey = String(data.get('mtlsPrivateKey') || state.v3APIMTLSPrivateKey)
+  state.v3APIMTLSCA = String(data.get('mtlsCA') || state.v3APIMTLSCA)
+  state.v3APIMTLSServerName = String(data.get('mtlsServerName') || state.v3APIMTLSServerName).trim()
+  state.v3APICredentialConfigured = v3CredentialReady(mode)
+}
+
+function renderV3ServiceWizard(mode: 'endpoint' | 'api_bridge') {
+  const endpoint = mode === 'endpoint'
+  const draft = endpoint ? state.v3EndpointDraft : state.v3APIDraft
+  const operations = endpoint ? draft?.operationReviews || [] : state.v3APIOperations
+  const materials = endpoint ? state.v3EndpointMaterials : state.v3APIMaterials
+  const note = endpoint ? state.v3EndpointMaterialNote : state.v3APIMaterialNote
+  const statuses = endpoint ? state.v3EndpointReviewStatus : state.v3APIReviewStatus
+  const reviewIndex = endpoint ? state.v3EndpointReviewIndex : state.v3APIReviewIndex
+  const reviewFilter = endpoint ? state.v3EndpointReviewFilter : state.v3APIReviewFilter
+  const draftID = endpoint ? state.v3EndpointDraftId : state.v3APIDraftId
+  const failedRunID = endpoint ? state.v3EndpointFailedRunId : state.v3APIFailedRunId
+  const materialCurrent = v3AgentMaterialsCurrent(mode)
+  const ids = ['service', ...operations.map((operation) => `operation:${operation.operationId}`)]
+  const unresolvedFor = (id: string) => endpoint ? endpointUnresolvedForReview(id) : apiBridgeUnresolvedForReview(id)
+  const confirmedCount = ids.filter((id) => statuses[id] === 'confirmed').length
+  const unresolved = draft?.unresolvedFields || []
+  const dirty = endpoint ? state.v3EndpointDraftDirty : state.v3APIDraftDirty
+  const reviewComplete = Boolean(materialCurrent && draft && !dirty && !unresolved.length && ids.length && confirmedCount === ids.length)
+  const activeIndex = Math.max(0, Math.min(reviewIndex, Math.max(0, ids.length - 1)))
+  const activeID = ids[activeIndex] || 'service'
+  const activeOperation = activeID.startsWith('operation:') ? operations.find((operation) => `operation:${operation.operationId}` === activeID) : undefined
+  const activeUnresolved = unresolvedFor(activeID)
+  const activeIssues = draft ? v3ServiceReviewIssues(mode, activeID) : []
+  const busy = endpoint ? state.v3EndpointSubmitting || state.v3EndpointProbing : state.v3APISavingListing || state.v3APIProbing
+  const agentSession = v3ServiceAgentSession()
+  const counts = v3OperationCounts(draft?.serviceManifest)
+  const prefix = endpoint ? 'endpoint' : 'api'
+  const pickerAction = endpoint ? 'endpoint-materials-add' : 'api-materials-add'
+  const checkAction = endpoint ? 'endpoint-draft-check' : 'api-draft-check'
+  const prompt = endpoint ? endpointAgentPrompt() : apiBridgeAgentPrompt()
+  const materialRows = materials.map((file) => renderV3SharedFileRow(file, `<button class="danger ghost" type="button" ${endpoint ? `data-v3-endpoint-material-remove="${escapeAttr(file.id)}"` : `data-v3-api-material-remove="${escapeAttr(file.id)}"`}>Remove</button>`)).join('')
+  const visibleItems = ids.map((id, index) => ({ id, index })).filter(({ id }) => reviewFilter === 'all' || (reviewFilter === 'pending' ? statuses[id] !== 'confirmed' : unresolvedFor(id).length > 0))
+  const reviewList = visibleItems.map(({ id, index }) => {
+    const operation = operations.find((item) => `operation:${item.operationId}` === id)
+    const status = statuses[id] || 'pending'
+    return `<button type="button" class="v3-api-review-item ${index === activeIndex ? 'selected' : ''} ${status} ${unresolvedFor(id).length ? 'warning' : ''}" ${endpoint ? `data-v3-endpoint-review-index="${index}"` : `data-v3-review-index="${index}"`}><span>${status === 'confirmed' ? '✓' : status === 'modified' ? '!' : index + 1}</span><div><strong>${escapeHTML(id === 'service' ? 'Service information' : `${operation?.method} ${operation?.path}`)}</strong><small>${escapeHTML(id === 'service' ? draft?.title || '' : operation?.title || operation?.operationId || '')}</small></div><em>${status === 'confirmed' ? 'Confirmed' : status === 'modified' ? 'Modified · confirm again' : 'Pending review'}</em></button>`
+  }).join('') || '<div class="v3-api-review-filter-empty">No items match this filter.</div>'
+  const titleAttr = endpoint ? 'data-v3-endpoint-draft="title"' : 'name="title" data-v3-api-draft="title"'
+  const descriptionAttr = endpoint ? 'data-v3-endpoint-draft="description"' : 'name="description" data-v3-api-draft="description"'
+  const serviceTitle = endpoint ? draft?.title || '' : state.v3APITitle
+  const serviceDescription = endpoint ? draft?.description || '' : state.v3APIDescription
+  const serviceReview = draft ? `<div class="v3-api-review-form"><div class="v3-api-product-grid"><label>Title<input ${titleAttr} value="${escapeAttr(serviceTitle)}"/></label><label>Interface<input value="OpenAPI 3.1 · HTTP/JSON + SSE" readonly/></label><label>Contract SHA-256<input value="${escapeAttr(draft.normalization.outputSha256 || '')}" readonly/></label><label>Operations<input value="${counts.total} total · ${counts.json} JSON · ${counts.sse} SSE" readonly/></label></div><label>Description<textarea ${descriptionAttr}>${escapeHTML(serviceDescription)}</textarea></label><p class="v3-api-agent-note"><strong>Normalization audit</strong><span>${escapeHTML(draft.agentNotes || 'Normalization audit recorded.')}</span></p><details class="v3-api-auth-card"><summary><strong>Canonical OpenAPI 3.1 JSON</strong></summary><pre>${escapeHTML(JSON.stringify(draft.serviceManifest.interface, null, 2))}</pre></details>${renderV3ServicePricingEditor(mode)}</div>` : ''
+  const reviewBody = activeOperation ? renderV3ServiceOperationReview(mode, activeOperation) : serviceReview
+  const previousAttr = endpoint ? 'data-v3-endpoint-review-previous' : 'data-v3-review-previous'
+  const nextAttr = endpoint ? 'data-v3-endpoint-review-next' : 'data-v3-review-next'
+  const confirmAttr = endpoint ? `data-v3-endpoint-review-confirm="${escapeAttr(activeID)}"` : `data-v3-review-confirm="${escapeAttr(activeID)}"`
+  const promptRefreshAction = endpoint ? 'endpoint-prompt-refresh' : 'api-prompt-regenerate'
+  const reviewWarning = [...activeUnresolved, ...activeIssues]
+  const agentStatus = `<p class="v3-api-agent-note"><strong>${agentSession ? 'Seller Agent connected' : state.v3ServiceAgentSessionsLoading ? 'Checking Agent connection' : 'No active Seller Agent'}</strong><span>${agentSession ? `${escapeHTML(agentSession.clientName || 'Local Agent')} · last active ${escapeHTML(compactTimestamp(agentSession.lastUsedAt || agentSession.createdAt || ''))} · expires ${escapeHTML(compactTimestamp(agentSession.expiresAt || ''))}` : 'Connect an Agent with seller.draft permission, or record unavailability for the audited manual fallback.'}</span><button class="ghost" type="button" data-v3-action="service-agent-refresh">Refresh status</button>${!agentSession && state.v3ServiceAgentSessionsLoaded && materials.length && !failedRunID ? `<button class="ghost" type="button" data-v3-action="${prefix}-agent-unavailable">Record Agent unavailable</button>` : ''}</p>`
+  const step1 = `<section class="v3-console-panel ${v3WizardStepClass(materialCurrent ? 'complete' : materials.length && draft ? 'error' : 'available')}"><div class="v3-step-heading"><span>1</span><div><strong>Import materials and prepare contract</strong><small>Files and notes remain local; the Agent saves only the normalized public ServiceManifest.</small></div></div>${renderV3AgentMaterialPicker(pickerAction)}<div class="v3-api-material-list">${materialRows || renderV3SharedFileEmpty('No materials selected', 'Add OpenAPI, documentation, examples, code, or a service description to unlock Step 2.')}</div><details class="v3-api-auth-card"><summary><strong>Service description / examples</strong></summary><label>Plain-language material<textarea name="${prefix}MaterialNote" placeholder="Describe operations, request and response examples, metering, or pricing assumptions.">${escapeHTML(note)}</textarea></label><button type="button" data-v3-action="${prefix}-material-note-save">Save as local material</button></details>${agentStatus}${renderV3AgentPromptPanel({ title: endpoint ? 'Endpoint Agent Prompt' : 'API Bridge Agent Prompt', draftId: draftID, expectedVersion: draft?.version || 0, prompt, copyAction: `${prefix}-prompt-copy`, refreshAction: promptRefreshAction, checkAction, checkDisabled: !materials.length })}${renderV3ManualServiceFallback(mode)}</section>`
+  const step2 = `<section class="v3-console-panel ${v3WizardStepClass(!materialCurrent ? 'locked' : reviewComplete ? 'complete' : 'available')}" ${!materialCurrent ? 'inert aria-disabled="true"' : ''}><div class="v3-step-heading"><span>2</span><div><strong>Review service contract and pricing</strong><small>Confirm the canonical OpenAPI interface, every Operation Policy, and seller-defined USDC pricing.</small></div></div>${unresolved.length ? `<div class="v3-api-unresolved-list"><strong>Needs review</strong>${unresolved.map((field) => `<span>${escapeHTML(field)}</span>`).join('')}<small>Edit the matching contract item before confirming it.</small></div>` : ''}${draft ? `<div class="v3-api-review-workspace"><aside><div><strong>Contract review</strong><small>Version ${draft.version} · ${confirmedCount}/${ids.length} confirmed</small></div><div class="v3-api-review-filters"><span>All ${ids.length}</span><span>Pending ${ids.length - confirmedCount}</span><span>Warnings ${unresolved.length + activeIssues.length}</span></div>${reviewList}</aside><main><header><div><small>Item ${activeIndex + 1} of ${ids.length}</small><strong>${escapeHTML(activeID === 'service' ? 'Service information' : `${activeOperation?.method} ${activeOperation?.path}`)}</strong></div><span class="${statuses[activeID] || 'pending'}">${statuses[activeID] === 'confirmed' ? 'Confirmed' : statuses[activeID] === 'modified' ? 'Modified' : 'Pending review'}</span></header>${reviewBody}${reviewWarning.length ? `<div class="v3-api-review-warning"><strong>Complete this contract item</strong><span>${reviewWarning.map(escapeHTML).join(', ')}</span></div>` : ''}<footer><button class="ghost" type="button" data-v3-service-review-nav ${previousAttr} ${activeIndex === 0 ? 'disabled' : ''}>Previous</button><button type="button" data-v3-service-review-nav ${confirmAttr} ${reviewWarning.length ? 'disabled' : ''}>Confirm and review next</button><button class="ghost" type="button" data-v3-service-review-nav ${nextAttr} ${activeIndex + 1 >= ids.length ? 'disabled' : ''}>Next</button></footer></main></div><div class="v3-form-actions"><button type="button" data-v3-action="${prefix}-draft-save">Save revised draft</button><span>${reviewComplete ? 'All contract items confirmed' : `${ids.length - confirmedCount} items still require approval`}</span></div>` : renderV3AgentDraftWaiting(mode)}</section>`
+  const runtimeReady = endpoint ? Boolean(state.v3EndpointProbe?.ok) : Boolean(state.v3APIProbe?.ok)
+  const attestationsReady = endpoint ? state.v3EndpointAttestPricing && state.v3EndpointAttestRuntime && state.v3EndpointAttestRights : state.v3APIAttestPricing && state.v3APIAttestUsage && state.v3APIAttestRights
+  const canSubmit = reviewComplete && runtimeReady && v3CredentialReady(mode) && attestationsReady && !busy
+  let runtimeBody = ''
+  if (endpoint) {
+    const smokeOperation = activeOperation || operations[0]
+    const smoke = state.v3EndpointRouteTestResult
+    const dangerous = Boolean(smokeOperation && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(smokeOperation.method) && smokeOperation.sideEffect)
+    const smokePreview = smoke?.sseEvents?.length
+      ? `${smoke.sseEvents.length} SSE events · first event ${smoke.firstEventLatencyMs || 0} ms · ${smoke.streamEndStatus || 'completed'}${smoke.truncated ? ' · preview truncated' : ''}`
+      : `${smoke?.bytesRead || 0} bytes${smoke?.truncated ? ' · preview truncated' : ''}`
+    runtimeBody = `<div class="v3-api-runtime-heading"><div><strong>Private Dock runtime</strong><small>These settings stay on this computer and never enter the public Manifest.</small></div><span>Dock only</span></div><div class="v3-api-connection-grid"><label>Local service URL<input name="localBaseUrl" value="${escapeAttr(state.v3EndpointLocalURL)}" placeholder="http://127.0.0.1:8000"/></label><label>Health Path<input name="healthPath" value="${escapeAttr(state.v3EndpointHealthPath)}"/></label>${renderV3ServiceAuthFields(mode)}<label>Runtime timeout seconds<input name="timeoutSeconds" type="number" min="1" max="300" value="${state.v3EndpointTimeout}"/></label><label>Runtime concurrency<input name="concurrency" type="number" min="1" max="64" value="${state.v3EndpointConcurrency}"/></label></div><div class="v3-wizard-inline-action"><button class="ghost" type="button" data-v3-action="endpoint-probe" ${reviewComplete && !busy ? '' : 'disabled'}>${state.v3EndpointProbing ? 'Checking…' : state.v3EndpointProbe?.ok ? 'Check health again' : 'Test local health'}</button></div><div class="v3-api-probe ${state.v3EndpointProbe?.ok ? 'passed' : state.v3EndpointProbe ? 'failed' : 'idle'}"><span>${state.v3EndpointProbe?.ok ? '✓' : state.v3EndpointProbe ? '!' : '→'}</span><div><strong>${state.v3EndpointProbe?.ok ? 'Local Health Path passed' : 'Local connectivity must pass'}</strong><small>${escapeHTML(state.v3EndpointProbe?.error || 'Dock validates this private target without sending its URL or credential to Cloud.')}</small></div></div>${smokeOperation ? `<details class="v3-api-auth-card"><summary><strong>Optional Operation smoke test · ${escapeHTML(smokeOperation.method)} ${escapeHTML(smokeOperation.path)}${smokeOperation.streaming === 'server_stream' ? ' · SSE' : ''}</strong></summary><div class="v3-api-connection-grid"><label>Concrete test path<input name="routeTestPath" value="${escapeAttr(state.v3EndpointRouteTestPath || smokeOperation.path)}"/></label><label>Query string<input name="routeTestQuery" value="${escapeAttr(state.v3EndpointRouteTestQuery)}" placeholder="limit=1"/></label><label>Content type<input name="routeTestContentType" value="${escapeAttr(state.v3EndpointRouteTestContentType)}"/></label></div><label>Request body<textarea name="routeTestBody">${escapeHTML(state.v3EndpointRouteTestBody)}</textarea></label>${dangerous ? `<label><input name="routeTestDanger" type="checkbox" ${state.v3EndpointRouteTestDangerConfirmed ? 'checked' : ''}/> I understand this test may change local service state.</label>` : ''}<button class="ghost" type="button" data-v3-action="endpoint-route-test" ${dangerous && !state.v3EndpointRouteTestDangerConfirmed ? 'disabled' : ''}>Run optional Operation test</button>${smoke ? `<div class="v3-api-probe ${smoke.ok ? 'passed' : 'failed'}"><span>${smoke.ok ? '✓' : '!'}</span><div><strong>${smoke.status ? `HTTP ${smoke.status}` : 'Operation test failed'} · ${smoke.latencyMs || 0} ms</strong><small>${escapeHTML(smoke.error || smokePreview)}</small><pre>${escapeHTML(smoke.preview || '')}</pre></div></div>` : ''}</details>` : ''}${renderV3SellerAttestations(mode)}`
+  } else {
+    const probe = state.v3APIProbe
+    runtimeBody = `<div class="v3-api-runtime-heading"><div><strong>Private Cloud connection</strong><small>The provider URL and encrypted credential never enter the public Manifest or Agent draft.</small></div><span>Cloud private</span></div><div class="v3-api-connection-grid"><label>Provider Base URL<input name="baseUrl" value="${escapeAttr(state.v3APIBaseURL)}" placeholder="https://api.provider.example"/></label><label>Health Path<input name="healthPath" value="${escapeAttr(state.v3APIHealthPath)}"/></label>${renderV3ServiceAuthFields(mode)}</div><div class="v3-wizard-inline-action"><button class="ghost" type="button" data-v3-action="api-probe" ${reviewComplete && !busy ? '' : 'disabled'}>${state.v3APIProbing ? 'Checking…' : probe?.ok ? 'Check again' : 'Check connection'}</button></div><div class="v3-api-probe ${probe?.ok ? 'passed' : probe ? 'failed' : 'idle'}"><span>${probe?.ok ? '✓' : probe ? '!' : '→'}</span><div><strong>${probe?.ok ? 'Health Path reachable' : probe ? 'Connection check failed' : 'Connectivity not checked'}</strong><small>${escapeHTML(probe?.error || 'Cloud calls only the declared side-effect-free Health Path.')}</small></div></div><div class="v3-api-public-preview"><div><span>MARKET PREVIEW</span><strong>${escapeHTML(draft?.title || 'Untitled API Bridge')}</strong><small>OpenAPI 3.1 · ${counts.total} Operations · ${counts.sse ? `${counts.sse} SSE` : 'HTTP/JSON'}</small></div><p>Exora verifies connectivity, forwarding, metering, and settlement. The seller remains responsible for service behavior, pricing, rights, and reported usage.</p></div>${renderV3SellerAttestations(mode)}`
+  }
+  const step3 = `<section class="v3-console-panel ${v3WizardStepClass(!reviewComplete ? 'locked' : busy ? 'busy' : 'available')} v3-api-publish-panel" ${!reviewComplete ? 'inert aria-disabled="true"' : ''}><div class="v3-step-heading"><span>3</span><div><strong>${endpoint ? 'Configure private Dock runtime and submit' : 'Configure private Cloud connection and submit'}</strong><small>${endpoint ? 'Dock must remain online; local targets and credentials stay on this computer.' : 'Cloud connects to the public HTTPS provider; Dock is not required at invocation time.'}</small></div><button type="submit" class="v3-direct-publish" ${canSubmit ? '' : 'disabled'}>${busy ? 'Submitting…' : 'Submit to Listings'}</button></div>${runtimeBody}</section>`
+  return `<form class="v3-application-flow v3-provider-form" data-v3-form="${endpoint ? 'endpoint-agent' : 'api_bridge'}">${step1}${step2}${step3}</form>`
 }
 
 function endpointReviewIDs() {
-  return state.v3EndpointDraft ? ['service', ...state.v3EndpointDraft.routes.map((route) => `route:${route.routeId}`)] : []
+  return state.v3EndpointDraft ? ['service', ...state.v3EndpointDraft.operationReviews.map((route) => `operation:${route.operationId}`)] : []
 }
 
 function endpointReviewFingerprint(id: string) {
   const draft = state.v3EndpointDraft
   if (!draft) return ''
-  if (id === 'service') return JSON.stringify({ title: draft.title, description: draft.description, protocol: draft.protocol, healthPath: draft.healthPath })
-  const route = draft.routes.find((item) => `route:${item.routeId}` === id)
+  if (id === 'service') return JSON.stringify({ title: draft.title, description: draft.description, interface: draft.serviceManifest.interface, pricingTemplate: draft.serviceManifest.pricingTemplate })
+  const route = draft.operationReviews.find((item) => `operation:${item.operationId}` === id)
   if (!route) return ''
-  const pricing = route.pricing.map((item) => ({ dimension: item.dimension, rateAtomic: item.rateAtomic, per: item.per, meterSource: item.meterSource, ...(item.selector ? { selector: item.selector } : {}), chargeOn: item.chargeOn }))
-  return JSON.stringify({ operationId: route.operationId, method: route.method, path: route.path, displayName: route.displayName, pricing, maxChargePerInvocationAtomic: route.maxChargePerInvocationAtomic })
+  const pricing = (route.pricing || []).map((item) => ({ dimension: item.dimension, rateAtomic: item.rateAtomic, per: item.per, meterSource: item.meterSource, ...(item.selector ? { selector: item.selector } : {}), chargeOn: item.chargeOn }))
+  return JSON.stringify({ operationId: route.operationId, method: route.method, path: route.path, title: route.title, streaming: route.streaming, sideEffect: route.sideEffect, idempotent: route.idempotent, limits: route.limits, meteringCapabilities: route.meteringCapabilities, pricingMode: route.pricingMode, pricing, maxChargePerInvocationAtomic: route.maxChargePerInvocationAtomic })
 }
 
 function endpointUnresolvedForReview(id: string) {
   const draft = state.v3EndpointDraft
   if (!draft) return []
-  if (id === 'service') return (draft.unresolvedFields || []).filter((field) => !/^routes(?:\.|\[)/.test(field))
-  const route = draft.routes.find((item) => `route:${item.routeId}` === id)
-  const index = route ? draft.routes.indexOf(route) : -1
+  const operationIDs = draft.operationReviews.map((operation) => operation.operationId)
+  if (id === 'service') return (draft.unresolvedFields || []).filter((field) => !operationIDs.some((operationId) => field.includes(operationId)))
+  const route = draft.operationReviews.find((item) => `operation:${item.operationId}` === id)
+  const index = route ? draft.operationReviews.indexOf(route) : -1
   if (!route || index < 0) return []
-  return (draft.unresolvedFields || []).filter((field) => field.includes(route.routeId) || field.includes(route.operationId) || field.startsWith(`routes.${index}`) || field.startsWith(`routes[${index}]`))
+  return (draft.unresolvedFields || []).filter((field) => field.includes(route.operationId) || field.includes(`operationPolicies.${index}`) || field.includes(`operationPolicies[${index}]`))
 }
 
 function endpointPathField(path: string) {
-  return String(path).match(/(?:^|\.)(title|description|protocol|healthPath|operationId|method|path|displayName|maxChargePerInvocationAtomic|dimension|rateAtomic|per|meterSource|selector|chargeOn)$/)?.[1]
+  return String(path).match(/(?:^|\.)(title|description|operationId|method|path|displayName|interaction|sideEffect|idempotent|timeoutSeconds|maxRequestBytes|maxResponseBytes|maxConcurrency|meteringCapabilities|maxChargePerInvocationAtomic|dimension|rateAtomic|per|meterSource|selector|chargeOn)$/)?.[1]
 }
 
 function resolveEndpointBoundField(reviewID: string, fieldName: string, componentIndex?: number) {
   const draft = state.v3EndpointDraft
   if (!draft) return
-  const route = draft.routes.find((item) => `route:${item.routeId}` === reviewID)
-  const routeIndex = route ? draft.routes.indexOf(route) : -1
+  const route = draft.operationReviews.find((item) => `operation:${item.operationId}` === reviewID)
+  const routeIndex = route ? draft.operationReviews.indexOf(route) : -1
   draft.unresolvedFields = (draft.unresolvedFields || []).filter((path) => {
     if (endpointPathField(path) !== fieldName) return true
-    if (reviewID === 'service') return /^routes(?:\.|\[)/.test(path)
-    const routeMatches = route && (path.includes(route.routeId) || path.includes(route.operationId) || path.startsWith(`routes.${routeIndex}.`) || path.startsWith(`routes[${routeIndex}].`))
+    if (reviewID === 'service') return draft.operationReviews.some((operation) => path.includes(operation.operationId))
+    const routeMatches = route && (path.includes(route.operationId) || path.includes(`operationPolicies.${routeIndex}`) || path.includes(`operationPolicies[${routeIndex}]`))
     if (!routeMatches) return true
     if (componentIndex !== undefined && !path.includes(`pricing.${componentIndex}.`) && !path.includes(`pricing[${componentIndex}].`)) return true
     return false
@@ -3379,14 +3948,92 @@ function restoreEndpointReview() {
   state.v3EndpointConfirmed = endpointReviewIDs().filter((id) => state.v3EndpointReviewStatus[id] === 'confirmed')
 }
 
-function applyV3EndpointDraft(draft: V3APIBridgeDraft) {
-  if (draft.bridgeMode !== 'dock_tunnel' || draft.baseUrl) throw new Error('Endpoint Agent draft must use dock_tunnel and cannot contain a local Base URL.')
+function hydrateV3ServiceDraft(input: V3APIBridgeDraft): V3APIBridgeDraft {
+  const draft = structuredClone(input) as V3APIBridgeDraft
+  const manifest = draft.serviceManifest
+  if (!manifest || !manifest.interface || !Array.isArray(manifest.operationPolicies)) throw new Error('Cloud returned an invalid ExoraServiceManifest.')
+  const policyByID = new Map(manifest.operationPolicies.map((policy) => [policy.operationId, policy]))
+  const overrides = manifest.pricingTemplate?.overrides || {}
+  const operationReviews: V3APIBridgeDraft['operationReviews'] = []
+  for (const [routePath, rawPathItem] of Object.entries(manifest.interface.paths || {})) {
+    const pathItem = rawPathItem as Record<string, any>
+    for (const method of ['get','post','put','patch','delete','head','options']) {
+      const operation = pathItem?.[method] as Record<string, any> | undefined
+      if (!operation?.operationId) continue
+      const operationId = String(operation.operationId)
+      const policy = policyByID.get(operationId)
+      if (!policy) throw new Error(`Cloud returned no Operation Policy for ${operationId}.`)
+      const pricing = overrides[operationId]
+      const title = String(operation.summary || operationId)
+      operationReviews.push({
+        id: operationId,
+        operationId,
+        method: method.toUpperCase(),
+        path: routePath,
+        title,
+        displayName: title,
+        selected: true,
+        price: 0,
+        pricingMode: pricing ? 'override' : 'default',
+        pricing: structuredClone(pricing?.components?.length ? pricing.components : manifest.pricingTemplate.defaults || []),
+        maxChargePerInvocationAtomic: pricing?.maxChargePerInvocationAtomic || manifest.pricingTemplate.defaultMaxChargePerInvocationAtomic || 0,
+        streaming: policy.interaction,
+        sideEffect: policy.sideEffect,
+        idempotent: policy.idempotent,
+        limits: structuredClone(policy.limits),
+        meteringCapabilities: [...policy.meteringCapabilities],
+      })
+    }
+  }
+  draft.operationReviews = operationReviews
+  draft.agentNotes = draft.normalization?.mode === 'manual_fallback' ? `Manual fallback: ${draft.normalization.fallbackReason || 'audited'}` : `Agent normalization run ${draft.normalization?.runId || ''}`.trim()
+  return draft
+}
+
+function syncReviewedOperationsIntoServiceManifest(manifest: V3ServiceManifest, reviewed: V3APIOperationReview[]) {
+  const byID = new Map(reviewed.map((operation) => [operation.operationId, operation]))
+  for (const rawPathItem of Object.values(manifest.interface.paths || {})) {
+    const pathItem = rawPathItem as Record<string, any>
+    for (const method of ['get', 'post', 'put', 'patch', 'delete', 'head', 'options']) {
+      const operation = pathItem[method] as Record<string, any> | undefined
+      const review = operation?.operationId ? byID.get(String(operation.operationId)) : undefined
+      if (operation && review?.title) operation.summary = review.title
+    }
+  }
+  for (const policy of manifest.operationPolicies) {
+    const review = byID.get(policy.operationId)
+    if (!review) continue
+    policy.interaction = review.streaming
+    policy.sideEffect = review.sideEffect
+    policy.idempotent = review.idempotent
+    policy.limits = { ...review.limits }
+    policy.meteringCapabilities = [...review.meteringCapabilities].sort()
+  }
+  manifest.pricingTemplate.overrides = Object.fromEntries(reviewed.filter((operation) => operation.pricingMode === 'override').map((operation) => [operation.operationId, {
+    components: operation.pricing || [],
+    maxChargePerInvocationAtomic: operation.maxChargePerInvocationAtomic || 0,
+  }]))
+}
+
+async function serviceReviewSHA256(value: unknown) {
+  const bytes = new TextEncoder().encode(JSON.stringify(value))
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('')
+}
+
+async function serviceDraftReviewReceipt(draft: V3APIBridgeDraft) {
+  const receipt = [{ id: 'service', fingerprint: await serviceReviewSHA256({ interface: draft.serviceManifest.interface, pricingTemplate: draft.serviceManifest.pricingTemplate }) }]
+  for (const policy of draft.serviceManifest.operationPolicies) receipt.push({ id: `operation:${policy.operationId}`, fingerprint: await serviceReviewSHA256(policy) })
+  return receipt
+}
+
+function applyV3EndpointDraft(input: V3APIBridgeDraft) {
+  const draft = hydrateV3ServiceDraft(input)
+  if (draft.applicationSource !== 'endpoint' || draft.serviceManifest.delivery !== 'dock_tunnel') throw new Error('Endpoint Agent draft must use dock_tunnel delivery.')
   state.v3EndpointDraftId = draft.draftId
   state.v3EndpointDraft = draft
-  state.v3EndpointInterfaceMode = draft.interfaceMode || 'agent_managed'
   state.v3EndpointAgentReady = true
   state.v3EndpointDraftDirty = false
-  state.v3EndpointHealthPath = draft.healthPath || '/health'
   state.v3EndpointReviewIndex = 0
   state.v3EndpointProbe = undefined
   state.v3EndpointRouteTestResult = undefined
@@ -3396,89 +4043,12 @@ function applyV3EndpointDraft(draft: V3APIBridgeDraft) {
 function currentV3EndpointDraft() {
   const draft = state.v3EndpointDraft
   if (!draft) throw new Error('Load the Endpoint Agent draft first.')
-  return { draftId: draft.draftId, expectedVersion: draft.version, bridgeMode: 'dock_tunnel', interfaceMode: state.v3EndpointInterfaceMode, title: draft.title, description: draft.description, protocol: draft.protocol, baseUrl: '', healthPath: draft.healthPath, routes: draft.routes, contract: draft.contract, adapter: state.v3EndpointInterfaceMode === 'agent_managed' ? draft.adapter : undefined, agentNotes: draft.agentNotes || '', unresolvedFields: draft.unresolvedFields || [] }
+  syncReviewedOperationsIntoServiceManifest(draft.serviceManifest, draft.operationReviews)
+  return { draftId: draft.draftId, expectedVersion: draft.version, applicationSource: 'endpoint', title: draft.title, description: draft.description, serviceManifest: draft.serviceManifest, normalization: draft.normalization, unresolvedFields: draft.unresolvedFields || [] }
 }
 
-function endpointRuntimeRoutes(draft: V3APIBridgeDraft) {
-  const operations = draft.interfaceMode === 'agent_managed' && Array.isArray(draft.adapter?.operations) ? draft.adapter.operations as Array<Record<string, any>> : []
-  return draft.routes.map((route) => {
-    const operation = operations.find((item) => item.operationId === route.operationId)
-    const upstream = operation?.upstream as Record<string, any> | undefined
-    return {
-      operationId: route.operationId,
-      method: String(upstream?.method || route.method).toUpperCase(),
-      path: String(upstream?.path || route.path),
-    }
-  })
-}
-
-function renderV3EndpointAgentPageCore() {
-  const draft = state.v3EndpointDraft
-  const ids = endpointReviewIDs()
-  const activeIndex = Math.max(0, Math.min(state.v3EndpointReviewIndex, Math.max(0, ids.length - 1)))
-  const activeID = ids[activeIndex] || 'service'
-  const activeRoute = activeID.startsWith('route:') ? draft?.routes.find((route) => `route:${route.routeId}` === activeID) : undefined
-  const unresolved = endpointUnresolvedForReview(activeID)
-  const confirmedCount = ids.filter((id) => state.v3EndpointReviewStatus[id] === 'confirmed').length
-  const reviewComplete = Boolean(draft && ids.length && confirmedCount === ids.length && !(draft.unresolvedFields || []).length && !state.v3EndpointDraftDirty)
-  const credentialReady = state.v3EndpointAuthType === 'none' || Boolean(state.v3EndpointSecret) && (state.v3EndpointAuthType !== 'basic' || Boolean(state.v3EndpointBasicUsername.trim())) && (state.v3EndpointAuthType !== 'api_key' || /^[A-Za-z0-9-]{1,64}$/.test(state.v3EndpointAPIKeyHeader))
-  const attestationsReady = state.v3EndpointAttestPricing && state.v3EndpointAttestRuntime && state.v3EndpointAttestRights
-  const localReady = Boolean(state.v3EndpointLocalURL.trim() && state.v3EndpointProbe?.ok)
-  const canSubmit = Boolean(reviewComplete && credentialReady && localReady && attestationsReady)
-  const materials = state.v3EndpointMaterials.map((file) => renderV3SharedFileRow(file, `<button class="danger ghost" type="button" data-v3-endpoint-material-remove="${escapeAttr(file.id)}">Remove</button>`)).join('')
-  const visibleIDs = ids.map((id, index) => ({ id, index })).filter(({ id }) => state.v3EndpointReviewFilter === 'all' || (state.v3EndpointReviewFilter === 'pending' ? state.v3EndpointReviewStatus[id] !== 'confirmed' : endpointUnresolvedForReview(id).length > 0))
-  const reviewList = visibleIDs.map(({ id, index }) => { const route = draft?.routes.find((item) => `route:${item.routeId}` === id); const status = state.v3EndpointReviewStatus[id] || 'pending'; return `<button type="button" class="v3-api-review-item ${index === activeIndex ? 'selected' : ''} ${status} ${endpointUnresolvedForReview(id).length ? 'warning' : ''}" data-v3-endpoint-review-index="${index}"><span>${status === 'confirmed' ? '✓' : status === 'modified' ? '!' : index + 1}</span><div><strong>${escapeHTML(id === 'service' ? 'Service information' : `${route?.method} ${route?.path}`)}</strong><small>${escapeHTML(id === 'service' ? draft?.title || '' : route?.displayName || route?.operationId || '')}</small></div><em>${status === 'confirmed' ? 'Confirmed' : status === 'modified' ? 'Modified · confirm again' : 'Pending review'}</em></button>` }).join('') || '<div class="v3-api-review-filter-empty">No items match this filter.</div>'
-  const serviceEditor = draft ? `<div class="v3-api-review-form"><div class="v3-api-product-grid"><label>Title<input data-v3-endpoint-draft="title" value="${escapeAttr(draft.title)}"/></label><label>Protocol<select data-v3-endpoint-draft="protocol">${(['openapi','openai','generic_http','sse'] as V3APIBridgeProtocol[]).map((value) => `<option value="${value}" ${draft.protocol === value ? 'selected' : ''}>${value}</option>`).join('')}</select></label><label>Health Path<input data-v3-endpoint-draft="healthPath" value="${escapeAttr(draft.healthPath)}"/></label></div><label>Description<textarea data-v3-endpoint-draft="description">${escapeHTML(draft.description)}</textarea></label><p class="v3-api-agent-note"><strong>Agent notes</strong><span>${escapeHTML(draft.agentNotes || 'No notes supplied.')}</span></p></div>` : ''
-  const dimensions = ['request','successful_request','input_tokens','output_tokens','input_bytes','output_bytes','execution_second','image','provider_reported']
-  const routeEditor = activeRoute ? `<div class="v3-api-review-form"><div class="v3-api-product-grid"><label>Operation ID<input data-v3-endpoint-route="operationId" value="${escapeAttr(activeRoute.operationId)}"/></label><label>Method<select data-v3-endpoint-route="method">${['GET','HEAD','POST','PUT','PATCH','DELETE','OPTIONS'].map((value) => `<option ${activeRoute.method === value ? 'selected' : ''}>${value}</option>`).join('')}</select></label><label>Path<input data-v3-endpoint-route="path" value="${escapeAttr(activeRoute.path)}"/></label><label>Display name<input data-v3-endpoint-route="displayName" value="${escapeAttr(activeRoute.displayName)}"/></label></div><div class="v3-api-pricing-list">${activeRoute.pricing.map((price, index) => `<div class="v3-api-price-row"><select data-v3-endpoint-price="dimension" data-price-index="${index}">${dimensions.map((value) => `<option ${price.dimension === value ? 'selected' : ''}>${value}</option>`).join('')}</select><input type="number" min="0" data-v3-endpoint-price="rateAtomic" data-price-index="${index}" value="${price.rateAtomic}" title="Atomic rate"/><input type="number" min="1" data-v3-endpoint-price="per" data-price-index="${index}" value="${price.per}" title="Per units"/><select data-v3-endpoint-price="meterSource" data-price-index="${index}">${['gateway','protocol_adapter','openai_usage','provider_response'].map((value) => `<option ${price.meterSource === value ? 'selected' : ''}>${value}</option>`).join('')}</select><select data-v3-endpoint-price="chargeOn" data-price-index="${index}">${['started','succeeded','completed'].map((value) => `<option ${price.chargeOn === value ? 'selected' : ''}>${value}</option>`).join('')}</select><input data-v3-endpoint-price="selector" data-price-index="${index}" value="${escapeAttr(price.selector || '')}" placeholder="usage selector"/><button class="danger ghost" type="button" data-v3-endpoint-price-remove="${index}">Remove</button></div>`).join('')}</div><button class="ghost" type="button" data-v3-action="endpoint-price-add">Add pricing component</button><label>Maximum charge per invocation (atomic)<input type="number" min="0" data-v3-endpoint-route="maxChargePerInvocationAtomic" value="${activeRoute.maxChargePerInvocationAtomic || 0}"/></label><button class="danger ghost" type="button" data-v3-action="endpoint-route-remove">Remove route</button></div>` : serviceEditor
-  const authFields = state.v3EndpointAuthType === 'none' ? '' : state.v3EndpointAuthType === 'basic' ? `<label>Username<input name="basicUsername" value="${escapeAttr(state.v3EndpointBasicUsername)}" autocomplete="username"/></label><label>Password<input name="secret" type="password" value="${escapeAttr(state.v3EndpointSecret)}" autocomplete="current-password"/></label>` : `<label>${state.v3EndpointAuthType === 'bearer' ? 'Bearer token' : 'API key secret'}<input name="secret" type="password" value="${escapeAttr(state.v3EndpointSecret)}" autocomplete="off"/></label>${state.v3EndpointAuthType === 'api_key' ? `<label>API key header<input name="apiKeyHeader" value="${escapeAttr(state.v3EndpointAPIKeyHeader)}"/></label>` : ''}`
-  const publicSmokeRoute = activeRoute || draft?.routes[0]
-  const smokeRoute = draft && publicSmokeRoute ? endpointRuntimeRoutes(draft).find((route) => route.operationId === publicSmokeRoute.operationId) || publicSmokeRoute : publicSmokeRoute
-  const dangerous = Boolean(smokeRoute && ['POST','PUT','PATCH','DELETE'].includes(smokeRoute.method))
-  const smokeResult = state.v3EndpointRouteTestResult
-  return `<form class="v3-api-onboarding v3-provider-form" data-v3-form="endpoint-agent"><section class="v3-console-panel"><div class="v3-step-heading"><span>1</span><div><strong>Import materials and connect an Agent</strong><small>The Agent standardizes routes, metering and pricing; local URLs and credentials never enter its draft.</small></div><button type="button" data-v3-action="endpoint-materials-add">Add files</button></div><div class="v3-api-material-list">${materials || '<div class="v3-scan-empty"><strong>No Endpoint materials selected</strong><span>Add OpenAPI, docs, examples or pricing tables.</span></div>'}</div>${renderV3AgentPromptPanel({ title: 'Endpoint Agent Prompt', draftId: state.v3EndpointDraftId, expectedVersion: draft?.version || 0, prompt: endpointAgentPrompt(), copyAction: 'endpoint-prompt-copy', refreshAction: 'endpoint-prompt-refresh', checkAction: 'endpoint-draft-check' })}</section><section class="v3-console-panel"><div class="v3-step-heading"><span>2</span><div><strong>Review Agent draft</strong><small>Edit and confirm Service, every Route, and every pricing component.</small></div><button class="ghost" type="button" data-v3-action="endpoint-route-add" ${draft ? '' : 'disabled'}>Add route</button></div>${draft?.unresolvedFields?.length ? `<div class="v3-api-unresolved-list"><strong>Needs review</strong>${draft.unresolvedFields.map((field) => `<span>${escapeHTML(field)}</span>`).join('')}<small>Only editing the matching field—or explicitly marking an unbound item handled—clears it.</small></div>` : ''}${draft ? `<div class="v3-api-review-workspace"><aside><div><strong>Draft review</strong><small>Version ${draft.version} · ${confirmedCount}/${ids.length} confirmed</small></div><div class="v3-api-review-filters"><span>All ${ids.length}</span><span>Pending ${ids.length - confirmedCount}</span><span>Warnings ${(draft.unresolvedFields || []).length}</span></div>${reviewList}</aside><main><header><div><small>Item ${activeIndex + 1} of ${ids.length}</small><strong>${escapeHTML(activeID === 'service' ? 'Service information' : `${activeRoute?.method} ${activeRoute?.path}`)}</strong></div><span class="${state.v3EndpointReviewStatus[activeID] || 'pending'}">${state.v3EndpointReviewStatus[activeID] || 'Pending'}</span></header>${routeEditor}${unresolved.length ? `<div class="v3-api-review-warning"><strong>Agent needs your input</strong><span>${unresolved.map(escapeHTML).join(', ')}</span></div>` : ''}<footer><button class="ghost" type="button" data-v3-endpoint-review-previous ${activeIndex === 0 ? 'disabled' : ''}>Previous</button><button type="button" data-v3-endpoint-review-confirm="${escapeAttr(activeID)}" ${unresolved.length ? 'disabled' : ''}>Confirm and review next</button><button class="ghost" type="button" data-v3-endpoint-review-next ${activeIndex + 1 >= ids.length ? 'disabled' : ''}>Next</button></footer></main></div><div class="v3-form-actions"><button type="button" data-v3-action="endpoint-draft-save">Save revised draft</button><span>${reviewComplete ? 'All draft items confirmed' : `${ids.length - confirmedCount} items still require approval`}</span></div>` : '<div class="v3-api-review-waiting"><span>2</span><div><strong>Waiting for the Agent draft</strong><small>Agent standardization is mandatory for every Local Endpoint.</small></div></div>'}</section><section class="v3-console-panel ${reviewComplete ? '' : 'locked'}"><div class="v3-step-heading"><span>3</span><div><strong>Dock connection and seller confirmation</strong><small>Configure the private runtime, verify health, optionally test a Route, then submit a private Listing draft.</small></div><button class="ghost" type="button" data-v3-action="endpoint-probe" ${reviewComplete ? '' : 'disabled'}>${state.v3EndpointProbe?.ok ? 'Check health again' : 'Test local health'}</button></div><div class="v3-api-connection-grid"><label>Local service URL<input name="localBaseUrl" value="${escapeAttr(state.v3EndpointLocalURL)}" placeholder="http://127.0.0.1:8000"/></label><label>Health Path<input value="${escapeAttr(draft?.healthPath || '/health')}" readonly/></label><label>Authentication<select name="authType"><option value="none" ${state.v3EndpointAuthType === 'none' ? 'selected' : ''}>None</option><option value="bearer" ${state.v3EndpointAuthType === 'bearer' ? 'selected' : ''}>Bearer token</option><option value="api_key" ${state.v3EndpointAuthType === 'api_key' ? 'selected' : ''}>API key</option><option value="basic" ${state.v3EndpointAuthType === 'basic' ? 'selected' : ''}>Basic authentication</option></select></label>${authFields}<label>Timeout seconds<input name="timeoutSeconds" type="number" min="1" max="300" value="${state.v3EndpointTimeout}"/></label><label>Maximum concurrency<input name="concurrency" type="number" min="1" max="64" value="${state.v3EndpointConcurrency}"/></label></div><div class="v3-api-probe ${state.v3EndpointProbe?.ok ? 'passed' : state.v3EndpointProbe ? 'failed' : 'idle'}"><span>${state.v3EndpointProbe?.ok ? '✓' : state.v3EndpointProbe ? '!' : '→'}</span><div><strong>${state.v3EndpointProbe?.ok ? 'Local Health Path passed' : 'Local connectivity must pass'}</strong><small>${escapeHTML(state.v3EndpointProbe?.error || 'Dock validates and probes this private target without sending its URL to Cloud.')}</small></div></div>${smokeRoute ? `<details class="v3-api-auth-card"><summary><strong>Optional Route smoke test · ${escapeHTML(smokeRoute.method)} ${escapeHTML(smokeRoute.path)}</strong></summary><div class="v3-api-connection-grid"><label>Concrete test path<input name="routeTestPath" value="${escapeAttr(state.v3EndpointRouteTestPath || smokeRoute.path)}"/></label><label>Query string<input name="routeTestQuery" value="${escapeAttr(state.v3EndpointRouteTestQuery)}" placeholder="limit=1"/></label><label>Content type<input name="routeTestContentType" value="${escapeAttr(state.v3EndpointRouteTestContentType)}"/></label></div><label>Request body<textarea name="routeTestBody">${escapeHTML(state.v3EndpointRouteTestBody)}</textarea></label>${dangerous ? `<label><input name="routeTestDanger" type="checkbox" ${state.v3EndpointRouteTestDangerConfirmed ? 'checked' : ''}/> I understand this ${escapeHTML(smokeRoute.method)} test may change local service state.</label>` : ''}<button class="ghost" type="button" data-v3-action="endpoint-route-test" ${dangerous && !state.v3EndpointRouteTestDangerConfirmed ? 'disabled' : ''}>Run optional Route test</button>${smokeResult ? `<div class="v3-api-probe ${smokeResult.ok ? 'passed' : 'failed'}"><span>${smokeResult.ok ? '✓' : '!'}</span><div><strong>${smokeResult.status ? `HTTP ${smokeResult.status}` : 'Route test failed'} · ${smokeResult.latencyMs || 0} ms</strong><small>${escapeHTML(smokeResult.error || `${smokeResult.bytesRead || 0} bytes${smokeResult.truncated ? ' · preview truncated' : ''}`)}</small><pre>${escapeHTML(smokeResult.preview || '')}</pre></div></div>` : ''}</details>` : ''}<div class="v3-api-attestations"><strong>Seller confirmation</strong><label><input type="checkbox" data-v3-endpoint-attest="pricing" ${state.v3EndpointAttestPricing ? 'checked' : ''}/><span>I define and accept responsibility for Endpoint pricing.</span></label><label><input type="checkbox" data-v3-endpoint-attest="runtime" ${state.v3EndpointAttestRuntime ? 'checked' : ''}/><span>I will operate this local service and report usage accurately.</span></label><label><input type="checkbox" data-v3-endpoint-attest="rights" ${state.v3EndpointAttestRights ? 'checked' : ''}/><span>I have the right to sell access to this service.</span></label></div><div class="v3-api-readiness">${[['Draft approved',reviewComplete,`${confirmedCount}/${ids.length} items confirmed`],['Local health',localReady,state.v3EndpointProbe?.ok ? `HTTP ${state.v3EndpointProbe.status}` : 'Health probe required'],['Credential',credentialReady,credentialReady ? 'Configured' : 'Credential incomplete'],['Seller confirmation',attestationsReady,attestationsReady ? 'Accepted' : 'Three statements required']].map(([label, passed, detail]) => `<div class="${passed ? 'passed' : ''}"><span>${passed ? '✓' : '!'}</span><div><strong>${label}</strong><small>${detail}</small></div></div>`).join('')}</div><div class="v3-api-publish-actions"><div><strong>${canSubmit ? 'Ready to submit' : 'Complete every required check'}</strong><small>Creates a Product, encrypted Secret, and private Listing draft. It does not publish.</small></div><button type="submit" class="v3-direct-publish" ${canSubmit ? '' : 'disabled'}>Submit to Listings</button></div></section></form>`
-}
-
-function removeV3RenderedDiv(markup: string, className: string) {
-  const start = markup.indexOf(`<div class="${className}">`)
-  if (start < 0) return markup
-  const tags = /<div\b[^>]*>|<\/div>/g
-  tags.lastIndex = start
-  let depth = 0
-  let match: RegExpExecArray | null
-  while ((match = tags.exec(markup))) {
-    depth += match[0].startsWith('</') ? -1 : 1
-    if (depth === 0) return markup.slice(0, start) + markup.slice(tags.lastIndex)
-  }
-  return markup
-}
-
-function replaceV3RenderedDiv(markup: string, className: string, replacement: string) {
-  const start = markup.indexOf(`<div class="${className}`)
-  if (start < 0) return markup
-  const tags = /<div\b[^>]*>|<\/div>/g
-  tags.lastIndex = start
-  let depth = 0
-  let match: RegExpExecArray | null
-  while ((match = tags.exec(markup))) {
-    depth += match[0].startsWith('</') ? -1 : 1
-    if (depth === 0) return markup.slice(0, start) + replacement + markup.slice(tags.lastIndex)
-  }
-  return markup
-}
-
-function wrapV3RenderedDiv(markup: string, className: string, wrapperClassName: string) {
-  const start = markup.indexOf(`<div class="${className}`)
-  if (start < 0) return markup
-  const tags = /<div\b[^>]*>|<\/div>/g
-  tags.lastIndex = start
-  let depth = 0
-  let match: RegExpExecArray | null
-  while ((match = tags.exec(markup))) {
-    depth += match[0].startsWith('</') ? -1 : 1
-    if (depth === 0) return `${markup.slice(0, start)}<div class="${wrapperClassName}">${markup.slice(start, tags.lastIndex)}</div>${markup.slice(tags.lastIndex)}`
-  }
-  return markup
+function endpointRuntimeOperations(draft: V3APIBridgeDraft) {
+  return draft.operationReviews.map((route) => ({ operationId: route.operationId, method: route.method.toUpperCase(), path: route.path }))
 }
 
 function renderV3SellerAttestations(mode: 'endpoint' | 'api_bridge') {
@@ -3501,153 +4071,17 @@ function renderV3AgentDraftWaiting(mode: 'endpoint' | 'api_bridge') {
   return `<div class="v3-api-review-waiting"><span aria-hidden="true">AI</span><div><strong>Waiting for the Agent draft</strong><small>Run the Step 1 prompt in your connected Agent, then choose Check draft to load the standardized ${subject} structure.</small></div></div>`
 }
 
-function normalizeV3AgentWizardMarkup(markup: string, mode: 'endpoint' | 'api_bridge') {
-  const materialsCurrent = v3AgentMaterialsCurrent(mode)
-  const hasMaterials = mode === 'endpoint' ? state.v3EndpointMaterials.length > 0 : state.v3APIMaterials.length > 0
-  const reviewComplete = mode === 'endpoint'
-    ? Boolean(materialsCurrent && state.v3EndpointDraft && !state.v3EndpointDraftDirty && !(state.v3EndpointDraft.unresolvedFields || []).length && endpointReviewIDs().every((id) => state.v3EndpointReviewStatus[id] === 'confirmed'))
-    : Boolean(materialsCurrent && state.v3APIDraftVersion > 0 && !state.v3APIDraftDirty && !state.v3APIUnresolvedFields.length && state.v3APIReviewStatus.service === 'confirmed' && state.v3APIRoutes.every((route) => state.v3APIReviewStatus[`route:${route.routeId}`] === 'confirmed'))
-  const busy = mode === 'endpoint' ? state.v3EndpointSubmitting : state.v3APISavingListing
-  const checking = mode === 'endpoint' ? state.v3EndpointProbing : state.v3APIProbing
-  const hasAgentDraft = mode === 'endpoint' ? Boolean(state.v3EndpointDraft) : state.v3APIDraftVersion > 0
-  const oldSubmit = markup.match(/<button[^>]*type="submit"[^>]*class="v3-direct-publish"[^>]*>|<button[^>]*class="v3-direct-publish"[^>]*type="submit"[^>]*>/)?.[0] || ''
-  const oldCanSubmit = oldSubmit !== '' && !oldSubmit.includes('disabled')
-  const canSubmit = materialsCurrent && reviewComplete && oldCanSubmit && !busy && !checking
-  const finalLabel = busy ? 'Submitting…' : 'Submit to Listings'
-  const pickerAction = mode === 'endpoint' ? 'endpoint-materials-add' : 'api-materials-add'
-  const probeAction = mode === 'endpoint' ? 'endpoint-probe' : 'api-probe'
-  const probeLabel = mode === 'endpoint'
-    ? checking ? 'Checking…' : state.v3EndpointProbe?.ok ? 'Check health again' : 'Test local health'
-    : state.v3APIProbing ? 'Checking…' : state.v3APIProbe?.ok ? 'Check again' : 'Check connection'
-  const stepStates: V3WizardStepState[] = [materialsCurrent ? 'complete' : hasMaterials && hasAgentDraft ? 'error' : 'available', !materialsCurrent ? 'locked' : reviewComplete ? 'complete' : 'available', !reviewComplete ? 'locked' : busy || checking ? 'busy' : 'available']
-  let normalized = markup.replace('class="v3-api-onboarding v3-provider-form"', 'class="v3-application-flow v3-provider-form"')
-  normalized = normalized.replace(new RegExp(`<button[^>]*data-v3-action="${pickerAction}"[^>]*>Add files</button></div><div class="v3-api-material-list">`), `</div>${renderV3AgentMaterialPicker(pickerAction)}<div class="v3-api-material-list">`)
-  const interfaceMode = mode === 'endpoint' ? state.v3EndpointInterfaceMode : state.v3APIInterfaceMode
-  normalized = normalized.replace('<div class="v3-api-material-list">', `${renderV3InterfaceMode(mode, interfaceMode)}<div class="v3-api-material-list">`)
-  normalized = normalized.replace(/<div class="v3-scan-empty"><strong>[^<]*<\/strong><span>[^<]*<\/span><\/div>/, renderV3SharedFileEmpty('No documents selected', 'Choose one or more supported documents to unlock Step 2.'))
-  normalized = normalized.replace(/<div class="v3-api-attestations">[\s\S]*?<\/div>/, renderV3SellerAttestations(mode))
-  if (!hasAgentDraft) {
-    normalized = replaceV3RenderedDiv(normalized, mode === 'endpoint' ? 'v3-api-review-waiting' : 'v3-api-review-workspace', renderV3AgentDraftWaiting(mode))
-    normalized = removeV3RenderedDiv(normalized, 'v3-form-actions')
-  }
-  const checkAction = mode === 'endpoint' ? 'endpoint-draft-check' : 'api-draft-check'
-  if (!hasMaterials) normalized = normalized.replace(new RegExp(`<button([^>]*)data-v3-action="${checkAction}"([^>]*)>`), `<button$1data-v3-action="${checkAction}"$2 disabled>`)
-  let sectionIndex = 0
-  normalized = normalized.replace(/<section class="v3-console-panel([^\"]*)">/g, (match, suffix: string) => {
-    if (sectionIndex >= 3) return match
-    const stepIndex = sectionIndex++
-    const stateName = stepStates[stepIndex]
-    const publishPanelClass = stepIndex === 2 && !suffix.includes('v3-api-publish-panel') ? ' v3-api-publish-panel' : ''
-    return `<section class="v3-console-panel ${v3WizardStepClass(stateName)}${publishPanelClass}${suffix}" ${stateName === 'locked' ? 'inert aria-disabled="true"' : ''}>`
-  })
-  normalized = removeV3RenderedDiv(normalized, 'v3-api-readiness')
-  normalized = removeV3RenderedDiv(normalized, 'v3-api-publish-actions')
-  normalized = normalized.replace(new RegExp(`<button[^>]*data-v3-action="${probeAction}"[^>]*>.*?<\\/button>`), `<button type="submit" class="v3-direct-publish" ${canSubmit ? '' : 'disabled'}>${finalLabel}</button>`)
-  const probeCard = '<div class="v3-api-probe '
-  normalized = wrapV3RenderedDiv(normalized, 'v3-api-probe', 'v3-api-health-row')
-  normalized = normalized.replace(probeCard, `<div class="v3-wizard-inline-action"><button class="ghost" type="button" data-v3-action="${probeAction}" ${reviewComplete && !busy && !checking ? '' : 'disabled'}>${probeLabel}</button></div>${probeCard}`)
-  if (mode === 'endpoint') {
-    const runtimeHeading = '<div class="v3-api-runtime-heading"><div><strong>Private Dock runtime</strong><small>These settings stay on this computer and never enter the public Manifest.</small></div><span>Dock only</span></div>'
-    const lockNotice = reviewComplete ? '' : '<div class="v3-api-publish-lock"><strong>Finish reviewing the Agent draft first</strong><span>Runtime settings unlock after every structured item is confirmed.</span></div>'
-    normalized = normalized.replace('<div class="v3-api-connection-grid">', `${lockNotice}${runtimeHeading}<div class="v3-api-connection-grid">`)
-  }
-  if (!materialsCurrent) {
-    const reason = mode === 'endpoint' ? 'Add at least one document and load a fresh Endpoint Agent draft to unlock Step 2.' : 'Add at least one document and load a fresh API Agent draft to unlock Step 2.'
-    normalized = normalized.replace('<section class="v3-console-panel v3-wizard-step is-locked', `<section data-lock-reason="${escapeAttr(reason)}" class="v3-console-panel v3-wizard-step is-locked`)
-  }
-  return normalized
-}
-
 function renderV3EndpointAgentPage() {
-  return normalizeV3AgentWizardMarkup(renderV3EndpointAgentPageCore(), 'endpoint')
-    .replace('Creates a Product, encrypted Secret, and private Listing draft.', 'Creates a Product, Dock-local credential proof, and private Listing draft. The credential never enters Cloud.')
+  return renderV3ServiceWizard('endpoint')
 }
 
 function apiBridgeAgentPrompt() {
   const files = state.v3APIMaterials.map((file) => `- ${file.name}: ${file.localPath}`).join('\n') || '- No files selected yet'
-  return `You are preparing an Exora API Bridge seller draft.\n\nConnect to the Exora Dock MCP server configured by the desktop application. Read every material below, reconcile inconsistent API and pricing descriptions, then call exora.save_api_bridge_draft exactly once.\n\nDraft ID: ${state.v3APIDraftId}\nExpected version: ${state.v3APIDraftVersion}\nInterface mode: ${state.v3APIInterfaceMode}\n\nMaterials:\n${files}\n\nRules:\n- Use the supplied draftId and expectedVersion.\n- Set interfaceMode to ${state.v3APIInterfaceMode}. Passthrough preserves the complete OpenAPI contract and omits adapter; agent_managed supplies OpenAPI 3.1 plus exora.adapter.v1.\n- Never send credentials, secrets, seller attestation, Listing state, or publish instructions.\n- Do not invent uncertain values; put their field paths in unresolvedFields and explain them in agentNotes.\n- Use only supported meter dimensions. Variable pricing requires maxChargePerInvocationAtomic.\n- Saving this draft must not create or publish a Product or Listing.`
-}
-
-function renderV3APIBridgePageCore() {
-  const unresolved = new Set(state.v3APIUnresolvedFields)
-  const materials = state.v3APIMaterials.map((file) => renderV3SharedFileRow(file, `<button class="danger ghost" type="button" data-v3-api-material-remove="${escapeAttr(file.id)}">Remove</button>`)).join('')
-  const dimensions = ['request','successful_request','input_tokens','output_tokens','input_bytes','output_bytes','execution_second','image','provider_reported']
-  const meterSources = ['gateway', 'protocol_adapter', 'openai_usage', 'provider_response']
-  const chargeEvents = ['started', 'succeeded', 'completed']
-  state.v3APIRoutes.forEach((route) => { if (!route.pricing?.length) route.pricing = [{ dimension: 'request', rateAtomic: Math.max(0, Math.round(route.price * 1_000_000)), per: 1, meterSource: 'gateway', chargeOn: 'started' }] })
-  const reviewItems = [{ id: 'service', label: 'Service information', detail: state.v3APITitle || 'Title, protocol and connection' }, ...state.v3APIRoutes.map((route) => ({ id: `route:${route.routeId}`, label: `${route.method} ${route.path}`, detail: route.title || route.operationId }))]
-  const reviewItemUnresolved = (item: { id: string }, index: number) => state.v3APIUnresolvedFields.filter((field) => {
-    if (item.id === 'service') return !/^routes(?:\.|\[)/.test(field)
-    const route = state.v3APIRoutes.find((candidate) => `route:${candidate.routeId}` === item.id)
-    const routeIndex = Math.max(0, index - 1)
-    return Boolean(route && (field.includes(route.routeId) || field.includes(route.operationId) || field.startsWith(`routes.${routeIndex}`) || field.startsWith(`routes[${routeIndex}]`)))
-  })
-  const activeReviewIndex = Math.max(0, Math.min(state.v3APIReviewIndex, Math.max(0, reviewItems.length - 1)))
-  const activeReview = reviewItems[activeReviewIndex]
-  const activeRoute = activeReview?.id.startsWith('route:') ? state.v3APIRoutes.find((route) => `route:${route.routeId}` === activeReview.id) : undefined
-  const activeUnresolved = activeReview ? reviewItemUnresolved(activeReview, activeReviewIndex) : []
-  const activeCanConfirm = activeUnresolved.length === 0
-  const visibleReviewItems = reviewItems.map((item, index) => ({ item, index })).filter(({ item, index }) => state.v3APIReviewFilter === 'all' || (state.v3APIReviewFilter === 'pending' ? state.v3APIReviewStatus[item.id] !== 'confirmed' : reviewItemUnresolved(item, index).length > 0))
-  const reviewList = visibleReviewItems.map(({ item, index }) => { const status = state.v3APIReviewStatus[item.id] || 'pending'; return `<button type="button" class="v3-api-review-item ${index === activeReviewIndex ? 'selected' : ''} ${status} ${reviewItemUnresolved(item, index).length ? 'warning' : ''}" data-v3-review-index="${index}"><span>${status === 'confirmed' ? '✓' : status === 'modified' ? '!' : index + 1}</span><div><strong>${escapeHTML(item.label)}</strong><small>${escapeHTML(item.detail)}</small></div><em>${status === 'confirmed' ? 'Confirmed' : status === 'modified' ? 'Modified · confirm again' : 'Pending review'}</em></button>` }).join('') || '<div class="v3-api-review-filter-empty">No items match this filter.</div>'
-  const serviceReview = `<div class="v3-api-review-form"><div class="v3-api-product-grid"><label class="${unresolved.has('title') ? 'v3-api-unresolved' : ''}">Title<input name="title" value="${escapeAttr(state.v3APITitle)}" data-v3-api-draft="title"/></label><label>Protocol<select name="protocol" data-v3-api-draft="protocol">${(['openapi','openai','generic_http','sse'] as V3APIBridgeProtocol[]).map((value) => `<option value="${value}" ${state.v3APIProtocol === value ? 'selected' : ''}>${value}</option>`).join('')}</select></label><label class="${unresolved.has('baseUrl') ? 'v3-api-unresolved' : ''}">Base URL<input name="baseUrl" value="${escapeAttr(state.v3APIBaseURL)}" data-v3-api-draft="baseUrl"/></label><label class="${unresolved.has('healthPath') ? 'v3-api-unresolved' : ''}">Health Path<input name="healthPath" value="${escapeAttr(state.v3APIHealthPath)}" data-v3-api-draft="healthPath"/></label><label class="v3-api-description">Description<textarea name="description" data-v3-api-draft="description">${escapeHTML(state.v3APIDescription)}</textarea></label></div></div>`
-  const routePricing = activeRoute ? (activeRoute.pricing?.length ? activeRoute.pricing : [{ dimension: 'request', rateAtomic: Math.round(activeRoute.price * 1_000_000), per: 1, meterSource: 'gateway', chargeOn: 'started' } as V3APIPricingComponent]) : []
-  const routeComponents = activeRoute ? routePricing.map((item, index) => `<div class="v3-api-price-component ${item.dimension === 'provider_reported' ? 'seller-reported' : ''}"><label>Meter<select data-v3-price-dimension="${activeRoute.id}:${index}">${dimensions.map((dimension) => `<option value="${dimension}" ${item.dimension === dimension ? 'selected' : ''}>${dimension.replaceAll('_', ' ')}</option>`).join('')}</select></label><label>Price (USDC)<input type="number" min="0" step="0.000001" value="${(item.rateAtomic / 1_000_000).toFixed(6)}" data-v3-price-usdc="${activeRoute.id}:${index}"/></label><label>Per units<input type="number" min="1" value="${item.per}" data-v3-price-per="${activeRoute.id}:${index}"/></label>${item.dimension === 'provider_reported' ? `<label class="v3-api-selector">Seller-reported selector<span>Seller reported</span><input value="${escapeAttr(item.selector || '')}" data-v3-price-selector="${activeRoute.id}:${index}" placeholder="usage.units"/></label>` : ''}<button class="danger ghost" type="button" data-v3-price-remove="${activeRoute.id}:${index}">Remove</button><details class="v3-api-price-advanced"><summary>Advanced meter values</summary><div><label>Rate atomic<input type="number" min="0" value="${item.rateAtomic}" data-v3-price-rate="${activeRoute.id}:${index}"/></label><label>Meter source<select data-v3-price-meter-source="${activeRoute.id}:${index}">${meterSources.map((source) => `<option value="${source}" ${item.meterSource === source ? 'selected' : ''}>${source.replaceAll('_', ' ')}</option>`).join('')}</select></label><label>Charge on<select data-v3-price-charge-on="${activeRoute.id}:${index}">${chargeEvents.map((event) => `<option value="${event}" ${item.chargeOn === event ? 'selected' : ''}>${event}</option>`).join('')}</select></label></div></details></div>`).join('') : ''
-  const routeReview = activeRoute ? `<div class="v3-api-review-form ${activeUnresolved.length ? 'v3-api-unresolved' : ''}"><div class="v3-api-route-row editable"><select data-v3-api-route-method="${activeRoute.id}">${['GET','POST','PUT','PATCH','DELETE'].map((method) => `<option ${activeRoute.method === method ? 'selected' : ''}>${method}</option>`).join('')}</select><span><input value="${escapeAttr(activeRoute.title)}" data-v3-api-route-title="${activeRoute.id}" placeholder="Display name"/><input value="${escapeAttr(activeRoute.operationId)}" data-v3-api-route-operation="${activeRoute.id}" placeholder="operationId"/><input value="${escapeAttr(activeRoute.path)}" data-v3-api-route-path="${activeRoute.id}" placeholder="/path"/></span><button class="danger ghost" type="button" data-v3-api-route-remove="${activeRoute.id}">Remove</button></div><div class="v3-api-components"><div class="v3-api-components-heading"><div><strong>Pricing components</strong><small>Prices are seller-defined and shown to buyers in USDC.</small></div><button class="ghost" type="button" data-v3-price-add="${activeRoute.id}">Add component</button></div>${routeComponents}<div class="v3-api-max-charge"><label>Maximum charge per invocation (USDC)<input type="number" min="0" step="0.000001" value="${((activeRoute.maxChargePerInvocationAtomic || 0) / 1_000_000).toFixed(6)}" data-v3-max-charge-usdc="${activeRoute.id}"/></label><details><summary>Atomic value</summary><input type="number" min="0" value="${activeRoute.maxChargePerInvocationAtomic || 0}" data-v3-max-charge="${activeRoute.id}"/></details></div></div></div>` : serviceReview
-  const confirmedCount = reviewItems.filter((item) => state.v3APIReviewStatus[item.id] === 'confirmed').length
-  const hasAgentDraft = state.v3APIDraftVersion > 0
-  const reviewComplete = hasAgentDraft && reviewItems.length > 0 && confirmedCount === reviewItems.length
-  const mechanicalIssues: string[] = []
-  if (!hasAgentDraft) mechanicalIssues.push('Agent draft has not been loaded')
-  if (!state.v3APITitle.trim()) mechanicalIssues.push('Service title is required')
-  try {
-    const url = new URL(state.v3APIBaseURL)
-    const host = url.hostname.toLowerCase()
-    const privateHost = host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host === '::1' || host === '0.0.0.0' || host.startsWith('127.') || host.startsWith('10.') || host.startsWith('192.168.') || /^172\.(1[6-9]|2\d|3[01])\./.test(host)
-    if (url.protocol !== 'https:' || url.username || url.password || privateHost) mechanicalIssues.push('Base URL must use public HTTPS')
-  } catch { mechanicalIssues.push('Base URL is invalid') }
-  if (!state.v3APIHealthPath.startsWith('/')) mechanicalIssues.push('Health Path must start with /')
-  if (!state.v3APIRoutes.length) mechanicalIssues.push('At least one Route is required')
-  const routeKeys = new Set<string>()
-  state.v3APIRoutes.forEach((route) => {
-    const key = `${route.method} ${route.path}`
-    if (!/^[A-Za-z][A-Za-z0-9_.-]{0,127}$/.test(route.operationId) || !route.path.startsWith('/') || !route.method) mechanicalIssues.push(`Route ${route.title || route.routeId} is incomplete`)
-    if (routeKeys.has(key)) mechanicalIssues.push(`Duplicate Route ${key}`)
-    routeKeys.add(key)
-    route.pricing?.forEach((price) => {
-      if (!dimensions.includes(price.dimension) || price.rateAtomic < 0 || price.per < 1 || !['gateway', 'protocol_adapter', 'openai_usage', 'provider_response'].includes(price.meterSource) || !['started', 'succeeded', 'completed'].includes(price.chargeOn)) mechanicalIssues.push(`Invalid pricing on ${route.operationId}`)
-      if (price.dimension === 'provider_reported' && !price.selector?.trim()) mechanicalIssues.push(`Seller-reported selector missing on ${route.operationId}`)
-    })
-    if (route.pricing?.some((price) => !['request', 'successful_request'].includes(price.dimension)) && !route.maxChargePerInvocationAtomic) mechanicalIssues.push(`Maximum invocation charge missing on ${route.operationId}`)
-  })
-  if (state.v3APIUnresolvedFields.length) mechanicalIssues.push(`${state.v3APIUnresolvedFields.length} Agent fields remain unresolved`)
-  if (!reviewComplete) mechanicalIssues.push(`${reviewItems.length - confirmedCount} review items remain`)
-  const mechanicallyComplete = mechanicalIssues.length === 0
-  const probe = state.v3APIProbe
-  const credentialConfigured = state.v3APIAuthType === 'none' || (state.v3APICredentialConfigured && (state.v3APIAuthType !== 'basic' || Boolean(state.v3APIBasicUsername.trim())) && (state.v3APIAuthType !== 'api_key' || /^[A-Za-z0-9-]{1,64}$/.test(state.v3APIKeyHeader)))
-  const sellerConfirmationComplete = state.v3APIAttestPricing && state.v3APIAttestUsage && state.v3APIAttestRights
-  const canSave = Boolean(mechanicallyComplete && probe?.ok && credentialConfigured && sellerConfirmationComplete && !state.v3APISavingListing)
-  const rateValues = state.v3APIRoutes.flatMap((route) => route.pricing || []).map((item) => item.rateAtomic / 1_000_000)
-  const priceSummary = rateValues.length ? `${Math.min(...rateValues).toFixed(6)}–${Math.max(...rateValues).toFixed(6)} USDC by meter` : 'Pricing requires review'
-  const publishDisabled = reviewComplete ? '' : 'disabled'
-  const authFields = state.v3APIAuthType === 'none' ? '' : state.v3APIAuthType === 'basic'
-    ? `<label>Username<input name="basicUsername" value="${escapeAttr(state.v3APIBasicUsername)}" autocomplete="username" ${publishDisabled}/></label><label>Password<input name="secret" type="password" autocomplete="current-password" placeholder="Encrypted and never sent to Agent" ${publishDisabled}/></label>`
-    : `<label>${state.v3APIAuthType === 'bearer' ? 'Bearer token' : 'API key secret'}<input name="secret" type="password" autocomplete="off" placeholder="Encrypted and never sent to Agent" ${publishDisabled}/></label>${state.v3APIAuthType === 'api_key' ? `<label>API key header<input name="apiKeyHeader" value="${escapeAttr(state.v3APIKeyHeader)}" ${publishDisabled}/></label>` : ''}`
-  const readiness = [
-    ['Draft approved', mechanicallyComplete, mechanicallyComplete ? `${confirmedCount} structured items confirmed` : mechanicalIssues[0] || 'Draft review is incomplete', 'review'],
-    ['Connectivity passed', Boolean(probe?.ok), probe?.ok ? `HTTP ${probe.status} · ${probe.latencyMs} ms` : 'Run the side-effect-free Health Path check', 'probe'],
-    ['Credential configured', credentialConfigured, credentialConfigured ? state.v3APIAuthType === 'none' ? 'No upstream authentication' : `${state.v3APIAuthType} credential ready` : 'Enter the Provider credential', 'credential'],
-    ['Seller confirmation', sellerConfirmationComplete, sellerConfirmationComplete ? 'All three seller statements accepted' : 'Accept every seller responsibility statement', 'attestation'],
-  ] as const
-  const publishPanel = `<section class="v3-console-panel v3-api-publish-panel ${reviewComplete ? '' : 'locked'}"><div class="v3-step-heading"><span>3</span><div><strong>Public endpoint and seller confirmation</strong><small>Configure the public HTTPS provider endpoint and its private credential. Submission creates a private Listing draft.</small></div><button class="ghost" type="button" data-v3-action="api-probe" ${state.v3APIProbing || !reviewComplete ? 'disabled' : ''}>${state.v3APIProbing ? 'Checking…' : probe?.ok ? 'Check again' : 'Check connection'}</button></div>${reviewComplete ? '' : '<div class="v3-api-publish-lock"><strong>Finish reviewing the Agent draft first</strong><span>Connection settings unlock after every structured item is confirmed.</span></div>'}<div class="v3-api-connection-summary"><div><small>Provider Base URL</small><strong>${escapeHTML(state.v3APIBaseURL || 'Not configured')}</strong></div><div><small>Health Path</small><strong>${escapeHTML(state.v3APIHealthPath || '/health')}</strong></div><button class="ghost" type="button" data-v3-action="api-edit-service">Edit in review</button></div><div class="v3-api-auth-card"><div class="v3-api-auth-heading"><div><strong>Private provider authentication</strong><small>Credentials stay outside the Agent draft and public Manifest.</small></div><span>${credentialConfigured ? 'Ready' : 'Required'}</span></div><div class="v3-api-connection-grid"><label>Authentication<select name="authType" ${reviewComplete ? '' : 'disabled'}><option value="bearer" ${state.v3APIAuthType === 'bearer' ? 'selected' : ''}>Bearer token</option><option value="api_key" ${state.v3APIAuthType === 'api_key' ? 'selected' : ''}>API key</option><option value="basic" ${state.v3APIAuthType === 'basic' ? 'selected' : ''}>Basic authentication</option><option value="none" ${state.v3APIAuthType === 'none' ? 'selected' : ''}>No authentication</option></select></label>${authFields}</div></div><div class="v3-api-probe ${probe?.ok ? 'passed' : probe ? 'failed' : 'idle'}"><span>${probe?.ok ? '✓' : probe ? '!' : '→'}</span><div><strong>${probe?.ok ? 'Health Path reachable' : probe ? 'Connection check failed' : 'Connectivity not checked'}</strong><small>${probe?.ok ? `Checked ${escapeHTML(probe.checkedAt ? new Date(probe.checkedAt).toLocaleString() : 'just now')} · HTTP ${probe.status} · ${probe.latencyMs} ms · ${escapeHTML(probe.contentType || 'unknown content type')}` : escapeHTML(probe?.error || 'Only the declared side-effect-free Health Path is called.')}</small></div></div><div class="v3-api-public-preview"><div><span>MARKET PREVIEW</span><strong>${escapeHTML(state.v3APITitle || 'Untitled API Bridge')}</strong><small>${escapeHTML(state.v3APIProtocol)} · ${state.v3APIRoutes.length} routes · ${escapeHTML(priceSummary)}</small></div><div class="v3-api-preview-badges"><span>Seller-defined pricing</span>${state.v3APIRoutes.some((route) => route.pricing?.some((item) => item.dimension === 'provider_reported')) ? '<span class="warning">Seller-reported usage</span>' : ''}</div><p>Exora verifies connectivity, forwarding, metering, and settlement. The seller remains responsible for API behavior, output quality, pricing, resale rights, and seller-reported usage.</p></div><div class="v3-api-attestations"><strong>Seller confirmation</strong><label><input type="checkbox" data-v3-attestation="pricing" ${state.v3APIAttestPricing ? 'checked' : ''}/><span><b>I define and accept responsibility for the published prices.</b><small>Exora does not assess price fairness.</small></span></label><label><input type="checkbox" data-v3-attestation="usage" ${state.v3APIAttestUsage ? 'checked' : ''}/><span><b>I am responsible for API behavior and reported usage accuracy.</b><small>Seller-reported meters are labeled for buyers.</small></span></label><label><input type="checkbox" data-v3-attestation="rights" ${state.v3APIAttestRights ? 'checked' : ''}/><span><b>I have the right to sell access to this API.</b><small>This confirmation cannot be supplied by an Agent.</small></span></label></div><div class="v3-api-readiness">${readiness.map(([label, passed, detail, target]) => `<button type="button" class="${passed ? 'passed' : ''}" data-v3-readiness-target="${target}"><span>${passed ? '✓' : '!'}</span><div><strong>${label}</strong><small>${detail}</small></div></button>`).join('')}</div><div class="v3-api-publish-actions"><div><strong>${canSave ? 'Ready to submit' : 'Complete every requirement above'}</strong><small>This creates a private Listing draft. Nothing is published until you confirm in Listings.</small></div><button class="v3-direct-publish" type="submit" ${canSave ? '' : 'disabled'}>${state.v3APISavingListing ? 'Submitting…' : 'Submit to Listings'}</button></div></section>`
-  return `<form class="v3-api-onboarding v3-provider-form" data-v3-form="api_bridge">
-    <section class="v3-console-panel"><div class="v3-step-heading"><span>1</span><div><strong>Import materials and connect an Agent</strong><small>Files remain on this computer; Cloud receives only the structured draft.</small></div><button type="button" data-v3-action="api-materials-add">Add files</button></div><div class="v3-api-material-list">${materials || '<div class="v3-scan-empty"><strong>No API materials selected</strong><span>Add OpenAPI, JSON/YAML, Markdown, text, CSV, pricing tables, or request/response examples.</span></div>'}</div>${renderV3AgentPromptPanel({ title: 'Public API Bridge Agent Prompt', draftId: state.v3APIDraftId, expectedVersion: state.v3APIDraftVersion, prompt: apiBridgeAgentPrompt(), copyAction: 'api-prompt-copy', refreshAction: 'api-prompt-regenerate', checkAction: 'api-draft-check' })}</section>
-    <section class="v3-console-panel"><div class="v3-step-heading"><span>2</span><div><strong>Review Agent draft</strong><small>Approve every structured item. Editing an approved item returns it to review.</small></div><button class="ghost" type="button" data-v3-action="api-route-add">Add route</button></div>${state.v3APIAgentNotes ? `<p class="v3-api-agent-note"><strong>Agent notes</strong><span>${escapeHTML(state.v3APIAgentNotes)}</span></p>` : ''}${state.v3APIUnresolvedFields.length ? `<div class="v3-api-unresolved-list"><strong>Needs review</strong>${state.v3APIUnresolvedFields.map((field) => `<span>${escapeHTML(field)}</span>`).join('')}<small>Edit the matching item, then confirm it.</small></div>` : ''}<div class="v3-api-review-workspace"><aside><div><strong>Draft review</strong><small>Version ${state.v3APIDraftVersion} · ${state.v3APIMaterials.length} materials · ${confirmedCount}/${reviewItems.length} confirmed</small></div><div class="v3-api-review-filters"><span>All ${reviewItems.length}</span><span>Pending ${reviewItems.length - confirmedCount}</span><span>Warnings ${state.v3APIUnresolvedFields.length}</span></div>${reviewList}</aside><main><header><div><small>Item ${activeReviewIndex + 1} of ${reviewItems.length}</small><strong>${escapeHTML(activeReview?.label || 'No review items')}</strong></div><span class="${state.v3APIReviewStatus[activeReview?.id || ''] || 'pending'}">${state.v3APIReviewStatus[activeReview?.id || ''] === 'confirmed' ? 'Confirmed' : state.v3APIReviewStatus[activeReview?.id || ''] === 'modified' ? 'Modified' : 'Pending review'}</span></header>${routeReview}${activeUnresolved.length ? `<div class="v3-api-review-warning"><strong>Agent needs your input</strong><span>${activeUnresolved.map(escapeHTML).join(', ')}</span><small>Change the relevant value before confirming this item.</small></div>` : ''}<footer><button class="ghost" type="button" data-v3-review-previous ${activeReviewIndex === 0 ? 'disabled' : ''}>Previous</button><button type="button" data-v3-review-confirm="${escapeAttr(activeReview?.id || '')}" ${activeCanConfirm ? '' : 'disabled'}>${activeReviewIndex + 1 < reviewItems.length ? 'Confirm and review next' : 'Confirm item'}</button><button class="ghost" type="button" data-v3-review-next ${activeReviewIndex + 1 >= reviewItems.length ? 'disabled' : ''}>Next</button></footer></main></div><div class="v3-form-actions"><button type="button" data-v3-action="api-draft-save">Save revised draft</button><span>${reviewComplete ? 'All draft items confirmed' : `${reviewItems.length - confirmedCount} items still require approval`}</span></div></section>
-    ${publishPanel}
-  </form>`
+  return `You are normalizing an existing public API for Exora API Bridge. Read every material and call exora.save_api_bridge_draft exactly once.\n\nDraft ID: ${state.v3APIDraftId}\nExpected version: ${state.v3APIDraftVersion}\n\nMaterials:\n${files}\n\nRules:\n- Produce ExoraServiceManifest v1 with exactly interface, delivery, operationPolicies, and pricingTemplate.\n- Normalize to OpenAPI 3.1 and set delivery to cloud_direct.\n- Support only HTTP/JSON request_response and text/event-stream server_stream. OpenAI-compatible APIs are ordinary OpenAPI operations.\n- Never send Base URL, credentials, runtime settings, seller attestation, Listing state, or publish instructions.\n- Do not invent uncertain values. Include the Agent normalization audit and put uncertainty in unresolvedFields.\n- Variable pricing requires maxChargePerInvocationAtomic.`
 }
 
 function renderV3APIBridgePage() {
-  return normalizeV3AgentWizardMarkup(renderV3APIBridgePageCore(), 'api_bridge')
+  return renderV3ServiceWizard('api_bridge')
 }
 
 function syncV3APIDraftFromForm(form?: HTMLFormElement | null) {
@@ -3657,11 +4091,7 @@ function syncV3APIDraftFromForm(form?: HTMLFormElement | null) {
   state.v3APIDescription = String(data.get('description') || '').trim()
   state.v3APIBaseURL = String(data.get('baseUrl') || '').trim()
   state.v3APIHealthPath = String(data.get('healthPath') || '').trim() || '/health'
-  const protocol = String(data.get('protocol') || state.v3APIProtocol)
-  if (protocol === 'openapi' || protocol === 'openai' || protocol === 'generic_http' || protocol === 'sse') state.v3APIProtocol = protocol
-  const authType = String(data.get('authType') || 'none')
-  if (authType === 'bearer' || authType === 'api_key' || authType === 'basic' || authType === 'none') state.v3APIAuthType = authType
-  state.v3APIKeyHeader = String(data.get('apiKeyHeader') || '').trim() || 'X-API-Key'
+  syncV3RuntimeAuthFromForm('api_bridge', data)
   const priceUnit = String(data.get('priceUnit') || 'request')
   if (priceUnit === 'request' || priceUnit === 'successful_request' || priceUnit === 'tokens' || priceUnit === 'image' || priceUnit === 'second') state.v3APIPriceUnit = priceUnit
 }
@@ -3675,33 +4105,34 @@ function rerenderV3APIKeepingSecret(form?: HTMLFormElement | null) {
 }
 
 function apiBridgeReviewFingerprint(id: string) {
-  if (id === 'service') return JSON.stringify({ title: state.v3APITitle, description: state.v3APIDescription, protocol: state.v3APIProtocol, baseUrl: state.v3APIBaseURL, healthPath: state.v3APIHealthPath })
-  const route = state.v3APIRoutes.find((item) => `route:${item.routeId}` === id)
+  if (id === 'service') return JSON.stringify({ title: state.v3APITitle, description: state.v3APIDescription, interface: state.v3APIDraft?.serviceManifest.interface, pricingTemplate: state.v3APIDraft?.serviceManifest.pricingTemplate })
+  const route = state.v3APIOperations.find((item) => `operation:${item.operationId}` === id)
   if (!route) return ''
   const pricing = (route.pricing || []).map((item) => ({ dimension: item.dimension, rateAtomic: item.rateAtomic, per: item.per, meterSource: item.meterSource, ...(item.selector ? { selector: item.selector } : {}), chargeOn: item.chargeOn }))
-  return JSON.stringify({ operationId: route.operationId, method: route.method, path: route.path, title: route.title, pricing, maxChargePerInvocationAtomic: route.maxChargePerInvocationAtomic })
+  return JSON.stringify({ operationId: route.operationId, method: route.method, path: route.path, title: route.title, streaming: route.streaming, sideEffect: route.sideEffect, idempotent: route.idempotent, limits: route.limits, meteringCapabilities: route.meteringCapabilities, pricingMode: route.pricingMode, pricing, maxChargePerInvocationAtomic: route.maxChargePerInvocationAtomic })
 }
 
 function apiBridgeUnresolvedForReview(id: string) {
-  if (id === 'service') return state.v3APIUnresolvedFields.filter((field) => !/^routes(?:\.|\[)/.test(field))
-  const route = state.v3APIRoutes.find((item) => `route:${item.routeId}` === id)
-  const routeIndex = state.v3APIRoutes.indexOf(route as V3APIRoute)
+  const operationIDs = state.v3APIOperations.map((operation) => operation.operationId)
+  if (id === 'service') return state.v3APIUnresolvedFields.filter((field) => !operationIDs.some((operationId) => field.includes(operationId)))
+  const route = state.v3APIOperations.find((item) => `operation:${item.operationId}` === id)
+  const routeIndex = state.v3APIOperations.indexOf(route as V3APIOperationReview)
   if (!route || routeIndex < 0) return []
-  return state.v3APIUnresolvedFields.filter((field) => field.includes(route.routeId) || field.includes(route.operationId) || field.startsWith(`routes.${routeIndex}`) || field.startsWith(`routes[${routeIndex}]`))
+  return state.v3APIUnresolvedFields.filter((field) => field.includes(route.operationId) || field.includes(`operationPolicies.${routeIndex}`) || field.includes(`operationPolicies[${routeIndex}]`))
 }
 
 function apiBridgePathField(path: string) {
-  const match = String(path).match(/(?:^|\.)(title|description|protocol|baseUrl|healthPath|operationId|method|path|displayName|maxChargePerInvocationAtomic|dimension|rateAtomic|per|meterSource|selector|chargeOn)$/)
+  const match = String(path).match(/(?:^|\.)(title|description|operationId|method|path|displayName|interaction|sideEffect|idempotent|timeoutSeconds|maxRequestBytes|maxResponseBytes|maxConcurrency|meteringCapabilities|maxChargePerInvocationAtomic|dimension|rateAtomic|per|meterSource|selector|chargeOn)$/)
   return match?.[1]
 }
 
 function resolveAPIBridgeBoundField(reviewId: string, fieldName: string, componentIndex?: number) {
-  const route = state.v3APIRoutes.find((item) => `route:${item.routeId}` === reviewId)
-  const routeIndex = route ? state.v3APIRoutes.indexOf(route) : -1
+  const route = state.v3APIOperations.find((item) => `operation:${item.operationId}` === reviewId)
+  const routeIndex = route ? state.v3APIOperations.indexOf(route) : -1
   state.v3APIUnresolvedFields = state.v3APIUnresolvedFields.filter((path) => {
     if (apiBridgePathField(path) !== fieldName) return true
-    if (reviewId === 'service') return /^routes(?:\.|\[)/.test(path)
-    const routeMatches = route && (path.includes(route.routeId) || path.includes(route.operationId) || path.startsWith(`routes.${routeIndex}.`) || path.startsWith(`routes[${routeIndex}].`))
+    if (reviewId === 'service') return state.v3APIOperations.some((operation) => path.includes(operation.operationId))
+    const routeMatches = route && (path.includes(route.operationId) || path.includes(`operationPolicies.${routeIndex}`) || path.includes(`operationPolicies[${routeIndex}]`))
     if (!routeMatches) return true
     if (componentIndex !== undefined && !path.includes(`pricing.${componentIndex}.`) && !path.includes(`pricing[${componentIndex}].`)) return true
     return false
@@ -3716,22 +4147,20 @@ function persistAPIBridgeReview() {
 function restoreAPIBridgeReview() {
   try {
     const saved = JSON.parse(localStorage.getItem(`exora.apiBridgeReview.${state.v3APIDraftId}`) || '{}') as { items?: Record<string, { status?: 'pending' | 'modified' | 'confirmed'; fingerprint?: string }> }
-    const ids = ['service', ...state.v3APIRoutes.map((route) => `route:${route.routeId}`)]
+    const ids = ['service', ...state.v3APIOperations.map((route) => `operation:${route.operationId}`)]
     state.v3APIReviewStatus = Object.fromEntries(ids.map((id) => { const item = saved.items?.[id]; return [id, item?.fingerprint === apiBridgeReviewFingerprint(id) ? item.status || 'pending' : item?.status === 'confirmed' ? 'modified' : 'pending'] }))
   } catch { state.v3APIReviewStatus = {} }
 }
 
-function applyV3APIBridgeDraft(draft: V3APIBridgeDraft) {
+function applyV3APIBridgeDraft(input: V3APIBridgeDraft) {
+  const draft = hydrateV3ServiceDraft(input)
+  if (draft.applicationSource !== 'api_bridge' || draft.serviceManifest.delivery !== 'cloud_direct') throw new Error('API Bridge Agent draft must use cloud_direct delivery.')
   state.v3APIDraftId = draft.draftId
   state.v3APIDraft = draft
-  state.v3APIInterfaceMode = draft.interfaceMode || 'passthrough'
   state.v3APIDraftVersion = draft.version
   state.v3APITitle = draft.title || ''
   state.v3APIDescription = draft.description || ''
-  state.v3APIProtocol = draft.protocol || 'generic_http'
-  state.v3APIBaseURL = draft.baseUrl || ''
-  state.v3APIHealthPath = draft.healthPath || '/health'
-  state.v3APIRoutes = (draft.routes || []).map((route, index) => ({ id: route.routeId || `draft-route-${index}-${route.operationId}`, routeId: route.routeId || `local-${crypto.randomUUID()}`, operationId: route.operationId, method: route.method, path: route.path, title: route.displayName || route.operationId, selected: true, price: 0, pricing: route.pricing?.length ? route.pricing : [{ dimension: 'request', rateAtomic: 0, per: 1, meterSource: 'gateway', chargeOn: 'started' }], maxChargePerInvocationAtomic: route.maxChargePerInvocationAtomic || 0 }))
+  state.v3APIOperations = (draft.operationReviews || []).map((operation, index) => ({ ...structuredClone(operation), id: operation.operationId || `draft-operation-${index}`, title: operation.title || operation.displayName || operation.operationId, selected: true, price: 0 }))
   state.v3APIUnresolvedFields = [...(draft.unresolvedFields || [])]
   state.v3APIAgentNotes = draft.agentNotes || ''
   state.v3APIProbe = undefined
@@ -3742,14 +4171,25 @@ function applyV3APIBridgeDraft(draft: V3APIBridgeDraft) {
 }
 
 function currentV3APIBridgeDraft() {
-  return { draftId: state.v3APIDraftId, expectedVersion: state.v3APIDraftVersion, bridgeMode: 'transparent', interfaceMode: state.v3APIInterfaceMode, title: state.v3APITitle, description: state.v3APIDescription, protocol: state.v3APIProtocol, baseUrl: state.v3APIBaseURL, healthPath: state.v3APIHealthPath, routes: state.v3APIRoutes.map((route) => ({ routeId: route.routeId, operationId: route.operationId, method: route.method, path: route.path, displayName: route.title, pricing: route.pricing?.length ? route.pricing : [{ dimension: 'request', rateAtomic: Math.round(route.price * 1_000_000), per: 1, meterSource: 'gateway', chargeOn: 'started' }], maxChargePerInvocationAtomic: route.maxChargePerInvocationAtomic || 0 })), contract: state.v3APIDraft?.contract, adapter: state.v3APIInterfaceMode === 'agent_managed' ? state.v3APIDraft?.adapter : undefined, agentNotes: state.v3APIAgentNotes, unresolvedFields: state.v3APIUnresolvedFields }
+  if (!state.v3APIDraft) throw new Error('Load the API Bridge Agent draft first.')
+  syncReviewedOperationsIntoServiceManifest(state.v3APIDraft.serviceManifest, state.v3APIOperations)
+  return { draftId: state.v3APIDraftId, expectedVersion: state.v3APIDraftVersion, applicationSource: 'api_bridge', title: state.v3APITitle, description: state.v3APIDescription, serviceManifest: state.v3APIDraft.serviceManifest, normalization: state.v3APIDraft.normalization, unresolvedFields: state.v3APIUnresolvedFields }
 }
 
 
 function v3ListingPriceLabel(price: Record<string, any> = {}) {
+	if (price.model === 'resource_items') return 'Files priced independently'
+  if (price.model === 'compute_time_v2') {
+    const minute = v3AtomicMoney(Number(price.amountAtomicPerMinute || 0), 'USDC').replace(' USDC', '')
+    const parts = [`${minute} USDC / min`]
+    if (Number(price.baseFeeAtomic || 0) > 0) parts.push(`${v3AtomicMoney(Number(price.baseFeeAtomic), 'USDC')} start`)
+    const floor = Number(price.longDurationDiscount?.minimumRateBps || 10000)
+    if (floor < 10000) parts.push(`up to ${Math.round((10000 - floor) / 100)}% off`)
+    return parts.join(' · ')
+  }
   const currency = String(price.currency || 'USD')
   if (Number.isFinite(Number(price.amount))) return `${Number(price.amount).toLocaleString(undefined, { maximumFractionDigits: 6 })} ${currency}${price.unit ? ` / ${price.unit}` : ''}`
-  if (price.model === 'metered' || price.pricingVersion) return `Route-based · ${currency}`
+  if (price.model === 'metered' || price.pricingVersion) return `Operation-based · ${currency}`
   return 'Not set'
 }
 
@@ -3764,7 +4204,7 @@ function v3ManifestDetail(label: string, value: unknown, fallback?: string) {
   return `<div><dt>${escapeHTML(label)}</dt><dd>${escapeHTML(v3ManifestText(value, fallback))}</dd></div>`
 }
 
-function v3RoutePricingLabel(route: Record<string, any>) {
+function v3OperationPricingLabel(route: Record<string, any>) {
   const components = Array.isArray(route.pricing) ? route.pricing : []
   if (!components.length) return 'Pricing not declared'
   return components.map((component: Record<string, any>) => {
@@ -3773,8 +4213,9 @@ function v3RoutePricingLabel(route: Record<string, any>) {
   }).join(' · ')
 }
 
-function renderV3ApplicationManifest(source: string, manifest: Record<string, any>) {
-  const routes = Array.isArray(manifest.routes) ? manifest.routes : Array.isArray(manifest.operations) ? manifest.operations : []
+function renderV3ApplicationManifest(source: string, manifest: Record<string, any>, listing?: V3Listing) {
+  const operations = v3ServiceManifestOperations(manifest)
+  const serviceManifest = manifest.serviceManifest as V3ServiceManifest | undefined
   let details = ''
   if (source === 'vm') {
     const hardware = manifest.hardware || {}
@@ -3791,40 +4232,39 @@ function renderV3ApplicationManifest(source: string, manifest: Record<string, an
       v3ManifestDetail('Workspace', manifest.workspaceGiB ? `${manifest.workspaceGiB} GiB` : undefined),
       v3ManifestDetail('Region', manifest.region),
       v3ManifestDetail('Capacity reservation', manifest.diskReservation || manifest.capacitySnapshot ? 'Recorded' : 'Not recorded'),
+      v3ManifestDetail('Isolation', manifest.isolationClass || manifest.resourceGuarantees?.cpuMemory),
+      v3ManifestDetail('Control', 'Exora terminal'),
+      v3ManifestDetail('File transfer', 'WebRTC direct transfer'),
+      v3ManifestDetail('Minimum rental', listing?.limits?.minMinutes ? `${listing.limits.minMinutes} minutes` : undefined),
+      v3ManifestDetail('Maximum rental', listing?.limits?.maxMinutes ? `${listing.limits.maxMinutes} minutes` : undefined),
+      v3ManifestDetail('Current price', listing ? v3ListingPriceLabel(listing.price || {}) : undefined),
     ].join('')
   } else if (source === 'resources') {
-    const archive = manifest.archive || {}
     details = [
-      v3ManifestDetail('Version', manifest.version),
-      v3ManifestDetail('License', String(manifest.license || '').replaceAll('_', ' ')),
-      v3ManifestDetail('Delivery', String(manifest.delivery || '').replaceAll('_', ' ')),
-      v3ManifestDetail('Access window', manifest.grantHours ? `${manifest.grantHours} hours` : undefined),
-      v3ManifestDetail('Archive', archive.format ? String(archive.format).toUpperCase() : undefined),
-      v3ManifestDetail('Files', archive.sourceCount),
-      v3ManifestDetail('Package size', archive.sizeBytes ? v3FormatBytes(Number(archive.sizeBytes)) : undefined),
+      v3ManifestDetail('Resource type', String(manifest.category || 'other').replaceAll('_', ' ')),
+      v3ManifestDetail('Authorization scope', String(manifest.license || 'Not declared').replaceAll('_', ' ')),
+      v3ManifestDetail('Access window', manifest.grantHours ? `${manifest.grantHours} hours per purchase` : undefined),
+      v3ManifestDetail('Delivery', 'Independent resource files'),
+      v3ManifestDetail('Pricing', 'Per file'),
+      v3ManifestDetail('Authorization', 'One DownloadGrant per purchased file'),
+      v3ManifestDetail('Folder handling', 'Seller-created archive uploaded as one file'),
     ].join('')
   } else {
     details = [
-      v3ManifestDetail('Bridge mode', manifest.bridgeMode === 'dock_tunnel' ? 'Dock tunnel' : 'Public provider'),
-      v3ManifestDetail('Protocol', manifest.protocol),
-      ...(source === 'api_bridge' ? [v3ManifestDetail('Provider base URL', manifest.baseUrl)] : []),
-      v3ManifestDetail('Health Path', manifest.healthPath),
-      ...(source === 'endpoint'
-        ? [v3ManifestDetail('Authentication', 'Configured only on Dock'), v3ManifestDetail('Credential proof', manifest.credentialConfigured ? 'Dock reports configured' : 'Dock setup required')]
-        : [v3ManifestDetail('Authentication', String(manifest.authType || 'none').replaceAll('_', ' ')), v3ManifestDetail('Credential', manifest.secretConfigured ? 'Cloud encrypted and configured' : 'Not configured')]),
-      v3ManifestDetail('Routes', routes.length),
-      ...(source === 'endpoint' ? [v3ManifestDetail('Route contract', manifest.routeFingerprint ? 'Fingerprint recorded' : 'Missing')] : []),
-      ...(source === 'api_bridge' ? [v3ManifestDetail('Cloud connectivity', manifest.connectivityCheckedAt ? `Checked ${new Date(manifest.connectivityCheckedAt).toLocaleString()}` : 'Not checked')] : []),
+      v3ManifestDetail('Interface', 'OpenAPI 3.1'),
+      v3ManifestDetail('Delivery', serviceManifest?.delivery === 'dock_tunnel' ? 'Dock tunnel' : 'Cloud direct'),
+      v3ManifestDetail('Interactions', operations.some((operation) => operation.policy?.interaction === 'server_stream') ? 'HTTP/JSON + SSE' : 'HTTP/JSON'),
+      v3ManifestDetail('Operations', operations.length),
     ].join('')
   }
-  const routeList = routes.length ? `<div class="v3-listing-route-list">${routes.map((route: Record<string, any>) => `<div><span>${escapeHTML(String(route.method || 'ANY'))}</span><strong>${escapeHTML(String(route.path || '/'))}</strong><small>${escapeHTML(String(route.title || route.operationId || 'Route'))} · ${escapeHTML(v3RoutePricingLabel(route))}</small></div>`).join('')}</div>` : ''
-  return `<section class="v3-listing-manifest"><dl class="detail-grid v3-listing-source-details">${details}</dl>${routeList}<details><summary>Technical manifest</summary><pre>${escapeHTML(JSON.stringify(manifest, null, 2))}</pre></details></section>`
+  const operationList = operations.length ? `<div class="v3-listing-route-list">${operations.map((operation: Record<string, any>) => `<div><span>${escapeHTML(String(operation.method || 'ANY'))}</span><strong>${escapeHTML(String(operation.path || '/'))}</strong><small>${escapeHTML(String(operation.title || operation.operationId || 'Operation'))} · ${escapeHTML(v3OperationPricingLabel(operation))}</small></div>`).join('')}</div>` : ''
+  return `<section class="v3-listing-manifest"><dl class="detail-grid v3-listing-source-details">${details}</dl>${operationList}<details><summary>Technical manifest</summary><pre>${escapeHTML(JSON.stringify(manifest, null, 2))}</pre></details></section>`
 }
 
 function v3ListingSourceMeta(source: string) {
   const sources: Record<string, { label: string; shortLabel: string; description: string; icon: IconNode }> = {
     vm: { label: 'Virtual Machine', shortLabel: 'VM', description: 'Measured compute and disposable environments', icon: Activity },
-    resources: { label: 'Resource bundle', shortLabel: 'Resources', description: 'Versioned files with protected delivery', icon: Folder },
+    resources: { label: 'Resource sheet', shortLabel: 'Resources', description: 'Independently priced files with protected delivery', icon: Folder },
     endpoint: { label: 'Local Endpoint', shortLabel: 'Endpoint', description: 'Private services through a Dock tunnel', icon: BrainCircuit },
     api_bridge: { label: 'Public API Bridge', shortLabel: 'API Bridge', description: 'Public APIs normalized for Agent usage', icon: Network },
     unclassified: { label: 'Needs reclassification', shortLabel: 'Unclassified', description: 'Seller confirmation is required before publishing', icon: ShieldAlert },
@@ -3834,16 +4274,30 @@ function v3ListingSourceMeta(source: string) {
 
 function v3ListingStatusMeta(status: string) {
   const statuses: Record<string, { label: string; tone: string }> = {
-    draft: { label: 'Private draft', tone: 'draft' },
-    validating: { label: 'Validating', tone: 'validating' },
-    published: { label: 'Live', tone: 'published' },
-    paused: { label: 'Paused', tone: 'paused' },
-    provider_busy: { label: 'Provider busy', tone: 'attention' },
-    unhealthy: { label: 'Unhealthy', tone: 'attention' },
-    capacity_insufficient: { label: 'Capacity full', tone: 'attention' },
-    retired: { label: 'Retired', tone: 'retired' },
+    draft: { label: sx('Private draft', '草稿'), tone: 'draft' },
+    validating: { label: sx('Validating', '验证中'), tone: 'validating' },
+    published: { label: sx('Live', '上架中'), tone: 'published' },
+    paused: { label: sx('Paused', '已下架'), tone: 'paused' },
+    provider_busy: { label: sx('Provider busy', '设备忙碌'), tone: 'attention' },
+    unhealthy: { label: sx('Unhealthy', '运行异常'), tone: 'attention' },
+    capacity_insufficient: { label: sx('Capacity full', '容量不足'), tone: 'attention' },
+    performance_degraded: { label: sx('Performance degraded', '性能降级'), tone: 'attention' },
+    retired: { label: sx('Retired', '已退役'), tone: 'retired' },
   }
   return statuses[status] || { label: status.replaceAll('_', ' '), tone: 'neutral' }
+}
+
+function v3DisplayReadinessCheck(check: V3ReadinessCheck): V3ReadinessCheck {
+  if (check.id !== 'ssh_ingress') return check
+  return {
+    ...check,
+    id: 'terminal_webrtc_delivery',
+    label: sx('Exora Terminal and WebRTC delivery ready', 'Exora 终端与 WebRTC 交付就绪'),
+    detail: sx(
+      'Terminal and WebRTC delivery is unavailable until Cloud completes the delivery upgrade.',
+      'Cloud 完成交付能力升级前，终端与 WebRTC 交付暂不可用。',
+    ),
+  }
 }
 
 function renderV3ListingEmptyState() {
@@ -3861,14 +4315,21 @@ function renderV3ListingEmptyState() {
 }
 
 
-type V3UnifiedListingItem = { listing: V3Listing; product: V3Product; application?: V3ListingApplication; isOwner: boolean }
+type V3UnifiedListingItem = { listing: V3Listing; product: V3Product; application?: V3ListingApplication; resourceItems?: V3CatalogResourceItem[]; focusResourceItem?: V3CatalogResourceItem; rowId?: string; isOwner: boolean }
 
 function v3UnifiedListingItems() {
   const items = new Map<string, V3UnifiedListingItem>()
-  state.v3CatalogListings.forEach((catalog) => items.set(catalog.listing.listingId, { listing: catalog.listing, product: catalog.productManifest, isOwner: false }))
+  state.v3CatalogListings.forEach((catalog) => {
+    const resources = catalog.resourceItems || []
+    if (catalog.productManifest.applicationSource === 'resources' && resources.length) {
+      resources.forEach((resource) => items.set(`${catalog.listing.listingId}:${resource.resourceItemId}`, { listing: catalog.listing, product: catalog.productManifest, resourceItems: [resource], focusResourceItem: resource, rowId: `${catalog.listing.listingId}:${resource.resourceItemId}`, isOwner: false }))
+    } else {
+      items.set(catalog.listing.listingId, { listing: catalog.listing, product: catalog.productManifest, resourceItems: resources, rowId: catalog.listing.listingId, isOwner: false })
+    }
+  })
   state.v3ListingApplications.forEach((application) => {
-    const prior = items.get(application.listing.listingId)
-    items.set(application.listing.listingId, { listing: application.listing, product: application.product || prior?.product, application, isOwner: true })
+    for (const key of [...items.keys()]) if (key === application.listing.listingId || key.startsWith(`${application.listing.listingId}:`)) items.delete(key)
+    items.set(application.listing.listingId, { listing: application.listing, product: application.product, application, resourceItems: application.resourceItems || [], rowId: application.listing.listingId, isOwner: true })
   })
   return [...items.values()].sort((left, right) => {
     const time = new Date(right.listing.updatedAt || right.product.updatedAt || 0).getTime() - new Date(left.listing.updatedAt || left.product.updatedAt || 0).getTime()
@@ -3925,18 +4386,48 @@ function renderV3APIConsumerPanel(item: V3UnifiedListingItem, operations: Array<
   return `<section class="v3-consumer-panel"><header><div><span>MANUAL API CLIENT</span><strong>Invoke this operation</strong></div><em data-v3-consumer-balance>${escapeHTML(balanceLabel)}</em></header>${error}<form data-v3-consumer-form="api" data-listing-id="${escapeAttr(listing.listingId)}"><label>Operation<select name="operationId" data-v3-consumer-operation>${operationOptions}</select></label>${parameterFields ? `<fieldset class="v3-consumer-parameters"><legend>Manifest parameters</legend>${parameterFields}</fieldset>` : ''}<label>JSON request body<textarea name="body" spellcheck="false">${escapeHTML(state.v3ConsumerRequestBody)}</textarea></label><div class="v3-consumer-charge"><span>Maximum charge</span><strong>${escapeHTML(v3AtomicMoney(maxCharge, 'USDC'))}</strong></div><button type="submit" ${configured && !state.v3ConsumerBusy ? '' : 'disabled'}>${state.v3ConsumerBusy ? 'Invoking...' : 'Invoke operation'}</button>${keyAction}</form><details class="v3-consumer-code"><summary>curl</summary><pre>${escapeHTML(curl)}</pre></details><details class="v3-consumer-code"><summary>JavaScript</summary><pre>${escapeHTML(javascript)}</pre></details><details class="v3-consumer-code"><summary>Python</summary><pre>${escapeHTML(python)}</pre></details>${result}</section>`
 }
 
+function renderV3ComputeControl(lease: Record<string, any>) {
+  const leaseId = escapeAttr(String(lease.leaseId || ''))
+  if (lease.securityMode !== 'isolated_control_p2p_v1' || lease.status !== 'active') return ''
+  return `<section class="v3-compute-control" data-v3-compute-control data-lease-id="${leaseId}">
+    <header><div><span>ISOLATED VM CONTROL</span><strong>Exora terminal and direct files</strong></div><em>No direct Internet</em></header>
+    <form data-v3-compute-command data-lease-id="${leaseId}"><label>Root command<textarea name="command" rows="3" spellcheck="false" placeholder="uname -a"></textarea></label><button type="submit">Run through Exora</button></form>
+    <pre data-v3-compute-command-output>Command output is kept locally for this view.</pre>
+    <div class="v3-compute-file-grid">
+      <form data-v3-compute-transfer="upload" data-lease-id="${leaseId}"><strong>Upload to /workspace</strong><label>Local file<div class="v3-file-picker"><input name="localPath" readonly required/><button class="ghost" type="button" data-v3-compute-file-pick="upload">Choose</button></div></label><label>VM relative path<input name="workspaceRelativePath" placeholder="models/model.bin" required/></label><button type="submit">Start P2P upload</button></form>
+      <form data-v3-compute-transfer="download" data-lease-id="${leaseId}"><strong>Download from /workspace</strong><label>VM relative path<input name="workspaceRelativePath" placeholder="outputs/result.bin" required/></label><label>Expected bytes<input name="sizeBytes" type="number" min="0" step="1" required/></label><label>Expected SHA-256<input name="sha256" minlength="64" maxlength="64" required/></label><label>Local destination<div class="v3-file-picker"><input name="localPath" readonly required/><button class="ghost" type="button" data-v3-compute-file-pick="download">Choose</button></div></label><button type="submit">Start P2P download</button></form>
+    </div>
+    <div class="v3-compute-transfer-status" data-v3-compute-transfer-status>Files use WebRTC DTLS directly between Docks; Cloud stores only transfer receipts and SHA-256.</div>
+  </section>`
+}
+
+async function pollV3ComputeTransfer(transferId: string, target: HTMLElement) {
+  for (let attempt = 0; attempt < 600; attempt += 1) {
+    const response = await invoke<{ transfer?: Record<string, any> }>('consumer_compute_transfer_status', { input: { transferId } })
+    const transfer = response.transfer || {}
+    const completed = Number(transfer.bytesComplete || 0)
+    const total = Number(transfer.sizeBytes || 0)
+    target.textContent = `${String(transfer.status || 'connecting')} · ${v3FormatBytes(completed)}${total ? ` / ${v3FormatBytes(total)}` : ''}${transfer.error ? ` · ${String(transfer.error)}` : ''}`
+    if (transfer.status === 'completed' || transfer.status === 'failed') return
+    await new Promise((resolve) => window.setTimeout(resolve, 1000))
+  }
+  target.textContent = 'Transfer status timed out; the direct transfer may still be running.'
+}
+
 function renderV3ConsumerPanel(item: V3UnifiedListingItem) {
   const { listing, product } = item
   const configured = true
   const balance = state.v3ConsumerBalance
   const balanceLabel = balance ? v3AtomicMoney(balance.availableAtomic, balance.asset || 'USDC') : 'Checking balance…'
   const maxCharge = v3ConsumerMaxCharge(listing, product, product.productKind === 'compute' ? state.v3ConsumerMinutes : 1)
-  const operations = Array.isArray(product.manifest?.operations)
-    ? product.manifest.operations as Array<Record<string, any>>
-    : Array.isArray(product.manifest?.routes) ? product.manifest.routes as Array<Record<string, any>> : []
+  const operations = v3ServiceManifestOperations(product.manifest || {})
   const disclosure = product.productKind === 'compute' && product.manifest?.runtimeBackend === 'wsl2'
     ? `<div class="v3-consumer-disclosure"><strong>Managed WSL2 · shared host</strong><span>One Exora lease per host. CPU and memory are configured caps; the Windows GPU driver is shared and is not hardware passthrough.</span></div>`
     : product.productKind === 'compute' ? `<div class="v3-consumer-disclosure kvm"><strong>KVM/libvirt hardware isolation</strong><span>Disposable encrypted write layer, Guest Root, and provider-controlled reset.</span></div>` : ''
+  const workloadMode = String(listing.workloadPolicy?.sustainedCompute || 'allowed')
+  const performanceDisclosure = product.productKind === 'compute'
+    ? `<div class="v3-consumer-disclosure"><strong>${workloadMode === 'burst_only' ? 'Burst workloads only' : 'Sustained compute allowed'} · Cryptocurrency mining prohibited</strong><span>Dual performance monitoring${workloadMode === 'burst_only' ? product.manifest?.runtimeBackend === 'wsl2' ? ' · Windows monitoring-only Preview' : ' · Linux host throttling after the grace period' : ' · load is observed but not restricted'}.</span></div>`
+    : ''
   const result = state.v3ConsumerResponse ? `<section class="v3-consumer-result"><header><strong>Latest result</strong><span>Secrets and provider credentials are redacted</span></header><pre>${escapeHTML(v3RedactedConsumerJSON(state.v3ConsumerResponse))}</pre></section>` : ''
   const transfer = state.v3ConsumerTransferProgress
   const transferStatus = transfer ? `<div class="v3-consumer-transfer"><span>${escapeHTML(transfer.phase)}</span><progress max="${Math.max(1, transfer.sizeBytes || transfer.bytesDownloaded || 1)}" value="${transfer.bytesDownloaded}"></progress><strong>${escapeHTML(v3FormatBytes(transfer.bytesDownloaded))}${transfer.sizeBytes ? ` / ${escapeHTML(v3FormatBytes(transfer.sizeBytes))}` : ''}</strong></div>` : ''
@@ -3949,11 +4440,41 @@ function renderV3ConsumerPanel(item: V3UnifiedListingItem) {
     return `<section class="v3-consumer-panel">${disclosure}<header><div><span>MANUAL API CLIENT</span><strong>Invoke this operation</strong></div><em data-v3-consumer-balance>${escapeHTML(balanceLabel)}</em></header>${error}<form data-v3-consumer-form="api" data-listing-id="${escapeAttr(listing.listingId)}"><label>Operation<select name="operationId">${operationOptions}</select></label><label>JSON request body<textarea name="body" spellcheck="false">${escapeHTML(state.v3ConsumerRequestBody)}</textarea></label><div class="v3-consumer-charge"><span>Maximum charge</span><strong>${escapeHTML(v3AtomicMoney(maxCharge, 'USDC'))}</strong></div><button type="submit" ${configured && !state.v3ConsumerBusy ? '' : 'disabled'}>${state.v3ConsumerBusy ? 'Invoking…' : 'Invoke operation'}</button>${keyAction}</form><details class="v3-consumer-code"><summary>Use in your own code</summary><pre>${escapeHTML(curl)}</pre></details>${result}</section>`
   }
   if (product.productKind === 'download') {
-    const manifest = product.manifest || {}
-    return `<section class="v3-consumer-panel">${disclosure}<header><div><span>LICENSED DOWNLOAD</span><strong>Purchase this fixed version</strong></div><em data-v3-consumer-balance>${escapeHTML(balanceLabel)}</em></header>${error}<dl class="detail-grid"><div><dt>Version</dt><dd>${escapeHTML(String(manifest.version || 'fixed'))}</dd></div><div><dt>License</dt><dd>${escapeHTML(String(manifest.license || 'declared by provider'))}</dd></div><div><dt>Package</dt><dd>${escapeHTML(v3FormatBytes(Number((manifest.archive as Record<string, any> | undefined)?.sizeBytes || 0)))}</dd></div><div><dt>SHA-256</dt><dd>Verified before delivery</dd></div></dl><div class="v3-consumer-charge"><span>One-time grant</span><strong>${escapeHTML(v3AtomicMoney(maxCharge, 'USDC'))}</strong></div><div class="v3-consumer-actions"><button type="button" data-v3-consumer-action="purchase-download" data-listing-id="${escapeAttr(listing.listingId)}" ${configured && !state.v3ConsumerBusy ? '' : 'disabled'}>${state.v3ConsumerBusy ? 'Purchasing…' : 'Purchase download'}</button>${state.v3ConsumerGrant ? `<button class="ghost" type="button" data-v3-consumer-action="create-transfer" data-grant-id="${escapeAttr(String(state.v3ConsumerGrant.grantId || ''))}">Open resumable download</button>` : ''}${keyAction}</div>${result}</section>`
+    const resourceItems = item.focusResourceItem ? [item.focusResourceItem] : item.resourceItems || []
+    const cards = resourceItems.map((resource) => {
+      const amountAtomic = Math.round(Number(resource.price?.amount || 0) * 1_000_000)
+      const currentGrant = state.v3ConsumerGrant
+      const ownsCurrent = currentGrant?.resourceItemId === resource.resourceItemId
+      return `<article class="v3-resource-purchase-item"><header><div><strong>${escapeHTML(resource.title)}</strong><small>${escapeHTML(resource.fileName)} · ${escapeHTML(v3FormatBytes(resource.sizeBytes))}</small></div><em>${escapeHTML(v3AtomicMoney(amountAtomic, 'USDC'))}</em></header><p>${escapeHTML(resource.description)}</p>${resource.tags?.length ? `<div class="v3-resource-tag-list">${resource.tags.map((tag) => `<span>${escapeHTML(tag)}</span>`).join('')}</div>` : ''}<dl class="detail-grid"><div><dt>License</dt><dd>${escapeHTML(resource.license)}</dd></div><div><dt>Access</dt><dd>${resource.grantHours} hours</dd></div><div><dt>SHA-256</dt><dd>${escapeHTML(resource.sha256.slice(0, 16))}…</dd></div></dl><div class="v3-consumer-actions"><button type="button" data-v3-consumer-action="purchase-download" data-listing-id="${escapeAttr(listing.listingId)}" data-resource-item-id="${escapeAttr(resource.resourceItemId)}" data-max-charge="${amountAtomic}" ${configured && !state.v3ConsumerBusy ? '' : 'disabled'}>${state.v3ConsumerBusy ? 'Purchasing…' : 'Purchase this file'}</button>${ownsCurrent ? `<button class="ghost" type="button" data-v3-consumer-action="create-transfer" data-grant-id="${escapeAttr(String(currentGrant?.grantId || ''))}">Download file</button>` : ''}</div></article>`
+    }).join('')
+    return `<section class="v3-consumer-panel">${disclosure}<header><div><span>RESOURCE SHEET</span><strong>Files are priced and purchased independently</strong></div><em data-v3-consumer-balance>${escapeHTML(balanceLabel)}</em></header>${error}<div class="v3-resource-purchase-list">${cards || '<div class="v3-error">This sheet has no published files.</div>'}</div>${result}</section>`
   }
   const lease = state.v3ConsumerLease
-  return `<section class="v3-consumer-panel">${disclosure}<header><div><span>COMPUTE PURCHASE</span><strong>Reserve whole minutes</strong></div><em data-v3-consumer-balance>${escapeHTML(balanceLabel)}</em></header>${error}<form data-v3-consumer-form="compute" data-listing-id="${escapeAttr(listing.listingId)}"><label>Duration in minutes<input name="durationMinutes" type="number" min="1" step="1" value="${state.v3ConsumerMinutes}"/></label><div class="v3-consumer-charge"><span>Current estimate</span><strong>${escapeHTML(v3AtomicMoney(maxCharge, 'USDC'))}</strong></div><button type="submit" ${configured && !state.v3ConsumerBusy ? '' : 'disabled'}>${state.v3ConsumerBusy ? 'Provisioning…' : 'Purchase and provision'}</button>${keyAction}</form>${lease ? `<section class="v3-consumer-lease"><header><strong>Lease ${escapeHTML(String(lease.leaseId || ''))}</strong><span>${escapeHTML(String(lease.status || ''))}</span></header><dl class="detail-grid"><div><dt>Backend</dt><dd>${escapeHTML(String(lease.backend || ''))}</dd></div><div><dt>Expires</dt><dd>${escapeHTML(lease.expiresAt ? new Date(String(lease.expiresAt)).toLocaleString() : 'Provisioning')}</dd></div></dl><pre>${escapeHTML(v3RedactedConsumerJSON(lease.capability || {}))}</pre><div class="v3-consumer-actions"><button class="ghost" type="button" data-v3-consumer-action="extend-compute" data-purchase-id="${escapeAttr(String(state.v3ConsumerPurchase?.purchaseId || ''))}">Extend ${state.v3ConsumerMinutes} min</button><button class="danger ghost" type="button" data-v3-consumer-action="release-lease" data-lease-id="${escapeAttr(String(lease.leaseId || ''))}">Release lease</button></div></section>` : ''}${result}</section>`
+  const leasePerformance = (lease?.performance || {}) as Record<string, any>
+  const limits = v3ComputeListingLimits(listing, product)
+  const cumulative = Number(lease?.durationMinutes || 0)
+  const remaining = Math.max(0, limits.maxMinutes - cumulative)
+  const estimate = state.v3ConsumerEstimate
+  const quoted = estimate ? v3AtomicMoney(Number(estimate.amountAtomic || 0), 'USDC') : state.v3ConsumerEstimateLoading ? 'Calculating…' : '—'
+  const estimateDetail = estimate ? `${Number(estimate.baseFeeAtomic || 0) > 0 ? `${v3AtomicMoney(Number(estimate.baseFeeAtomic), 'USDC')} start · ` : ''}${Number(estimate.discountAtomic || 0) > 0 ? `${v3AtomicMoney(Number(estimate.discountAtomic), 'USDC')} discount · ` : ''}${Number(estimate.cumulativeMinutes || estimate.durationMinutes || 0)} cumulative min` : 'Cloud-authoritative quote required'
+  const purchaseForm = !lease ? `<form data-v3-consumer-form="compute" data-listing-id="${escapeAttr(listing.listingId)}"><label>Duration in minutes<input name="durationMinutes" type="number" min="${limits.minMinutes}" max="${limits.maxMinutes}" step="1" value="${state.v3ConsumerMinutes}"/></label><div class="v3-consumer-charge"><span>Current estimate</span><strong>${escapeHTML(quoted)}</strong><small data-v3-compute-estimate-detail>${escapeHTML(estimateDetail)}</small></div><small class="v3-compute-estimate-error" data-v3-compute-estimate-error>${escapeHTML(state.v3ConsumerError || '')}</small><button type="submit" data-v3-compute-submit ${configured && estimate?.mode === 'initial' && !state.v3ConsumerBusy && !state.v3ConsumerEstimateLoading ? '' : 'disabled'}>${state.v3ConsumerBusy ? 'Provisioning…' : 'Purchase and provision'}</button>${keyAction}</form>` : ''
+  const leasePanel = lease ? `<section class="v3-consumer-lease"><header><strong>Lease ${escapeHTML(String(lease.leaseId || ''))}</strong><span>${escapeHTML(String(lease.status || ''))}</span></header><dl class="detail-grid"><div><dt>Backend</dt><dd>${escapeHTML(String(lease.backend || ''))}</dd></div><div><dt>Expires</dt><dd>${escapeHTML(lease.expiresAt ? new Date(String(lease.expiresAt)).toLocaleString() : 'Provisioning')}</dd></div><div><dt>Rental time</dt><dd>${cumulative} / ${limits.maxMinutes} cumulative minutes</dd></div><div><dt>Extension capacity</dt><dd>${remaining} minutes remaining</dd></div><div><dt>Performance</dt><dd>${escapeHTML(leasePerformance.deliveryBps ? `${Number(leasePerformance.deliveryBps) / 100}% delivery` : 'Dual probes starting')} · ${leasePerformance.throttled ? 'throttled' : escapeHTML(String(lease.enforcementMode || 'observe_only'))}</dd></div></dl>${remaining > 0 ? `<form data-v3-consumer-form="compute-extension" data-listing-id="${escapeAttr(listing.listingId)}" data-purchase-id="${escapeAttr(String(state.v3ConsumerPurchase?.purchaseId || ''))}"><label>Extend minutes<input name="durationMinutes" type="number" min="1" max="${remaining}" step="1" value="${Math.min(state.v3ConsumerMinutes, remaining)}"/></label><div class="v3-consumer-charge"><span>Extension estimate</span><strong>${escapeHTML(quoted)}</strong><small data-v3-compute-estimate-detail>${escapeHTML(estimateDetail)}</small></div><small class="v3-compute-estimate-error" data-v3-compute-estimate-error>${escapeHTML(state.v3ConsumerError || '')}</small><button type="submit" data-v3-compute-submit ${estimate?.mode === 'extension' && !state.v3ConsumerBusy && !state.v3ConsumerEstimateLoading ? '' : 'disabled'}>Extend lease</button></form>` : '<div class="v3-consumer-limit-reached">Maximum rental time reached</div>'}<pre>${escapeHTML(v3RedactedConsumerJSON(lease.capability || {}))}</pre>${renderV3ComputeControl(lease)}<div class="v3-consumer-actions"><button class="danger ghost" type="button" data-v3-consumer-action="release-lease" data-lease-id="${escapeAttr(String(lease.leaseId || ''))}">Release lease</button></div></section>` : ''
+  return `<section class="v3-consumer-panel">${disclosure}${performanceDisclosure}<header><div><span>COMPUTE PURCHASE</span><strong>${lease ? 'Active lease and extension' : `Reserve ${limits.minMinutes}–${limits.maxMinutes} whole minutes`}</strong></div><em data-v3-consumer-balance>${escapeHTML(balanceLabel)}</em></header>${error}${purchaseForm}${leasePanel}${result}</section>`
+}
+
+function renderV3OwnedResourceItems(item: V3UnifiedListingItem) {
+  const { listing, product } = item
+  const cards = (item.resourceItems || []).map((resource) => {
+    const amount = Number(resource.price?.amount || 0)
+    const actions = [
+      resource.status === 'published' ? `<button class="ghost" type="button" data-v3-resource-item-action="pause" data-resource-item-id="${escapeAttr(resource.resourceItemId)}">Pause</button>` : '',
+      resource.status === 'paused' ? `<button type="button" data-v3-resource-item-action="resume" data-resource-item-id="${escapeAttr(resource.resourceItemId)}">Resume</button>` : '',
+      resource.status === 'ready' && listing.status === 'published' ? `<button type="button" data-v3-resource-item-action="publish" data-resource-item-id="${escapeAttr(resource.resourceItemId)}">Publish</button>` : '',
+      resource.status !== 'retired' ? `<button class="danger ghost" type="button" data-v3-resource-item-action="retire" data-resource-item-id="${escapeAttr(resource.resourceItemId)}">Retire</button>` : '',
+    ].join('')
+    return `<form class="v3-resource-owner-item" data-v3-resource-item-form data-resource-item-id="${escapeAttr(resource.resourceItemId)}"><header><div><strong>${escapeHTML(resource.fileName)}</strong><small>${escapeHTML(v3FormatBytes(resource.sizeBytes))} · ${escapeHTML(resource.status)}</small></div><em>v${resource.version}</em></header><div class="v3-resource-owner-fields"><label>Title<input name="title" value="${escapeAttr(resource.title)}" required/></label><label>Description<textarea name="description" required>${escapeHTML(resource.description)}</textarea></label><label>Tags<input name="tags" value="${escapeAttr((resource.tags || []).join(', '))}"/></label><label>Price (USDC)<input name="price" type="number" min="0.000001" step="0.000001" value="${escapeAttr(String(amount))}" required/></label><label>License<input name="license" value="${escapeAttr(resource.license)}" required/></label><label>Grant hours<input name="grantHours" type="number" min="1" max="720" step="1" value="${resource.grantHours}" required/></label></div><div class="v3-resource-owner-actions"><button type="submit">Save terms</button>${actions}</div></form>`
+  }).join('')
+  return `<section class="v3-listing-detail-section"><header><span>RESOURCE ITEMS</span><strong>${item.resourceItems?.length || 0} independently purchasable files</strong></header><div class="v3-resource-owner-list">${cards || '<p>No files have been added.</p>'}</div>${listing.status !== 'retired' ? `<button type="button" data-v3-resource-add-files data-listing-id="${escapeAttr(listing.listingId)}" data-product-id="${escapeAttr(product.productId)}" data-title="${escapeAttr(product.title)}" data-description="${escapeAttr(product.description)}">Add files</button>` : ''}</section>`
 }
 
 
@@ -3962,28 +4483,38 @@ function renderV3UnifiedListingRow(item: V3UnifiedListingItem) {
   const source = application?.source || listing.applicationSource || v3SourceForProduct(product)
   const sourceMeta = v3ListingSourceMeta(source)
   const statusMeta = v3ListingStatusMeta(listing.status)
-  const expanded = state.v3ExpandedListingId === listing.listingId
+  const rowId = item.rowId || listing.listingId
+  const expanded = state.v3ExpandedListingId === rowId
   const readiness = application?.readiness
-  const checks = readiness?.checks || []
+  const checks = (readiness?.checks || []).map(v3DisplayReadinessCheck)
   const passedChecks = checks.filter((check) => check.ready).length
-  const attention = ['unhealthy', 'provider_busy', 'capacity_insufficient'].includes(listing.status)
-  const searchable = [listing.listingId, product.productId, product.title, product.description, sourceMeta.label, statusMeta.label, isOwner ? 'owner mine' : 'marketplace'].filter(Boolean).join(' ').toLowerCase()
+  const fallbackActions = listing.status === 'published' ? ['pause'] : listing.status === 'draft' && readiness?.ready ? ['publish'] : ['paused', 'unhealthy', 'provider_busy', 'capacity_insufficient'].includes(listing.status) && readiness?.ready ? ['resume'] : []
+  const lifecycle = application?.lifecycle || { listed: listing.status === 'published' && listing.availability?.availableNow !== false, allowedActions: fallbackActions, statusReason: String(listing.availability?.reason || '') }
+  const deleteAllowed = lifecycle.allowedActions.includes('delete')
+  const ownerStatusReason = deleteAllowed
+    ? lifecycle.statusReason || 'You cannot purchase your own listing.'
+    : sx('Connected Cloud must be upgraded before Listing deletion is available.', '连接的 Cloud 升级后才能删除挂单。')
+  const toggleAction = lifecycle.listed ? (lifecycle.allowedActions.includes('pause') ? 'pause' : '') : lifecycle.allowedActions.includes('publish') ? 'publish' : lifecycle.allowedActions.includes('resume') ? 'resume' : ''
+  const attention = ['unhealthy', 'provider_busy', 'capacity_insufficient', 'performance_degraded'].includes(listing.status)
+  const displayTitle = item.focusResourceItem?.title || product.title || listing.productId
+  const displayDescription = item.focusResourceItem?.description || product.description
+  const displayPrice = item.focusResourceItem ? v3ListingPriceLabel(item.focusResourceItem.price) : v3ListingPriceLabel(listing.price || {})
+  const searchable = [listing.listingId, product.productId, displayTitle, displayDescription, item.focusResourceItem?.fileName, sourceMeta.label, statusMeta.label, isOwner ? 'owner mine' : 'marketplace'].filter(Boolean).join(' ').toLowerCase()
   const ownerActions = [
-    listing.status === 'draft' ? `<button type="button" data-v3-listing-action="publish" data-listing-id="${escapeAttr(listing.listingId)}" ${readiness?.ready ? '' : 'disabled'}>Publish</button>` : '',
-    listing.status === 'published' ? `<button class="ghost" type="button" data-v3-listing-action="pause" data-listing-id="${escapeAttr(listing.listingId)}">Pause</button>` : '',
-    ['paused', 'unhealthy', 'provider_busy', 'capacity_insufficient'].includes(listing.status) ? `<button type="button" data-v3-listing-action="resume" data-listing-id="${escapeAttr(listing.listingId)}" ${readiness?.ready ? '' : 'disabled'}>Resume</button>` : '',
-    listing.status !== 'retired' ? `<button class="danger ghost" type="button" data-v3-listing-action="retire" data-listing-id="${escapeAttr(listing.listingId)}">Retire</button>` : '',
+    product.productKind === 'compute' && ['draft', 'published'].includes(listing.status) ? `<button class="ghost" type="button" data-v3-compute-terms-edit data-listing-id="${escapeAttr(listing.listingId)}">${state.v3EditingListingId === listing.listingId ? 'Editing terms' : 'Edit terms'}</button>` : '',
+    `<button class="danger ghost" type="button" ${deleteAllowed ? 'data-v3-listing-delete' : 'data-v3-listing-delete-unavailable'} data-listing-id="${escapeAttr(listing.listingId)}" title="${escapeAttr(deleteAllowed ? 'Delete this Listing' : ownerStatusReason)}">Delete listing</button>`,
   ].join('')
   const agentProvenance = listing.creationActor === 'agent' ? `<section class="v3-listing-detail-section v3-agent-provenance"><header><span>AGENT SOURCE</span><strong>Created by Dock seller automation</strong></header><dl class="detail-grid"><div><dt>Draft run</dt><dd>${escapeHTML(listing.draftRunId || 'Not recorded')}</dd></div><div><dt>Source fingerprint</dt><dd>${escapeHTML((listing.sourceFingerprint || '').slice(0, 32) || 'Not recorded')}</dd></div><div><dt>MCP connection</dt><dd>${escapeHTML(listing.mcpConnection || 'Local Agent')}</dd></div><div><dt>Seller policy</dt><dd>${escapeHTML(listing.sellerPolicyReceipt ? `${listing.sellerPolicyReceipt.policyId} v${listing.sellerPolicyReceipt.version}` : 'Not recorded')}</dd></div></dl></section>` : ''
   const readinessPanel = `<section class="v3-listing-detail-section"><header><span>PUBLISH READINESS</span><strong>${checks.length ? `${passedChecks} of ${checks.length} checks passed` : 'Waiting for Cloud checks'}</strong></header><div class="v3-listing-checks">${checks.map((check) => `<div class="${check.ready ? 'passed' : 'failed'}"><span>${check.ready ? '&#10003;' : '!'}</span><div><strong>${escapeHTML(check.label)}</strong><small>${escapeHTML(check.detail || '')}</small></div></div>`).join('') || '<div class="failed"><span>!</span><div><strong>No readiness report</strong><small>Refresh to request current checks.</small></div></div>'}</div></section>`
-  return `<article class="v3-listing-application ${expanded ? 'expanded' : ''}" data-listing-row="${escapeAttr(listing.listingId)}" data-listing-source="${escapeAttr(source)}" data-listing-kind="${escapeAttr(product.productKind)}" data-listing-status="${escapeAttr(listing.status)}" data-listing-ready="${String(Boolean(readiness?.ready))}" data-listing-attention="${String(attention)}" data-listing-owner="${String(isOwner)}" data-listing-search="${escapeAttr(searchable)}">
-    <button type="button" class="v3-listing-summary" data-v3-listing-expand="${escapeAttr(listing.listingId)}" aria-expanded="${String(expanded)}">
+  return `<article class="v3-listing-application ${expanded ? 'expanded' : ''}" data-listing-row="${escapeAttr(rowId)}" data-listing-source="${escapeAttr(source)}" data-listing-kind="${escapeAttr(product.productKind)}" data-listing-status="${escapeAttr(listing.status)}" data-listing-ready="${String(Boolean(readiness?.ready))}" data-listing-attention="${String(attention)}" data-listing-owner="${String(isOwner)}" data-listing-search="${escapeAttr(searchable)}">
+    <button type="button" class="v3-listing-summary" data-v3-listing-expand="${escapeAttr(rowId)}" aria-expanded="${String(expanded)}">
       <span class="v3-listing-source-icon source-${escapeAttr(source)}">${icon(sourceMeta.icon)}</span>
-      <span class="v3-listing-primary"><strong>${escapeHTML(product.title || listing.productId)}</strong><small><em class="v3-source-badge source-${escapeAttr(source)}">${escapeHTML(sourceMeta.shortLabel)}</em><em class="v3-owner-badge ${isOwner ? 'owner' : 'market'}">${isOwner ? 'Owner' : 'Marketplace'}</em>${listing.creationActor === 'agent' ? '<em class="v3-source-badge agent-created">Agent created</em>' : ''}<span>${escapeHTML(product.providerDockId || listing.listingId)}</span></small></span>
-      <span class="v3-listing-summary-metrics"><span><small>Price</small><strong>${escapeHTML(v3ListingPriceLabel(listing.price || {}))}</strong></span><span><small>${isOwner ? 'Readiness' : 'Availability'}</small><strong>${isOwner ? checks.length ? `${passedChecks}/${checks.length} checks` : readiness?.ready ? 'Ready' : 'Pending' : listing.availability?.availableNow === false ? 'Unavailable' : 'Available now'}</strong></span></span>
-      <span class="v3-listing-state-pill tone-${escapeAttr(statusMeta.tone)}"><i></i>${escapeHTML(statusMeta.label)}</span><span class="v3-listing-chevron">${toolbarIcons.disclosure}</span>
+      <span class="v3-listing-primary"><strong>${escapeHTML(displayTitle)}</strong><small><em class="v3-source-badge source-${escapeAttr(source)}">${escapeHTML(sourceMeta.shortLabel)}</em><em class="v3-owner-badge ${isOwner ? 'owner' : 'market'}">${isOwner ? 'Owner' : 'Marketplace'}</em>${listing.creationActor === 'agent' ? '<em class="v3-source-badge agent-created">Agent created</em>' : ''}<span>${escapeHTML(item.focusResourceItem ? `${product.title} · ${item.focusResourceItem.fileName}` : product.providerDockId || listing.listingId)}</span></small></span>
+      <span class="v3-listing-summary-metrics"><span><small>Price</small><strong>${escapeHTML(displayPrice)}</strong></span><span><small>${isOwner ? 'Readiness' : 'Availability'}</small><strong>${isOwner ? checks.length ? `${passedChecks}/${checks.length} checks` : readiness?.ready ? 'Ready' : 'Pending' : listing.availability?.availableNow === false ? 'Unavailable' : 'Available now'}</strong></span></span>
+      ${isOwner ? '<span class="v3-listing-state-slot" aria-hidden="true"></span>' : `<span class="v3-listing-state-pill tone-${escapeAttr(statusMeta.tone)}"><i></i>${escapeHTML(statusMeta.label)}</span>`}<span class="v3-listing-chevron">${toolbarIcons.disclosure}</span>
     </button>
-    ${expanded ? `<div class="v3-listing-application-body"><div class="v3-listing-detail-head"><div><small>${isOwner ? 'YOUR LISTING' : 'MARKETPLACE OFFER'}</small><strong>${isOwner ? 'Manage this offer without leaving the market' : 'Review the manifest and use this product manually'}</strong></div><span class="${isOwner ? 'ready' : 'market'}">${isOwner ? `${icon(ShieldCheck)} Owner controls` : `${icon(BadgeCheck)} Public listing`}</span></div>${agentProvenance}<section class="v3-listing-detail-section"><header><span>PRODUCT MANIFEST</span><strong>${escapeHTML(product.description || 'Machine-readable Exora product')}</strong></header>${renderV3ApplicationManifest(source, product.manifest || {})}</section>${isOwner ? `${readinessPanel}<div class="v3-listing-actions"><span><strong>Owner controls</strong><small>You cannot purchase your own listing.</small></span>${ownerActions}</div>` : renderV3ConsumerPanel(item)}</div>` : ''}
+    ${isOwner ? `<button type="button" class="v3-listing-state-pill v3-listing-lifecycle-switch tone-${escapeAttr(statusMeta.tone)} ${lifecycle.listed ? 'is-listed' : ''}" role="switch" aria-checked="${String(lifecycle.listed)}" aria-label="${escapeAttr(lifecycle.listed ? 'Take Listing offline' : 'List this offer')}" title="${escapeAttr(lifecycle.statusReason || statusMeta.label)}" data-v3-listing-action="${escapeAttr(toggleAction)}" data-listing-id="${escapeAttr(listing.listingId)}" ${toggleAction ? '' : 'disabled'}><i></i>${escapeHTML(statusMeta.label)}</button>` : ''}
+    ${expanded ? `<div class="v3-listing-application-body"><div class="v3-listing-detail-head"><div><small>${isOwner ? 'YOUR LISTING' : 'MARKETPLACE OFFER'}</small><strong>${isOwner ? 'Manage this offer without leaving the market' : 'Review the manifest and use this product manually'}</strong></div><span class="${isOwner ? 'ready' : 'market'}">${isOwner ? `${icon(ShieldCheck)} Owner controls` : `${icon(BadgeCheck)} Public listing`}</span></div>${agentProvenance}<section class="v3-listing-detail-section"><header><span>PRODUCT MANIFEST</span><strong>${escapeHTML(product.description || 'Machine-readable Exora product')}</strong></header>${renderV3ApplicationManifest(source, product.manifest || {}, listing)}</section>${isOwner ? `${source === 'resources' ? renderV3OwnedResourceItems(item) : ''}${readinessPanel}${renderV3ComputeTermsEditor(listing)}<div class="v3-listing-actions"><span><strong>Owner controls</strong><small>${escapeHTML(ownerStatusReason)}</small></span>${ownerActions}</div>` : renderV3ConsumerPanel(item)}</div>` : ''}
   </article>`
 }
 
@@ -4028,13 +4559,12 @@ function renderV3UnifiedListingsPageV2() {
 
 function renderV3SellerSurface() {
   state.v3SellerTab = normalizeV3SellerTab(state.v3SellerTab)
-  const page = state.v3SellerTab === 'vm' ? renderV3VMPage() : state.v3SellerTab === 'resources' ? renderV3ResourcesPage() : state.v3SellerTab === 'endpoint' ? renderV3EndpointAgentPage() : state.v3SellerTab === 'api_bridge' || state.v3SellerTab === 'openapi' ? renderV3APIBridgePage() : renderV3UnifiedListingsPageV2()
+  const page = state.v3SellerTab === 'vm' ? renderV3VMPage() : state.v3SellerTab === 'resources' ? renderV3ResourcesPage() : state.v3SellerTab === 'endpoint' ? renderV3EndpointAgentPage() : state.v3SellerTab === 'api_bridge' ? renderV3APIBridgePage() : renderV3UnifiedListingsPageV2()
   const headings: Record<V3SellerTab, { kicker: string; title: string; description: string }> = {
     vm: { kicker: 'COMPUTE SUPPLY', title: 'List this computer', description: 'Measure this PC, install a disposable Linux environment, reserve capacity, then submit a private Listing draft.' },
     resources: { kicker: 'DIGITAL RESOURCES', title: 'Package files and data', description: 'Bundle versioned files, define delivery rights and pricing, then submit a private Listing draft.' },
     endpoint: { kicker: 'LOCAL ENDPOINT', title: 'Expose a local or private service', description: 'Dock must stay online. The local URL and credentials remain only on this Dock while Cloud carries routing and metering contracts.' },
     api_bridge: { kicker: 'PUBLIC API BRIDGE', title: 'Connect a public provider API', description: 'Cloud calls the seller public HTTPS API and keeps its credential encrypted. Dock is not required while buyers invoke it.' },
-    openapi: { kicker: 'PUBLIC API BRIDGE', title: 'Connect a public provider API', description: 'Cloud calls the seller public HTTPS API and keeps its credential encrypted. Dock is not required while buyers invoke it.' },
     listings: { kicker: 'UNIFIED MARKET', title: 'Browse and manage listings', description: 'Discover available products, use them manually, and manage your own drafts and published offers in one list.' },
   }
   const heading = headings[state.v3SellerTab]
@@ -4074,23 +4604,19 @@ async function v3CreateProductAndListing(productInput: Record<string, unknown>, 
   const applicationSource = typeof source === 'boolean' ? 'vm' : source
   let effectivePrice = price
   if (productInput.productKind === 'compute') {
-    effectivePrice = {
-      ...price,
-      baseFee: state.v3BaseFeeEnabled && state.v3BaseFee > 0 ? { amount: state.v3BaseFee, currency: 'USD', unit: 'lease' } : undefined,
-      minimumMinutes: state.v3MinimumMinutes,
-      longDurationDiscount: state.v3LongDiscountEnabled && state.v3LongDiscountPercent > 0 ? { everyMinutes: state.v3LongDiscountAfterMinutes, additionalPercentOff: state.v3LongDiscountPercent, minimumPricePercent: state.v3LongDiscountMinimumPricePercent } : undefined,
-    }
+    effectivePrice = v3ComputePriceFromState()
+    const limits = v3ComputeLimitsFromState()
     const manifest = (productInput.manifest || {}) as Record<string, any>
-    productInput.manifest = { ...manifest, price: effectivePrice, limits: { ...(manifest.limits || {}), minMinutes: state.v3MinimumMinutes } }
+    productInput.manifest = { ...manifest, price: effectivePrice, limits: { ...(manifest.limits || {}), ...limits }, workloadPolicy: v3ComputeWorkloadPolicy(), performancePolicy: v3ComputePerformancePolicy() }
   }
   const attemptManifest = (productInput.manifest || {}) as Record<string, any>
   const attemptFingerprint = productInput.productKind === 'compute'
-    ? JSON.stringify({ applicationSource, productKind: productInput.productKind, title: productInput.title, description: attemptManifest.runtimeBackend ? undefined : productInput.description, effectivePrice, valid, runtimeBackend: attemptManifest.runtimeBackend, environmentImageId: attemptManifest.environmentImageId || attemptManifest.template?.imageId, environmentImageVersion: attemptManifest.environmentImageVersion || attemptManifest.template?.imageVersion, template: attemptManifest.runtimeBackend ? undefined : attemptManifest.template, workspaceGiB: attemptManifest.workspaceGiB })
+    ? JSON.stringify({ applicationSource, productKind: productInput.productKind, title: productInput.title, description: attemptManifest.runtimeBackend ? undefined : productInput.description, effectivePrice, limits: attemptManifest.limits, workloadPolicy: v3ComputeWorkloadPolicy(), performancePolicy: v3ComputePerformancePolicy(), valid, runtimeBackend: attemptManifest.runtimeBackend, environmentImageId: attemptManifest.environmentImageId || attemptManifest.template?.imageId, environmentImageVersion: attemptManifest.environmentImageVersion || attemptManifest.template?.imageVersion, template: attemptManifest.runtimeBackend ? undefined : attemptManifest.template, workspaceGiB: attemptManifest.workspaceGiB })
     : JSON.stringify({ productInput, effectivePrice, valid })
   const idempotencyKey = v3StableApplicationAttempt(applicationSource, attemptFingerprint)
   const manifest = (productInput.manifest || {}) as Record<string, unknown>
   const created = await invoke<{ product: V3Product }>('provider_product_create', { input: { ...productInput, applicationSource, manifest: { ...manifest, applicationSource }, idempotencyKey } })
-  const saved = await invoke<{ listing: V3Listing }>('provider_listing_save', { input: { productId: created.product.productId, applicationSource, status: 'draft', price: effectivePrice, validation: { valid }, availability: { availableNow: false }, idempotencyKey } })
+  const saved = await invoke<{ listing: V3Listing }>('provider_listing_save', { input: { productId: created.product.productId, applicationSource, status: 'draft', price: effectivePrice, limits: productInput.productKind === 'compute' ? v3ComputeLimitsFromState() : undefined, workloadPolicy: productInput.productKind === 'compute' ? v3ComputeWorkloadPolicy() : undefined, performancePolicy: productInput.productKind === 'compute' ? v3ComputePerformancePolicy() : undefined, validation: { valid }, availability: { availableNow: false }, idempotencyKey } })
   state.v3HighlightedListingId = saved.listing.listingId
   state.v3ExpandedListingId = saved.listing.listingId
   state.v3SellerTab = 'listings'
@@ -4137,7 +4663,10 @@ function attachV3ResourceSelectHandlers() {
       const value = option.dataset.value || ''
       const selectedOption = v3ResourceSelectOptions[name].find((item) => item.value === value)
       if (!selectedOption) return
-      if (name === 'license') state.v3ResourceLicense = value
+      if (name === 'license') {
+        state.v3ResourceLicense = value
+        state.v3ResourceSources = state.v3ResourceSources.map((file) => ({ ...file, license: value }))
+      }
       hidden.value = value
       const valueNode = trigger.querySelector('span')
       if (valueNode) valueNode.textContent = selectedOption.label
@@ -4220,7 +4749,6 @@ type V3AgentMaterialKind = 'endpoint' | 'api_bridge'
 type V3AgentMaterialImportResult = {
   files?: V3APIMaterial[]
   canceled?: boolean
-  discovery?: { title?: string; description?: string; baseUrl?: string; operations?: Array<{ operationId: string; method: string; path: string; displayName: string }> }
 }
 
 const v3AgentMaterialRevisions: Record<V3AgentMaterialKind, number> = { endpoint: 0, api_bridge: 0 }
@@ -4253,14 +4781,6 @@ function applyV3AgentMaterialImport(kind: V3AgentMaterialKind, result: V3AgentMa
   }
   state.v3APIMaterials = result.files || []
   invalidateV3AgentMaterials('api_bridge')
-  if (result.discovery && !state.v3APIDraftVersion) {
-    state.v3APITitle ||= result.discovery.title || ''
-    state.v3APIDescription ||= result.discovery.description || ''
-    state.v3APIBaseURL ||= result.discovery.baseUrl || ''
-    if (!state.v3APIRoutes.length) {
-      state.v3APIRoutes = (result.discovery.operations || []).map((route, index) => ({ id: `discovered-${index}`, routeId: `local-${crypto.randomUUID()}`, operationId: route.operationId, method: route.method, path: route.path, title: route.displayName, selected: true, price: 0, pricing: [{ dimension: 'request', rateAtomic: 0, per: 1, meterSource: 'gateway', chargeOn: 'started' }], maxChargePerInvocationAtomic: 0 }))
-    }
-  }
 }
 
 async function importV3AgentMaterials(kind: V3AgentMaterialKind, filePaths?: string[]) {
@@ -4305,6 +4825,90 @@ async function removeV3AgentMaterial(kind: V3AgentMaterialKind, button: HTMLButt
   })
 }
 
+async function refreshV3ServiceAgentSessions() {
+  if (state.v3ServiceAgentSessionsLoading) return
+  state.v3ServiceAgentSessionsLoading = true
+  try {
+    const result = await invoke<{ sessions?: AgentSessionStatus[] }>('agent_session_status')
+    state.agentSessions = result.sessions || []
+    state.v3ServiceAgentSessionsLoaded = true
+  } catch {
+    state.agentSessions = []
+    state.v3ServiceAgentSessionsLoaded = true
+  } finally {
+    state.v3ServiceAgentSessionsLoading = false
+    renderDecisionPanel()
+  }
+}
+
+async function saveV3ServiceMaterialNote(kind: V3AgentMaterialKind, form: HTMLFormElement) {
+  const endpoint = kind === 'endpoint'
+  const data = new FormData(form)
+  const text = String(data.get(endpoint ? 'endpointMaterialNote' : 'apiMaterialNote') || '').trim()
+  if (!text) throw new Error('Enter a service description or request/response example first.')
+  const draftId = endpoint ? state.v3EndpointDraftId : state.v3APIDraftId
+  const result = await invoke<V3AgentMaterialImportResult>('provider_service_material_note_save', { input: { draftId, text } })
+  if (endpoint) state.v3EndpointMaterialNote = text
+  else state.v3APIMaterialNote = text
+  applyV3AgentMaterialImport(kind, result)
+  renderDecisionPanel()
+}
+
+function recordV3AgentDraftFailure(kind: V3AgentMaterialKind, error: unknown) {
+  const failure = humanizeError(error)
+  if (kind === 'endpoint') {
+    state.v3EndpointFailedRunId ||= `agent_failed_${crypto.randomUUID().replace(/-/g, '')}`
+    state.v3EndpointFallbackReason ||= failure
+  } else {
+    state.v3APIFailedRunId ||= `agent_failed_${crypto.randomUUID().replace(/-/g, '')}`
+    state.v3APIFallbackReason ||= failure
+  }
+}
+
+async function saveV3ManualServiceFallback(kind: V3AgentMaterialKind, form: HTMLFormElement) {
+  const endpoint = kind === 'endpoint'
+  const prefix = endpoint ? 'endpoint' : 'api'
+  const data = new FormData(form)
+  const title = String(data.get(`${prefix}FallbackTitle`) || '').trim()
+  const description = String(data.get(`${prefix}FallbackDescription`) || '').trim()
+  const reason = String(data.get(`${prefix}FallbackReason`) || '').trim()
+  const rawManifest = String(data.get(`${prefix}FallbackManifest`) || '').trim()
+  const failedRunId = endpoint ? state.v3EndpointFailedRunId : state.v3APIFailedRunId
+  if (!failedRunId || !title || !reason || !rawManifest) throw new Error('Title, failure reason, and a complete ServiceManifest JSON are required.')
+  let serviceManifest: V3ServiceManifest
+  try { serviceManifest = JSON.parse(rawManifest) as V3ServiceManifest } catch { throw new Error('ServiceManifest must be valid JSON.') }
+  const materials = endpoint ? state.v3EndpointMaterials : state.v3APIMaterials
+  const sourceSha256 = await serviceReviewSHA256(materials.map(({ name, sizeBytes, sha256 }) => ({ name, sizeBytes, sha256: sha256 || '' })))
+  const draftId = endpoint ? state.v3EndpointDraftId : state.v3APIDraftId
+  const expectedVersion = endpoint ? state.v3EndpointDraft?.version || 0 : state.v3APIDraftVersion
+  const result = await invoke<{ draft: V3APIBridgeDraft }>('provider_service_draft_save', { input: {
+    draftId,
+    expectedVersion,
+    applicationSource: kind,
+    title,
+    description,
+    serviceManifest,
+    normalization: { mode: 'manual_fallback', failedRunId, fallbackReason: reason, sourceSha256, actor: 'human' },
+    unresolvedFields: [],
+  } })
+  if (endpoint) {
+    applyV3EndpointDraft(result.draft)
+    state.v3EndpointFailedRunId = ''
+    state.v3EndpointFallbackReason = ''
+    state.v3EndpointFallbackManifest = ''
+    state.v3EndpointDraftMaterialFingerprint = recordV3AgentMaterialReceipt('endpoint', draftId, result.draft.version, materials)
+    state.v3EndpointRequiredDraftVersion = result.draft.version
+  } else {
+    applyV3APIBridgeDraft(result.draft)
+    state.v3APIFailedRunId = ''
+    state.v3APIFallbackReason = ''
+    state.v3APIFallbackManifest = ''
+    state.v3APIDraftMaterialFingerprint = recordV3AgentMaterialReceipt('api_bridge', draftId, result.draft.version, materials)
+    state.v3APIRequiredDraftVersion = result.draft.version
+  }
+  renderDecisionPanel()
+}
+
 async function chooseV3ResourceFiles(filePaths?: string[]) {
   if (v3ResourceFileSelectionPending) return
   v3ResourceFileSelectionPending = true
@@ -4313,14 +4917,15 @@ async function chooseV3ResourceFiles(filePaths?: string[]) {
     renderDecisionPanel()
   }
   try {
-    const response = await invoke<{ canceled?: boolean; archive?: V3ResourceArchive; sources?: V3ResourceSource[] }>(
+    const response = await invoke<{ canceled?: boolean; files?: Array<Pick<V3ResourceSource, 'token' | 'name' | 'sizeBytes' | 'sha256'>> }>(
       'provider_asset_choose_files',
       filePaths ? { input: { filePaths } } : undefined,
     )
-    if (!response.canceled && response.archive) {
+    if (!response.canceled && response.files?.length) {
       clearV3ApplicationAttempt('resources')
-      state.v3ResourceArchive = response.archive
-      state.v3ResourceSources = response.sources || []
+      const additions = response.files.map((file) => ({ ...file, title: file.name, description: state.v3ResourceDescription, price: 0, tags: [], license: state.v3ResourceLicense, grantHours: state.v3ResourceGrantHours, status: 'ready' as const }))
+      const existing = new Set(state.v3ResourceSources.map((file) => file.token))
+      state.v3ResourceSources = [...state.v3ResourceSources, ...additions.filter((file) => !existing.has(file.token))]
     }
   } finally {
     v3ResourceFileSelectionPending = false
@@ -4405,11 +5010,30 @@ function attachV3SurfaceHandlers() {
   updateV3DiskSpeedFact()
   attachV3ResourceSelectHandlers()
   attachV3AgentMaterialDropHandlers()
+  fields.actionView.querySelectorAll<HTMLSelectElement>('select[name="authType"]').forEach((select) => {
+    const choices: Array<[V3UpstreamAuthType, string]> = [['header_api_key', 'Header API key'], ['query_api_key', 'Query API key'], ['cookie_api_key', 'Cookie API key'], ['oauth2_client_credentials', 'OAuth2 client credentials'], ['mtls', 'mTLS client certificate']]
+    for (const [value, label] of choices) {
+      if (!select.querySelector(`option[value="${value}"]`)) select.add(new Option(label, value))
+    }
+    const endpointForm = Boolean(select.closest('[data-v3-form="endpoint-agent"]'))
+    const selected = endpointForm ? state.v3EndpointAuthType : state.v3APIAuthType
+    select.value = selected
+    if (selected.endsWith('_api_key') && !select.parentElement?.parentElement?.querySelector('input[name="apiKeyHeader"]')) {
+      const label = document.createElement('label')
+      label.textContent = selected === 'header_api_key' ? 'API key header' : selected === 'query_api_key' ? 'API key query parameter' : 'API key cookie name'
+      const input = document.createElement('input')
+      input.name = 'apiKeyHeader'
+      input.value = endpointForm ? state.v3EndpointAPIKeyHeader : state.v3APIKeyHeader
+      label.append(input)
+      select.parentElement?.parentElement?.append(label)
+    }
+  })
   fields.actionView.querySelectorAll<HTMLDetailsElement>('[data-v3-agent-prompt]').forEach((details) => details.addEventListener('toggle', () => {
     const promptKind = details.dataset.v3AgentPrompt
     if (promptKind) localStorage.setItem(`exora.agentPrompt.${promptKind}.expanded`, String(details.open))
   }))
   if (state.v3SellerTab === 'vm' && navigator.userAgent.includes('Windows') && !state.v3EnvironmentImagesLoaded) void loadV3WindowsEnvironments()
+  if (state.v3SellerTab === 'vm' && !navigator.userAgent.includes('Windows')) void loadV3LinuxPricingSettings()
   fields.actionView.querySelector<HTMLFormElement>('[data-v3-catalog-search]')?.addEventListener('submit', (event) => { event.preventDefault(); const form = event.currentTarget as HTMLFormElement; state.v3CatalogQuery = String(new FormData(form).get('query') || ''); void loadV3Catalog() })
   fields.actionView.querySelectorAll<HTMLElement>('.v3-product-card[data-v3-product]').forEach((card) => {
     const open = () => { state.v3SelectedProduct = state.v3Products.find((item) => item.productId === card.dataset.v3Product); renderDecisionPanel() }
@@ -4417,6 +5041,10 @@ function attachV3SurfaceHandlers() {
     card.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open() } })
   })
   const action = (name: string, handler: () => void) => fields.actionView.querySelector<HTMLButtonElement>(`[data-v3-action="${name}"]`)?.addEventListener('click', handler)
+  if ((state.v3SellerTab === 'endpoint' || state.v3SellerTab === 'api_bridge') && !state.v3ServiceAgentSessionsLoaded && !state.v3ServiceAgentSessionsLoading) void refreshV3ServiceAgentSessions()
+  action('service-agent-refresh', () => void refreshV3ServiceAgentSessions())
+  action('endpoint-agent-unavailable', () => { recordV3AgentDraftFailure('endpoint', new Error('No active local Agent session has seller.draft permission.')); renderDecisionPanel() })
+  action('api-agent-unavailable', () => { recordV3AgentDraftFailure('api_bridge', new Error('No active local Agent session has seller.draft permission.')); renderDecisionPanel() })
   action('activity-back', closeV3ActivityDetail)
   action('activity-refresh', () => {
     const sessionId = state.selectedV3ActivitySessionId
@@ -4426,8 +5054,8 @@ function attachV3SurfaceHandlers() {
     const value = button.dataset.copyV3Identifier || ''
     if (value) void navigator.clipboard.writeText(value).then(() => showToast(t('toast.identifierCopied')))
   }))
-  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-order-key-action]').forEach((button) => button.addEventListener('click', () => {
-    void updateOrderAccessKey(button.dataset.v3OrderKeyAction as 'create' | 'rotate' | 'revoke')
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-api-order-action]').forEach((button) => button.addEventListener('click', () => {
+    void updateAPIOrder(button.dataset.v3ApiOrderAction as 'deactivate' | 'request-reactivation')
   }))
   fields.actionView.querySelectorAll<HTMLFormElement>('[data-v3-approval-form]').forEach((form) => form.addEventListener('submit', (event) => {
     event.preventDefault()
@@ -4444,43 +5072,12 @@ function attachV3SurfaceHandlers() {
     void Promise.all([loadV3Catalog(), loadV3Listings()])
   })
   const endpointForm = fields.actionView.querySelector<HTMLFormElement>('[data-v3-form="endpoint-agent"]')
-  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-interface-mode]').forEach((button) => button.addEventListener('click', () => {
-    const [kind, rawMode] = String(button.dataset.v3InterfaceMode || '').split(':')
-    const nextMode = rawMode as V3InterfaceMode
-    if (nextMode !== 'passthrough' && nextMode !== 'agent_managed') return
-    let changed = false
-    if (kind === 'endpoint' && state.v3EndpointInterfaceMode !== nextMode) {
-      state.v3EndpointInterfaceMode = nextMode
-      if (state.v3EndpointDraft) state.v3EndpointDraft = { ...state.v3EndpointDraft, interfaceMode: nextMode, contract: undefined, adapter: undefined }
-      state.v3EndpointReviewStatus = {}
-      state.v3EndpointConfirmed = []
-      state.v3EndpointDraftDirty = true
-      invalidateV3AgentMaterials('endpoint')
-      changed = true
-    }
-    if (kind === 'api_bridge' && state.v3APIInterfaceMode !== nextMode) {
-      state.v3APIInterfaceMode = nextMode
-      if (state.v3APIDraft) state.v3APIDraft = { ...state.v3APIDraft, interfaceMode: nextMode, contract: undefined, adapter: undefined }
-      state.v3APIReviewStatus = {}
-      state.v3APIDraftDirty = true
-      invalidateV3AgentMaterials('api_bridge')
-      changed = true
-    }
-    if (!changed) return
-    button.closest<HTMLElement>('.v3-interface-mode')?.setAttribute('data-mode', nextMode)
-    button.setAttribute('aria-checked', String(nextMode === 'agent_managed'))
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      renderDecisionPanel()
-      return
-    }
-    window.setTimeout(() => renderDecisionPanel(), 180)
-  }))
   if (endpointForm && !state.v3EndpointMaterialsLoaded) {
     state.v3EndpointMaterialsLoaded = true
     const draftId = state.v3EndpointDraftId
     const materialRevision = v3AgentMaterialRevisions.endpoint
     const materialsRequest = invoke<{ files: V3APIMaterial[] }>('provider_api_bridge_materials_get', { input: { draftId } }).catch(() => ({ files: [] }))
-    const savedDraftRequest = invoke<{ draft: V3APIBridgeDraft }>('provider_api_bridge_draft_get', { input: { draftId } }).catch(() => undefined)
+    const savedDraftRequest = invoke<{ draft: V3APIBridgeDraft }>('provider_service_draft_get', { input: { draftId } }).catch(() => undefined)
     void materialsRequest.then((materials) => {
       if (state.v3EndpointDraftId !== draftId || v3AgentMaterialRevisions.endpoint !== materialRevision) return
       state.v3EndpointMaterials = materials.files || []
@@ -4500,11 +5097,8 @@ function attachV3SurfaceHandlers() {
     if (!endpointForm) return
     const data = new FormData(endpointForm)
     state.v3EndpointLocalURL = String(data.get('localBaseUrl') || '').trim()
-    state.v3EndpointHealthPath = state.v3EndpointDraft?.healthPath || '/health'
-    state.v3EndpointAuthType = String(data.get('authType') || 'none') as typeof state.v3EndpointAuthType
-    state.v3EndpointSecret = String(data.get('secret') || '')
-    state.v3EndpointAPIKeyHeader = String(data.get('apiKeyHeader') || state.v3EndpointAPIKeyHeader).trim() || 'X-API-Key'
-    state.v3EndpointBasicUsername = String(data.get('basicUsername') || state.v3EndpointBasicUsername).trim()
+    state.v3EndpointHealthPath = String(data.get('healthPath') || state.v3EndpointHealthPath).trim() || '/health'
+    syncV3RuntimeAuthFromForm('endpoint', data)
     state.v3EndpointTimeout = Math.max(1, Math.min(300, Number(data.get('timeoutSeconds') || 120)))
     state.v3EndpointConcurrency = Math.max(1, Math.min(64, Number(data.get('concurrency') || 1)))
     state.v3EndpointRouteTestPath = String(data.get('routeTestPath') || state.v3EndpointRouteTestPath).trim()
@@ -4513,15 +5107,17 @@ function attachV3SurfaceHandlers() {
     state.v3EndpointRouteTestBody = String(data.get('routeTestBody') || '')
     state.v3EndpointRouteTestDangerConfirmed = data.get('routeTestDanger') === 'on'
   }
-  const endpointCredentialSecret = () => state.v3EndpointAuthType === 'basic' ? `${state.v3EndpointBasicUsername}:${state.v3EndpointSecret}` : state.v3EndpointSecret
+  const endpointCredentialSecret = () => v3RuntimeCredential('endpoint')
+  action('endpoint-material-note-save', () => { if (endpointForm) void run(() => saveV3ServiceMaterialNote('endpoint', endpointForm)) })
   action('endpoint-materials-add', () => void importV3AgentMaterials('endpoint'))
   fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-endpoint-material-remove]').forEach((button) => button.addEventListener('click', () => void removeV3AgentMaterial('endpoint', button)))
   action('endpoint-prompt-copy', () => void navigator.clipboard.writeText(endpointAgentPrompt()).then(() => showToast(t('toast.agentPromptCopied'))))
   action('endpoint-prompt-refresh', () => { renderDecisionPanel() })
   action('endpoint-draft-check', () => void run(async () => {
     if (!state.v3EndpointMaterials.length) throw new Error('Add at least one supported document before checking the Agent draft.')
+    try {
     const materialRevisionChanged = !v3AgentMaterialsCurrent('endpoint')
-    const result = await invoke<{ draft: V3APIBridgeDraft }>('provider_api_bridge_draft_get', { input: { draftId: state.v3EndpointDraftId } })
+    const result = await invoke<{ draft: V3APIBridgeDraft }>('provider_service_draft_get', { input: { draftId: state.v3EndpointDraftId } })
     if (result.draft.version < state.v3EndpointRequiredDraftVersion) throw new Error(`The Agent draft is stale. Save version ${state.v3EndpointRequiredDraftVersion} or newer for the current materials.`)
     applyV3EndpointDraft(result.draft)
     if (materialRevisionChanged) {
@@ -4532,7 +5128,13 @@ function attachV3SurfaceHandlers() {
     state.v3EndpointDraftMaterialFingerprint = recordV3AgentMaterialReceipt('endpoint', state.v3EndpointDraftId, result.draft.version, state.v3EndpointMaterials)
     state.v3EndpointRequiredDraftVersion = result.draft.version
     renderDecisionPanel()
+    } catch (error) {
+      recordV3AgentDraftFailure('endpoint', error)
+      renderDecisionPanel()
+      throw error
+    }
   }))
+  action('endpoint-fallback-save', () => void run(async () => { if (endpointForm) await saveV3ManualServiceFallback('endpoint', endpointForm) }))
   const markEndpointReviewModified = (id: string) => {
     if (!id) return
     state.v3EndpointReviewStatus[id] = 'modified'
@@ -4551,23 +5153,18 @@ function attachV3SurfaceHandlers() {
   endpointForm?.querySelectorAll<HTMLButtonElement>('[data-v3-endpoint-review-index]').forEach((button) => button.addEventListener('click', () => { const previous = state.v3EndpointReviewIndex; state.v3EndpointReviewIndex = Number(button.dataset.v3EndpointReviewIndex || 0); if (previous !== state.v3EndpointReviewIndex) { state.v3EndpointRouteTestPath = ''; state.v3EndpointRouteTestDangerConfirmed = false; state.v3EndpointRouteTestResult = undefined } renderDecisionPanel() }))
   endpointForm?.querySelector<HTMLButtonElement>('[data-v3-endpoint-review-previous]')?.addEventListener('click', () => { state.v3EndpointReviewIndex = Math.max(0, state.v3EndpointReviewIndex - 1); state.v3EndpointRouteTestPath = ''; state.v3EndpointRouteTestDangerConfirmed = false; renderDecisionPanel() })
   endpointForm?.querySelector<HTMLButtonElement>('[data-v3-endpoint-review-next]')?.addEventListener('click', () => { state.v3EndpointReviewIndex = Math.min(endpointReviewIDs().length - 1, state.v3EndpointReviewIndex + 1); state.v3EndpointRouteTestPath = ''; state.v3EndpointRouteTestDangerConfirmed = false; renderDecisionPanel() })
-  endpointForm?.querySelector<HTMLButtonElement>('[data-v3-endpoint-review-confirm]')?.addEventListener('click', (event) => { const id = (event.currentTarget as HTMLButtonElement).dataset.v3EndpointReviewConfirm || ''; if (id && endpointUnresolvedForReview(id).length === 0) { state.v3EndpointReviewStatus[id] = 'confirmed'; state.v3EndpointConfirmed = [...new Set([...state.v3EndpointConfirmed, id])]; persistEndpointReview(); state.v3EndpointReviewIndex = Math.min(endpointReviewIDs().length - 1, state.v3EndpointReviewIndex + 1) } renderDecisionPanel() })
-  endpointForm?.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('[data-v3-endpoint-draft]').forEach((input) => input.addEventListener('input', () => { const draft = state.v3EndpointDraft; if (!draft) return; const field = input.dataset.v3EndpointDraft as 'title' | 'description' | 'protocol' | 'healthPath'; (draft as any)[field] = input.value; resolveEndpointBoundField('service', field); markEndpointReviewModified('service') }))
+  endpointForm?.querySelector<HTMLButtonElement>('[data-v3-endpoint-review-confirm]')?.addEventListener('click', (event) => { const id = (event.currentTarget as HTMLButtonElement).dataset.v3EndpointReviewConfirm || ''; if (id && endpointUnresolvedForReview(id).length === 0 && v3ServiceReviewIssues('endpoint', id).length === 0) { state.v3EndpointReviewStatus[id] = 'confirmed'; state.v3EndpointConfirmed = [...new Set([...state.v3EndpointConfirmed, id])]; persistEndpointReview(); state.v3EndpointReviewIndex = Math.min(endpointReviewIDs().length - 1, state.v3EndpointReviewIndex + 1) } renderDecisionPanel() })
+  endpointForm?.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('[data-v3-endpoint-draft]').forEach((input) => input.addEventListener('input', () => { const draft = state.v3EndpointDraft; if (!draft) return; const field = input.dataset.v3EndpointDraft as 'title' | 'description'; draft[field] = input.value; resolveEndpointBoundField('service', field); markEndpointReviewModified('service') }))
   endpointForm?.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('[data-v3-endpoint-draft]').forEach((input) => input.addEventListener('change', () => renderDecisionPanel()))
-  endpointForm?.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-v3-endpoint-route]').forEach((input) => input.addEventListener('input', () => { const route = state.v3EndpointDraft?.routes[state.v3EndpointReviewIndex - 1]; if (!route) return; const field = input.dataset.v3EndpointRoute || ''; (route as any)[field] = field === 'maxChargePerInvocationAtomic' ? Math.max(0, Number(input.value || 0)) : input.value; resolveEndpointBoundField(`route:${route.routeId}`, field); markEndpointReviewModified(`route:${route.routeId}`) }))
-  endpointForm?.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-v3-endpoint-route]').forEach((input) => input.addEventListener('change', () => renderDecisionPanel()))
-  endpointForm?.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-v3-endpoint-price]').forEach((input) => input.addEventListener('input', () => { const route = state.v3EndpointDraft?.routes[state.v3EndpointReviewIndex - 1]; const index = Number(input.dataset.priceIndex || 0); const price = route?.pricing[index]; if (!route || !price) return; const field = input.dataset.v3EndpointPrice || ''; (price as any)[field] = ['rateAtomic','per'].includes(field) ? Math.max(field === 'per' ? 1 : 0, Number(input.value || 0)) : input.value; resolveEndpointBoundField(`route:${route.routeId}`, field, index); markEndpointReviewModified(`route:${route.routeId}`) }))
-  endpointForm?.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-v3-endpoint-price]').forEach((input) => input.addEventListener('change', () => renderDecisionPanel()))
-  action('endpoint-price-add', () => { const route = state.v3EndpointDraft?.routes[state.v3EndpointReviewIndex - 1]; if (!route) return; route.pricing.push({ dimension: 'request', rateAtomic: 0, per: 1, meterSource: 'gateway', chargeOn: 'started' }); markEndpointReviewModified(`route:${route.routeId}`); renderDecisionPanel() })
-  endpointForm?.querySelectorAll<HTMLButtonElement>('[data-v3-endpoint-price-remove]').forEach((button) => button.addEventListener('click', () => { const route = state.v3EndpointDraft?.routes[state.v3EndpointReviewIndex - 1]; if (!route || route.pricing.length <= 1) return; route.pricing.splice(Number(button.dataset.v3EndpointPriceRemove || 0), 1); markEndpointReviewModified(`route:${route.routeId}`); renderDecisionPanel() }))
-  action('endpoint-route-add', () => { const draft = state.v3EndpointDraft; if (!draft) return; const routeId = `local-${crypto.randomUUID()}`; draft.routes.push({ routeId, operationId: `operation_${draft.routes.length + 1}`, method: 'POST', path: `/operation-${draft.routes.length + 1}`, displayName: 'New operation', pricing: [{ dimension: 'request', rateAtomic: 0, per: 1, meterSource: 'gateway', chargeOn: 'started' }], maxChargePerInvocationAtomic: 0 }); state.v3EndpointReviewIndex = draft.routes.length; state.v3EndpointReviewStatus[`route:${routeId}`] = 'modified'; state.v3EndpointDraftDirty = true; renderDecisionPanel() })
-  action('endpoint-route-remove', () => { const draft = state.v3EndpointDraft; const index = state.v3EndpointReviewIndex - 1; if (!draft || index < 0 || draft.routes.length <= 1) return; const [removed] = draft.routes.splice(index, 1); delete state.v3EndpointReviewStatus[`route:${removed.routeId}`]; state.v3EndpointReviewIndex = Math.max(0, index); state.v3EndpointDraftDirty = true; state.v3EndpointProbe = undefined; renderDecisionPanel() })
-  endpointUnresolvedForReview(state.v3EndpointReviewIndex === 0 ? 'service' : `route:${state.v3EndpointDraft?.routes[state.v3EndpointReviewIndex - 1]?.routeId}`).filter((path) => !endpointPathField(path)).forEach((path) => { const warning = endpointForm?.querySelector<HTMLElement>('.v3-api-review-warning'); const button = document.createElement('button'); button.type = 'button'; button.className = 'ghost v3-api-explicit-resolution'; button.textContent = `Mark handled: ${path}`; button.addEventListener('click', () => { if (state.v3EndpointDraft) state.v3EndpointDraft.unresolvedFields = (state.v3EndpointDraft.unresolvedFields || []).filter((item) => item !== path); const id = state.v3EndpointReviewIndex === 0 ? 'service' : `route:${state.v3EndpointDraft?.routes[state.v3EndpointReviewIndex - 1]?.routeId}`; markEndpointReviewModified(id); renderDecisionPanel() }); warning?.append(button) })
-  action('endpoint-draft-save', () => void run(async () => { const previous = new Map(endpointReviewIDs().map((id) => [endpointReviewFingerprint(id), state.v3EndpointReviewStatus[id]])); const result = await invoke<{ draft: V3APIBridgeDraft }>('provider_api_bridge_draft_save', { input: currentV3EndpointDraft() }); applyV3EndpointDraft(result.draft); state.v3EndpointDraftMaterialFingerprint = recordV3AgentMaterialReceipt('endpoint', state.v3EndpointDraftId, result.draft.version, state.v3EndpointMaterials); state.v3EndpointRequiredDraftVersion = result.draft.version; endpointReviewIDs().forEach((id) => { const status = previous.get(endpointReviewFingerprint(id)); if (status) state.v3EndpointReviewStatus[id] = status }); state.v3EndpointConfirmed = endpointReviewIDs().filter((id) => state.v3EndpointReviewStatus[id] === 'confirmed'); persistEndpointReview(); renderDecisionPanel() }))
+  endpointUnresolvedForReview(state.v3EndpointReviewIndex === 0 ? 'service' : `operation:${state.v3EndpointDraft?.operationReviews[state.v3EndpointReviewIndex - 1]?.operationId}`).filter((path) => !endpointPathField(path)).forEach((path) => { const warning = endpointForm?.querySelector<HTMLElement>('.v3-api-review-warning'); const button = document.createElement('button'); button.type = 'button'; button.className = 'ghost v3-api-explicit-resolution'; button.textContent = `Mark handled: ${path}`; button.addEventListener('click', () => { if (state.v3EndpointDraft) state.v3EndpointDraft.unresolvedFields = (state.v3EndpointDraft.unresolvedFields || []).filter((item) => item !== path); const id = state.v3EndpointReviewIndex === 0 ? 'service' : `operation:${state.v3EndpointDraft?.operationReviews[state.v3EndpointReviewIndex - 1]?.operationId}`; markEndpointReviewModified(id); renderDecisionPanel() }); warning?.append(button) })
+  action('endpoint-draft-save', () => void run(async () => { const previous = new Map(endpointReviewIDs().map((id) => [endpointReviewFingerprint(id), state.v3EndpointReviewStatus[id]])); const result = await invoke<{ draft: V3APIBridgeDraft }>('provider_service_draft_save', { input: currentV3EndpointDraft() }); applyV3EndpointDraft(result.draft); state.v3EndpointDraftMaterialFingerprint = recordV3AgentMaterialReceipt('endpoint', state.v3EndpointDraftId, result.draft.version, state.v3EndpointMaterials); state.v3EndpointRequiredDraftVersion = result.draft.version; endpointReviewIDs().forEach((id) => { const status = previous.get(endpointReviewFingerprint(id)); if (status) state.v3EndpointReviewStatus[id] = status }); state.v3EndpointConfirmed = endpointReviewIDs().filter((id) => state.v3EndpointReviewStatus[id] === 'confirmed'); persistEndpointReview(); renderDecisionPanel() }))
   endpointForm?.querySelectorAll<HTMLInputElement>('[data-v3-endpoint-attest]').forEach((input) => input.addEventListener('change', () => { if (input.dataset.v3EndpointAttest === 'pricing') state.v3EndpointAttestPricing = input.checked; if (input.dataset.v3EndpointAttest === 'runtime') state.v3EndpointAttestRuntime = input.checked; if (input.dataset.v3EndpointAttest === 'rights') state.v3EndpointAttestRights = input.checked; syncEndpointForm(); renderDecisionPanel() }))
-  endpointForm?.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input[name="localBaseUrl"], select[name="authType"], input[name="secret"], input[name="apiKeyHeader"], input[name="basicUsername"], input[name="timeoutSeconds"], input[name="concurrency"]').forEach((input) => input.addEventListener('change', () => { syncEndpointForm(); state.v3EndpointProbe = undefined; state.v3EndpointRouteTestResult = undefined; clearV3ApplicationAttempt('endpoint'); renderDecisionPanel() }))
+  endpointForm?.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input[name="localBaseUrl"], input[name="healthPath"], select[name="authType"], input[name="secret"], input[name="apiKeyHeader"], input[name="basicUsername"], input[name^="oauth"], textarea[name^="mtls"], input[name="mtlsServerName"], input[name="timeoutSeconds"], input[name="concurrency"]').forEach((input) => {
+    input.addEventListener('input', () => { syncEndpointForm(); state.v3EndpointProbe = undefined; state.v3EndpointRouteTestResult = undefined; clearV3ApplicationAttempt('endpoint') })
+    input.addEventListener('change', () => { syncEndpointForm(); state.v3EndpointProbe = undefined; state.v3EndpointRouteTestResult = undefined; clearV3ApplicationAttempt('endpoint'); renderDecisionPanel() })
+  })
   endpointForm?.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input[name^="routeTest"], textarea[name="routeTestBody"]').forEach((input) => input.addEventListener('change', () => { syncEndpointForm(); state.v3EndpointRouteTestResult = undefined; renderDecisionPanel() }))
-  action('endpoint-route-test', () => void run(async () => { syncEndpointForm(); const draft = state.v3EndpointDraft; const publicRoute = draft?.routes[state.v3EndpointReviewIndex - 1] || draft?.routes[0]; if (!draft || !publicRoute) throw new Error('Select a reviewed Route first.'); const routes = endpointRuntimeRoutes(draft); const route = routes.find((item) => item.operationId === publicRoute.operationId) || routes[0]; if (['POST','PUT','PATCH','DELETE'].includes(route.method) && !state.v3EndpointRouteTestDangerConfirmed) throw new Error(`Confirm that the ${route.method} smoke test may change local state.`); const endpointId = `epd_${state.v3EndpointDraftId.replace(/^apid_/, '')}`; const result = await invoke<{ result: typeof state.v3EndpointRouteTestResult }>('provider_endpoint_test_route', { input: { endpointId, localBaseUrl: state.v3EndpointLocalURL, healthPath: draft.healthPath, routes, timeoutSeconds: state.v3EndpointTimeout, concurrency: state.v3EndpointConcurrency, route, testPath: state.v3EndpointRouteTestPath || route.path, rawQuery: state.v3EndpointRouteTestQuery, contentType: state.v3EndpointRouteTestContentType, body: state.v3EndpointRouteTestBody, authType: state.v3EndpointAuthType, apiKeyHeader: state.v3EndpointAPIKeyHeader, secret: endpointCredentialSecret() } }); state.v3EndpointRouteTestResult = result.result; renderDecisionPanel() }))
+  action('endpoint-route-test', () => void run(async () => { syncEndpointForm(); const draft = state.v3EndpointDraft; const publicOperation = draft?.operationReviews[state.v3EndpointReviewIndex - 1] || draft?.operationReviews[0]; if (!draft || !publicOperation) throw new Error('Select a reviewed operation first.'); const operations = endpointRuntimeOperations(draft); const operation = operations.find((item) => item.operationId === publicOperation.operationId) || operations[0]; if (publicOperation.sideEffect && ['POST','PUT','PATCH','DELETE'].includes(operation.method) && !state.v3EndpointRouteTestDangerConfirmed) throw new Error(`Confirm that the ${operation.method} smoke test may change local state.`); const endpointId = `epd_${state.v3EndpointDraftId.replace(/^apid_/, '')}`; const result = await invoke<{ result: typeof state.v3EndpointRouteTestResult }>('provider_endpoint_test_route', { input: { endpointId, localBaseUrl: state.v3EndpointLocalURL, healthPath: state.v3EndpointHealthPath, serviceManifest: draft.serviceManifest, timeoutSeconds: state.v3EndpointTimeout, concurrency: state.v3EndpointConcurrency, route: operation, testPath: state.v3EndpointRouteTestPath || operation.path, rawQuery: state.v3EndpointRouteTestQuery, contentType: state.v3EndpointRouteTestContentType, body: state.v3EndpointRouteTestBody, authType: state.v3EndpointAuthType, apiKeyHeader: state.v3EndpointAPIKeyHeader, secret: endpointCredentialSecret() } }); state.v3EndpointRouteTestResult = result.result; renderDecisionPanel() }))
   action('endpoint-probe', () => void run(async () => {
     if (state.v3EndpointProbing) return
     syncEndpointForm()
@@ -4578,8 +5175,7 @@ function attachV3SurfaceHandlers() {
     renderDecisionPanel()
     try {
       const endpointId = `epd_${state.v3EndpointDraftId.replace(/^apid_/, '')}`
-      const routes = endpointRuntimeRoutes(draft)
-      const result = await invoke<{ status: { healthy: boolean; status?: number; latencyMs?: number; contentType?: string; checkedAt?: string; error?: string; routeFingerprint?: string } }>('provider_endpoint_probe', { input: { endpointId, localBaseUrl: state.v3EndpointLocalURL, healthPath: draft.healthPath, routes, authType: state.v3EndpointAuthType, apiKeyHeader: state.v3EndpointAPIKeyHeader, secret: endpointCredentialSecret(), timeoutSeconds: state.v3EndpointTimeout, concurrency: state.v3EndpointConcurrency } })
+      const result = await invoke<{ status: { healthy: boolean; status?: number; latencyMs?: number; contentType?: string; checkedAt?: string; error?: string; contractSha256?: string } }>('provider_endpoint_probe', { input: { endpointId, localBaseUrl: state.v3EndpointLocalURL, healthPath: state.v3EndpointHealthPath, serviceManifest: draft.serviceManifest, authType: state.v3EndpointAuthType, apiKeyHeader: state.v3EndpointAPIKeyHeader, secret: endpointCredentialSecret(), timeoutSeconds: state.v3EndpointTimeout, concurrency: state.v3EndpointConcurrency } })
       state.v3EndpointProbe = { ok: result.status.healthy, status: result.status.status, latencyMs: result.status.latencyMs, contentType: result.status.contentType, checkedAt: result.status.checkedAt || new Date().toISOString(), error: result.status.error }
     } finally {
       state.v3EndpointProbing = false
@@ -4594,23 +5190,23 @@ function attachV3SurfaceHandlers() {
       const draft = state.v3EndpointDraft
       if (!v3AgentMaterialsCurrent('endpoint') || !draft || state.v3EndpointDraftDirty || !state.v3EndpointProbe?.ok) throw new Error('Load and review a fresh Endpoint Agent draft, then pass local health.')
       if ((draft.unresolvedFields || []).length || endpointReviewIDs().some((id) => state.v3EndpointReviewStatus[id] !== 'confirmed')) throw new Error('Resolve and confirm every Agent draft item before submitting to Listings.')
-      if (state.v3EndpointAuthType !== 'none' && !endpointCredentialSecret()) throw new Error('Configure the provider credential before submitting to Listings.')
+      if (endpointReviewIDs().some((id) => v3ServiceReviewIssues('endpoint', id).length)) throw new Error('Complete every ServiceManifest policy and pricing requirement before submitting to Listings.')
+      if (!v3CredentialReady('endpoint')) throw new Error('Complete every field required by the selected provider authentication method.')
       if (!state.v3EndpointAttestPricing || !state.v3EndpointAttestRuntime || !state.v3EndpointAttestRights) throw new Error('Accept all three seller confirmations before submitting to Listings.')
       state.v3EndpointSubmitting = true
       renderDecisionPanel()
       try {
         const endpointId = `epd_${state.v3EndpointDraftId.replace(/^apid_/, '')}`
-        const routes = endpointRuntimeRoutes(draft)
-        const reviewReceipt = endpointReviewIDs().map((id) => ({ id, fingerprint: endpointReviewFingerprint(id) }))
-        const attemptFingerprint = JSON.stringify({ draftId: draft.draftId, draftVersion: draft.version, reviewReceipt, localBaseUrl: state.v3EndpointLocalURL, healthPath: draft.healthPath, authType: state.v3EndpointAuthType, apiKeyHeader: state.v3EndpointAPIKeyHeader, timeoutSeconds: state.v3EndpointTimeout, concurrency: state.v3EndpointConcurrency })
+        const reviewReceipt = await serviceDraftReviewReceipt(draft)
+        const attemptFingerprint = JSON.stringify({ draftId: draft.draftId, draftVersion: draft.version, reviewReceipt, localBaseUrl: state.v3EndpointLocalURL, healthPath: state.v3EndpointHealthPath, authType: state.v3EndpointAuthType, apiKeyHeader: state.v3EndpointAPIKeyHeader, timeoutSeconds: state.v3EndpointTimeout, concurrency: state.v3EndpointConcurrency })
         state.v3EndpointSaveAttemptKey = v3StableApplicationAttempt('endpoint', attemptFingerprint)
         let credentialRef = ''
         if (state.v3EndpointAuthType !== 'none') {
           const savedCredential = await invoke<{ credential: SellerAutomationCredential }>('seller_automation_credential_save', { input: { label: `Endpoint ${draft.title || endpointId}`, authType: state.v3EndpointAuthType, apiKeyHeader: state.v3EndpointAPIKeyHeader, serviceIds: [], secret: endpointCredentialSecret() } })
           credentialRef = savedCredential.credential.credentialRef
         }
-        await invoke('provider_endpoint_local_save', { input: { endpointId, localBaseUrl: state.v3EndpointLocalURL, healthPath: draft.healthPath, routes, authType: state.v3EndpointAuthType, credentialRef, lastProbeHealthy: true, lastProbeAt: state.v3EndpointProbe.checkedAt, timeoutSeconds: state.v3EndpointTimeout, concurrency: state.v3EndpointConcurrency } })
-        const imported = await invoke<{ product: V3Product; listing: V3Listing }>('provider_endpoint_import', { input: { idempotencyKey: state.v3EndpointSaveAttemptKey, endpointId, draftId: draft.draftId, draftVersion: draft.version, reviewReceipt, credentialConfigured: state.v3EndpointAuthType === 'none' || Boolean(credentialRef), price: { model: 'metered', currency: 'USDC' }, limits: { timeoutSeconds: state.v3EndpointTimeout, concurrency: state.v3EndpointConcurrency }, localConnectivityPassed: true, sellerAttestationConfirmed: true } })
+        await invoke('provider_endpoint_local_save', { input: { endpointId, localBaseUrl: state.v3EndpointLocalURL, healthPath: state.v3EndpointHealthPath, serviceManifest: draft.serviceManifest, authType: state.v3EndpointAuthType, credentialRef, lastProbeHealthy: true, lastProbeAt: state.v3EndpointProbe.checkedAt, timeoutSeconds: state.v3EndpointTimeout, concurrency: state.v3EndpointConcurrency } })
+        const imported = await invoke<{ product: V3Product; listing: V3Listing }>('provider_service_draft_submit', { input: { idempotencyKey: state.v3EndpointSaveAttemptKey, draftId: draft.draftId, expectedVersion: draft.version, endpointId, healthPath: state.v3EndpointHealthPath, reviewReceipt, credentialConfigured: state.v3EndpointAuthType === 'none' || Boolean(credentialRef), connectivityPassed: true, sellerAttestationConfirmed: true } })
         state.v3HighlightedListingId = imported.listing.listingId
         state.v3ExpandedListingId = imported.listing.listingId
         state.v3SellerTab = 'listings'
@@ -4626,6 +5222,7 @@ function attachV3SurfaceHandlers() {
     })
   })
   const apiForm = fields.actionView.querySelector<HTMLFormElement>('[data-v3-form="api_bridge"]')
+  action('api-material-note-save', () => { if (apiForm) void run(() => saveV3ServiceMaterialNote('api_bridge', apiForm)) })
   const markAPIReviewModified = (id: string) => {
     state.v3APIReviewStatus[id] = 'modified'
     state.v3APIDraftDirty = true
@@ -4641,13 +5238,7 @@ function attachV3SurfaceHandlers() {
     const headerStatus = apiForm?.querySelector<HTMLElement>('.v3-api-review-workspace > main > header > span')
     if (headerStatus) { headerStatus.className = 'modified'; headerStatus.textContent = 'Modified' }
     const confirm = apiForm?.querySelector<HTMLButtonElement>('[data-v3-review-confirm]')
-    if (confirm) confirm.disabled = apiBridgeUnresolvedForReview(id).length > 0
-    const readiness = apiForm?.querySelector<HTMLElement>('[data-v3-readiness-target="review"]')
-    readiness?.classList.remove('passed')
-    const readinessIcon = readiness?.querySelector<HTMLElement>(':scope > span')
-    const readinessDetail = readiness?.querySelector<HTMLElement>('small')
-    if (readinessIcon) readinessIcon.textContent = '!'
-    if (readinessDetail) readinessDetail.textContent = 'Edited item must be confirmed again'
+    if (confirm) confirm.disabled = apiBridgeUnresolvedForReview(id).length > 0 || v3ServiceReviewIssues('api_bridge', id).length > 0
     const save = apiForm?.querySelector<HTMLButtonElement>('button[type="submit"]')
     if (save) save.disabled = true
   }
@@ -4665,7 +5256,130 @@ function attachV3SurfaceHandlers() {
     if (title) title.textContent = 'Connectivity not checked'
     if (detail) detail.textContent = 'Connection settings changed. Run the Health Path check again.'
   }
-  const activeReviewID = state.v3APIReviewIndex === 0 ? 'service' : state.v3APIRoutes[state.v3APIReviewIndex - 1] ? `route:${state.v3APIRoutes[state.v3APIReviewIndex - 1].routeId}` : ''
+  const activeReviewID = state.v3APIReviewIndex === 0 ? 'service' : state.v3APIOperations[state.v3APIReviewIndex - 1] ? `operation:${state.v3APIOperations[state.v3APIReviewIndex - 1].operationId}` : ''
+  const serviceOperation = (mode: 'endpoint' | 'api_bridge', operationId: string) => mode === 'endpoint' ? state.v3EndpointDraft?.operationReviews.find((operation) => operation.operationId === operationId) : state.v3APIOperations.find((operation) => operation.operationId === operationId)
+  const serviceDraft = (mode: 'endpoint' | 'api_bridge') => mode === 'endpoint' ? state.v3EndpointDraft : state.v3APIDraft
+  const markServiceItem = (mode: 'endpoint' | 'api_bridge', operationId: string, field?: string, componentIndex?: number) => {
+    const reviewID = operationId === 'default' ? 'service' : `operation:${operationId}`
+    if (mode === 'endpoint') {
+      if (field) resolveEndpointBoundField(reviewID, field, componentIndex)
+      markEndpointReviewModified(reviewID)
+    } else {
+      if (field) resolveAPIBridgeBoundField(reviewID, field, componentIndex)
+      markAPIReviewModified(reviewID)
+    }
+  }
+  const parseServiceTarget = (encoded?: string) => {
+    const [rawMode, operationId = '', third = '0', fourth = ''] = String(encoded || '').split('|')
+    const numericIndex = /^\d+$/.test(third)
+    return { mode: rawMode as 'endpoint' | 'api_bridge', operationId, index: numericIndex ? Number(third) : 0, field: numericIndex ? fourth : third }
+  }
+  const markDefaultPricingChanged = (mode: 'endpoint' | 'api_bridge') => {
+    const draft = serviceDraft(mode)
+    if (!draft) return
+    markServiceItem(mode, 'default')
+    for (const operation of mode === 'endpoint' ? draft.operationReviews : state.v3APIOperations) {
+      if (operation.pricingMode !== 'default') continue
+      operation.pricing = structuredClone(draft.serviceManifest.pricingTemplate.defaults)
+      operation.maxChargePerInvocationAtomic = draft.serviceManifest.pricingTemplate.defaultMaxChargePerInvocationAtomic || 0
+      markServiceItem(mode, operation.operationId)
+    }
+  }
+  fields.actionView.querySelectorAll<HTMLInputElement>('[data-v3-service-operation-title]').forEach((input) => input.addEventListener('input', () => {
+    const { mode, operationId } = parseServiceTarget(input.dataset.v3ServiceOperationTitle)
+    const operation = serviceOperation(mode, operationId)
+    if (!operation) return
+    operation.title = input.value
+    operation.displayName = input.value
+    markServiceItem(mode, operationId, 'displayName')
+  }))
+  fields.actionView.querySelectorAll<HTMLInputElement>('[data-v3-service-policy]').forEach((input) => input.addEventListener('change', () => {
+    const { mode, operationId, field } = parseServiceTarget(input.dataset.v3ServicePolicy)
+    const operation = serviceOperation(mode, operationId)
+    if (!operation || !['sideEffect', 'idempotent'].includes(field)) return
+    ;(operation as any)[field] = input.checked
+    markServiceItem(mode, operationId, field)
+    renderDecisionPanel()
+  }))
+  fields.actionView.querySelectorAll<HTMLInputElement>('[data-v3-service-limit]').forEach((input) => input.addEventListener('input', () => {
+    const { mode, operationId, field } = parseServiceTarget(input.dataset.v3ServiceLimit)
+    const operation = serviceOperation(mode, operationId)
+    if (!operation || !['timeoutSeconds', 'maxRequestBytes', 'maxResponseBytes', 'maxConcurrency'].includes(field)) return
+    ;(operation.limits as any)[field] = Math.max(1, Math.round(Number(input.value || 1)))
+    markServiceItem(mode, operationId, field)
+  }))
+  fields.actionView.querySelectorAll<HTMLInputElement>('[data-v3-service-meter]').forEach((input) => input.addEventListener('change', () => {
+    const { mode, operationId, field: meter } = parseServiceTarget(input.dataset.v3ServiceMeter)
+    const operation = serviceOperation(mode, operationId)
+    if (!operation || !v3ServiceMeterLabels[meter]) return
+    operation.meteringCapabilities = input.checked ? [...new Set([...operation.meteringCapabilities, meter])].sort() : operation.meteringCapabilities.filter((value) => value !== meter)
+    markServiceItem(mode, operationId, 'meteringCapabilities')
+    renderDecisionPanel()
+  }))
+  fields.actionView.querySelectorAll<HTMLSelectElement>('[data-v3-service-pricing-mode]').forEach((input) => input.addEventListener('change', () => {
+    const { mode, operationId } = parseServiceTarget(input.dataset.v3ServicePricingMode)
+    const operation = serviceOperation(mode, operationId)
+    const draft = serviceDraft(mode)
+    if (!operation || !draft) return
+    operation.pricingMode = input.value === 'override' ? 'override' : 'default'
+    if (operation.pricingMode === 'default') {
+      operation.pricing = structuredClone(draft.serviceManifest.pricingTemplate.defaults)
+      operation.maxChargePerInvocationAtomic = draft.serviceManifest.pricingTemplate.defaultMaxChargePerInvocationAtomic || 0
+    }
+    markServiceItem(mode, operationId, 'pricingTemplate')
+    markServiceItem(mode, 'default')
+    renderDecisionPanel()
+  }))
+  const servicePriceComponent = (encoded?: string) => {
+    const target = parseServiceTarget(encoded)
+    const draft = serviceDraft(target.mode)
+    const operation = target.operationId === 'default' ? undefined : serviceOperation(target.mode, target.operationId)
+    const components = operation ? operation.pricing : draft?.serviceManifest.pricingTemplate.defaults
+    return { ...target, draft, operation, components, component: components?.[target.index] }
+  }
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-service-price-add]').forEach((button) => button.addEventListener('click', () => {
+    const target = parseServiceTarget(button.dataset.v3ServicePriceAdd)
+    const draft = serviceDraft(target.mode)
+    const operation = target.operationId === 'default' ? undefined : serviceOperation(target.mode, target.operationId)
+    const components = operation ? operation.pricing : draft?.serviceManifest.pricingTemplate.defaults
+    if (!components) return
+    components.push({ dimension: 'request', rateAtomic: 0, per: 1, meterSource: 'gateway', chargeOn: 'started' })
+    operation ? markServiceItem(target.mode, target.operationId, 'dimension', components.length - 1) : markDefaultPricingChanged(target.mode)
+    renderDecisionPanel()
+  }))
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-service-price-remove]').forEach((button) => button.addEventListener('click', () => {
+    const target = servicePriceComponent(button.dataset.v3ServicePriceRemove)
+    if (!target.components) return
+    target.components.splice(target.index, 1)
+    target.operation ? markServiceItem(target.mode, target.operationId, 'dimension', target.index) : markDefaultPricingChanged(target.mode)
+    renderDecisionPanel()
+  }))
+  fields.actionView.querySelectorAll<HTMLSelectElement>('[data-v3-service-price-dimension], [data-v3-service-price-source], [data-v3-service-price-charge]').forEach((input) => input.addEventListener('change', () => {
+    const encoded = input.dataset.v3ServicePriceDimension || input.dataset.v3ServicePriceSource || input.dataset.v3ServicePriceCharge
+    const target = servicePriceComponent(encoded)
+    if (!target.component) return
+    const field = input.dataset.v3ServicePriceDimension ? 'dimension' : input.dataset.v3ServicePriceSource ? 'meterSource' : 'chargeOn'
+    ;(target.component as any)[field] = input.value
+    if (field === 'dimension') target.component.meterSource = input.value === 'provider_reported' ? 'provider_response' : 'gateway'
+    target.operation ? markServiceItem(target.mode, target.operationId, field, target.index) : markDefaultPricingChanged(target.mode)
+    renderDecisionPanel()
+  }))
+  fields.actionView.querySelectorAll<HTMLInputElement>('[data-v3-service-price-usdc], [data-v3-service-price-per], [data-v3-service-price-selector]').forEach((input) => input.addEventListener('input', () => {
+    const encoded = input.dataset.v3ServicePriceUsdc || input.dataset.v3ServicePricePer || input.dataset.v3ServicePriceSelector
+    const target = servicePriceComponent(encoded)
+    if (!target.component) return
+    const field = input.dataset.v3ServicePriceUsdc ? 'rateAtomic' : input.dataset.v3ServicePricePer ? 'per' : 'selector'
+    ;(target.component as any)[field] = field === 'rateAtomic' ? Math.max(0, Math.round(Number(input.value || 0) * 1_000_000)) : field === 'per' ? Math.max(1, Math.round(Number(input.value || 1))) : input.value.trim()
+    target.operation ? markServiceItem(target.mode, target.operationId, field, target.index) : markDefaultPricingChanged(target.mode)
+  }))
+  fields.actionView.querySelectorAll<HTMLInputElement>('[data-v3-service-price-cap]').forEach((input) => input.addEventListener('input', () => {
+    const target = parseServiceTarget(input.dataset.v3ServicePriceCap)
+    const atomic = Math.max(0, Math.round(Number(input.value || 0) * 1_000_000))
+    const draft = serviceDraft(target.mode)
+    const operation = target.operationId === 'default' ? undefined : serviceOperation(target.mode, target.operationId)
+    if (operation) { operation.maxChargePerInvocationAtomic = atomic; markServiceItem(target.mode, target.operationId, 'maxChargePerInvocationAtomic') }
+    else if (draft) { draft.serviceManifest.pricingTemplate.defaultMaxChargePerInvocationAtomic = atomic; markDefaultPricingChanged(target.mode) }
+  }))
   const unresolvedWarning = apiForm?.querySelector<HTMLElement>('.v3-api-review-warning')
   apiBridgeUnresolvedForReview(activeReviewID).filter((path) => !apiBridgePathField(path)).forEach((path) => {
     const button = document.createElement('button')
@@ -4686,9 +5400,9 @@ function attachV3SurfaceHandlers() {
     const select = () => {
       state.v3APIReviewFilter = value
       const nextIndex = value === 'pending'
-        ? ['service', ...state.v3APIRoutes.map((route) => `route:${route.routeId}`)].findIndex((id) => state.v3APIReviewStatus[id] !== 'confirmed')
+        ? ['service', ...state.v3APIOperations.map((route) => `operation:${route.operationId}`)].findIndex((id) => state.v3APIReviewStatus[id] !== 'confirmed')
         : value === 'warnings'
-          ? ['service', ...state.v3APIRoutes.map((route) => `route:${route.routeId}`)].findIndex((id) => apiBridgeUnresolvedForReview(id).length > 0)
+          ? ['service', ...state.v3APIOperations.map((route) => `operation:${route.operationId}`)].findIndex((id) => apiBridgeUnresolvedForReview(id).length > 0)
           : state.v3APIReviewIndex
       if (nextIndex >= 0) state.v3APIReviewIndex = nextIndex
       rerenderV3APIKeepingSecret(apiForm)
@@ -4696,14 +5410,14 @@ function attachV3SurfaceHandlers() {
     filter.addEventListener('click', select)
     filter.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select() } })
   })
-  const apiReviewComplete = state.v3APIDraftVersion > 0 && state.v3APIReviewStatus.service === 'confirmed' && state.v3APIRoutes.every((route) => state.v3APIReviewStatus[`route:${route.routeId}`] === 'confirmed')
+  const apiReviewComplete = state.v3APIDraftVersion > 0 && state.v3APIReviewStatus.service === 'confirmed' && state.v3APIOperations.every((route) => state.v3APIReviewStatus[`operation:${route.operationId}`] === 'confirmed')
   if (!apiReviewComplete) apiForm?.querySelectorAll<HTMLInputElement>('[data-v3-attestation]').forEach((input) => { input.disabled = true })
   if (apiForm && !state.v3APIMaterialsLoaded) {
     state.v3APIMaterialsLoaded = true
     const draftId = state.v3APIDraftId
     const materialRevision = v3AgentMaterialRevisions.api_bridge
     const materialsRequest = invoke<{ files: V3APIMaterial[] }>('provider_api_bridge_materials_get', { input: { draftId } }).catch(() => ({ files: [] }))
-    const draftRequest = invoke<{ draft: V3APIBridgeDraft }>('provider_api_bridge_draft_get', { input: { draftId } }).catch(() => undefined)
+    const draftRequest = invoke<{ draft: V3APIBridgeDraft }>('provider_service_draft_get', { input: { draftId } }).catch(() => undefined)
     void materialsRequest.then((materialsResult) => {
       if (state.v3APIDraftId !== draftId || v3AgentMaterialRevisions.api_bridge !== materialRevision) return
       state.v3APIMaterials = materialsResult.files || []
@@ -4725,27 +5439,34 @@ function attachV3SurfaceHandlers() {
   action('api-prompt-regenerate', () => { renderDecisionPanel() })
   action('api-draft-check', () => void run(async () => {
     if (!state.v3APIMaterials.length) throw new Error('Add at least one supported document before checking the Agent draft.')
+    try {
     const materialRevisionChanged = !v3AgentMaterialsCurrent('api_bridge')
-    const result = await invoke<{ draft: V3APIBridgeDraft }>('provider_api_bridge_draft_get', { input: { draftId: state.v3APIDraftId } })
+    const result = await invoke<{ draft: V3APIBridgeDraft }>('provider_service_draft_get', { input: { draftId: state.v3APIDraftId } })
     if (result.draft.version < state.v3APIRequiredDraftVersion) throw new Error(`The Agent draft is stale. Save version ${state.v3APIRequiredDraftVersion} or newer for the current materials.`)
     applyV3APIBridgeDraft(result.draft)
     if (materialRevisionChanged) {
-      state.v3APIReviewStatus = Object.fromEntries(['service', ...state.v3APIRoutes.map((route) => `route:${route.routeId}`)].map((id) => [id, 'pending']))
+      state.v3APIReviewStatus = Object.fromEntries(['service', ...state.v3APIOperations.map((route) => `operation:${route.operationId}`)].map((id) => [id, 'pending']))
       persistAPIBridgeReview()
     }
     state.v3APIDraftMaterialFingerprint = recordV3AgentMaterialReceipt('api_bridge', state.v3APIDraftId, result.draft.version, state.v3APIMaterials)
     state.v3APIRequiredDraftVersion = result.draft.version
     state.v3APIStep = 2
     renderDecisionPanel()
+    } catch (error) {
+      recordV3AgentDraftFailure('api_bridge', error)
+      renderDecisionPanel()
+      throw error
+    }
   }))
+  action('api-fallback-save', () => void run(async () => { if (apiForm) await saveV3ManualServiceFallback('api_bridge', apiForm) }))
   action('api-draft-save', () => void run(async () => {
     syncV3APIDraftFromForm(apiForm)
     const previousReview = new Map(Object.keys(state.v3APIReviewStatus).map((id) => [apiBridgeReviewFingerprint(id), state.v3APIReviewStatus[id]]))
-    const result = await invoke<{ draft: V3APIBridgeDraft }>('provider_api_bridge_draft_save', { input: currentV3APIBridgeDraft() })
+    const result = await invoke<{ draft: V3APIBridgeDraft }>('provider_service_draft_save', { input: currentV3APIBridgeDraft() })
     applyV3APIBridgeDraft(result.draft)
     state.v3APIDraftMaterialFingerprint = recordV3AgentMaterialReceipt('api_bridge', state.v3APIDraftId, result.draft.version, state.v3APIMaterials)
     state.v3APIRequiredDraftVersion = result.draft.version
-    for (const id of ['service', ...state.v3APIRoutes.map((route) => `route:${route.routeId}`)]) {
+    for (const id of ['service', ...state.v3APIOperations.map((route) => `operation:${route.operationId}`)]) {
       const previous = previousReview.get(apiBridgeReviewFingerprint(id))
       if (previous) state.v3APIReviewStatus[id] = previous
     }
@@ -4754,94 +5475,30 @@ function attachV3SurfaceHandlers() {
   }))
   fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-review-index]').forEach((button) => button.addEventListener('click', () => { state.v3APIReviewIndex = Number(button.dataset.v3ReviewIndex || 0); rerenderV3APIKeepingSecret(apiForm) }))
   fields.actionView.querySelector<HTMLButtonElement>('[data-v3-review-previous]')?.addEventListener('click', () => { state.v3APIReviewIndex = Math.max(0, state.v3APIReviewIndex - 1); rerenderV3APIKeepingSecret(apiForm) })
-  fields.actionView.querySelector<HTMLButtonElement>('[data-v3-review-next]')?.addEventListener('click', () => { state.v3APIReviewIndex = Math.min(state.v3APIRoutes.length, state.v3APIReviewIndex + 1); rerenderV3APIKeepingSecret(apiForm) })
-  fields.actionView.querySelector<HTMLButtonElement>('[data-v3-review-confirm]')?.addEventListener('click', (event) => { const id = (event.currentTarget as HTMLButtonElement).dataset.v3ReviewConfirm || ''; if (id && apiBridgeUnresolvedForReview(id).length === 0) { state.v3APIReviewStatus[id] = 'confirmed'; persistAPIBridgeReview(); state.v3APIReviewIndex = Math.min(state.v3APIRoutes.length, state.v3APIReviewIndex + 1) }; rerenderV3APIKeepingSecret(apiForm) })
+  fields.actionView.querySelector<HTMLButtonElement>('[data-v3-review-next]')?.addEventListener('click', () => { state.v3APIReviewIndex = Math.min(state.v3APIOperations.length, state.v3APIReviewIndex + 1); rerenderV3APIKeepingSecret(apiForm) })
+  fields.actionView.querySelector<HTMLButtonElement>('[data-v3-review-confirm]')?.addEventListener('click', (event) => { const id = (event.currentTarget as HTMLButtonElement).dataset.v3ReviewConfirm || ''; if (id && apiBridgeUnresolvedForReview(id).length === 0 && v3ServiceReviewIssues('api_bridge', id).length === 0) { state.v3APIReviewStatus[id] = 'confirmed'; persistAPIBridgeReview(); state.v3APIReviewIndex = Math.min(state.v3APIOperations.length, state.v3APIReviewIndex + 1) }; rerenderV3APIKeepingSecret(apiForm) })
   apiForm?.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('[data-v3-api-draft]').forEach((input) => input.addEventListener('input', () => {
     syncV3APIDraftFromForm(apiForm)
     resolveAPIBridgeBoundField('service', input.getAttribute('data-v3-api-draft') || '')
     markAPIReviewModified('service')
-    if (input.getAttribute('data-v3-api-draft') === 'baseUrl' || input.getAttribute('data-v3-api-draft') === 'healthPath') invalidateProbe()
   }))
   apiForm?.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('[data-v3-api-draft]').forEach((input) => input.addEventListener('change', () => rerenderV3APIKeepingSecret(apiForm)))
   const apiAuth = apiForm?.querySelector<HTMLSelectElement>('select[name="authType"]')
-  apiAuth?.addEventListener('change', () => { invalidateProbe(); state.v3APICredentialConfigured = apiAuth.value === 'none'; rerenderV3APIKeepingSecret(apiForm) })
-  const credentialInput = apiForm?.querySelector<HTMLInputElement>('input[name="secret"]')
-  credentialInput?.addEventListener('input', (event) => { state.v3APICredentialConfigured = Boolean((event.currentTarget as HTMLInputElement).value); invalidateProbe() })
-  credentialInput?.addEventListener('change', () => rerenderV3APIKeepingSecret(apiForm))
-  apiForm?.querySelector<HTMLInputElement>('input[name="basicUsername"]')?.addEventListener('input', (event) => { state.v3APIBasicUsername = (event.currentTarget as HTMLInputElement).value; invalidateProbe() })
-  apiForm?.querySelector<HTMLInputElement>('input[name="apiKeyHeader"]')?.addEventListener('input', (event) => { state.v3APIKeyHeader = (event.currentTarget as HTMLInputElement).value; invalidateProbe() })
-  apiForm?.querySelector<HTMLInputElement>('input[name="basicUsername"]')?.addEventListener('change', () => rerenderV3APIKeepingSecret(apiForm))
-  apiForm?.querySelector<HTMLInputElement>('input[name="apiKeyHeader"]')?.addEventListener('change', () => rerenderV3APIKeepingSecret(apiForm))
-  apiForm?.querySelectorAll<HTMLInputElement>('[data-v3-attestation]').forEach((input) => input.addEventListener('change', () => { if (input.dataset.v3Attestation === 'pricing') state.v3APIAttestPricing = input.checked; if (input.dataset.v3Attestation === 'usage') state.v3APIAttestUsage = input.checked; if (input.dataset.v3Attestation === 'rights') state.v3APIAttestRights = input.checked; state.v3APISellerAttestation = state.v3APIAttestPricing && state.v3APIAttestUsage && state.v3APIAttestRights; rerenderV3APIKeepingSecret(apiForm) }))
-  action('api-edit-service', () => { state.v3APIReviewIndex = 0; rerenderV3APIKeepingSecret(apiForm); fields.actionView.querySelector('.v3-api-review-workspace')?.scrollIntoView({ behavior: 'smooth', block: 'center' }) })
-  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-readiness-target]').forEach((button) => button.addEventListener('click', () => { const target = button.dataset.v3ReadinessTarget; if (target === 'review') { state.v3APIReviewIndex = Math.max(0, state.v3APIReviewIndex); rerenderV3APIKeepingSecret(apiForm); fields.actionView.querySelector('.v3-api-review-workspace')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); return }; fields.actionView.querySelector('.v3-api-publish-panel')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); if (target === 'credential') window.setTimeout(() => fields.actionView.querySelector<HTMLInputElement>('input[name="secret"]')?.focus(), 250) }))
-  action('api-route-add', () => {
-    syncV3APIDraftFromForm(apiForm)
-    const index = state.v3APIRoutes.length + 1
-    const routeId = `local-${crypto.randomUUID()}`
-    state.v3APIRoutes.push({ id: routeId, routeId, operationId: `operation${index}`, method: state.v3APIProtocol === 'sse' ? 'GET' : 'POST', path: state.v3APIProtocol === 'sse' ? `/events-${index}` : `/operation-${index}`, title: `Operation ${index}`, selected: true, price: state.v3APIDefaultPrice, pricing: [{ dimension: 'request', rateAtomic: Math.round(state.v3APIDefaultPrice * 1_000_000), per: 1, meterSource: 'gateway', chargeOn: 'started' }], maxChargePerInvocationAtomic: 0 })
-    state.v3APIReviewStatus[`route:${routeId}`] = 'pending'
-    state.v3APIDraftDirty = true
-    clearV3ApplicationAttempt('api_bridge')
-    invalidateProbe()
-    persistAPIBridgeReview()
-    rerenderV3APIKeepingSecret(apiForm)
+  apiAuth?.addEventListener('change', () => { syncV3APIDraftFromForm(apiForm); invalidateProbe(); rerenderV3APIKeepingSecret(apiForm) })
+  apiForm?.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input[name="baseUrl"], input[name="healthPath"], input[name="secret"], input[name="apiKeyHeader"], input[name="basicUsername"], input[name^="oauth"], textarea[name^="mtls"], input[name="mtlsServerName"]').forEach((input) => {
+    input.addEventListener('input', () => { syncV3APIDraftFromForm(apiForm); invalidateProbe() })
+    input.addEventListener('change', () => { syncV3APIDraftFromForm(apiForm); rerenderV3APIKeepingSecret(apiForm) })
   })
-  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-api-route-remove]').forEach((button) => button.addEventListener('click', () => {
-    const removed = state.v3APIRoutes.find((route) => route.id === button.dataset.v3ApiRouteRemove)
-    state.v3APIRoutes = state.v3APIRoutes.filter((route) => route.id !== button.dataset.v3ApiRouteRemove)
-    if (removed) delete state.v3APIReviewStatus[`route:${removed.routeId}`]
-    state.v3APIDraftDirty = true
-    persistAPIBridgeReview()
-    invalidateProbe()
-    rerenderV3APIKeepingSecret(apiForm)
-  }))
-  fields.actionView.querySelectorAll<HTMLSelectElement>('[data-v3-api-route-method]').forEach((input) => input.addEventListener('change', () => {
-    const route = state.v3APIRoutes.find((item) => item.id === input.dataset.v3ApiRouteMethod)
-    if (route) { route.method = input.value.toUpperCase(); resolveAPIBridgeBoundField(`route:${route.routeId}`, 'method'); markAPIReviewModified(`route:${route.routeId}`) }
-    rerenderV3APIKeepingSecret(apiForm)
-  }))
-  fields.actionView.querySelectorAll<HTMLInputElement>('[data-v3-api-route-title]').forEach((input) => input.addEventListener('input', () => {
-    const route = state.v3APIRoutes.find((item) => item.id === input.dataset.v3ApiRouteTitle)
-    if (route) { route.title = input.value; route.operationId = input.value.trim().replace(/[^a-zA-Z0-9]+(.)/g, (_, character: string) => character.toUpperCase()).replace(/^[^a-zA-Z_]+/, '') || route.operationId; resolveAPIBridgeBoundField(`route:${route.routeId}`, 'displayName'); resolveAPIBridgeBoundField(`route:${route.routeId}`, 'title'); markAPIReviewModified(`route:${route.routeId}`) }
-  }))
-  fields.actionView.querySelectorAll<HTMLInputElement>('[data-v3-api-route-title]').forEach((input) => input.addEventListener('change', () => rerenderV3APIKeepingSecret(apiForm)))
-  fields.actionView.querySelectorAll<HTMLInputElement>('[data-v3-api-route-operation]').forEach((input) => input.addEventListener('input', () => { const route = state.v3APIRoutes.find((item) => item.id === input.dataset.v3ApiRouteOperation); if (route) { route.operationId = input.value.trim(); resolveAPIBridgeBoundField(`route:${route.routeId}`, 'operationId'); markAPIReviewModified(`route:${route.routeId}`) } }))
-  fields.actionView.querySelectorAll<HTMLInputElement>('[data-v3-api-route-operation]').forEach((input) => input.addEventListener('change', () => rerenderV3APIKeepingSecret(apiForm)))
-  fields.actionView.querySelectorAll<HTMLInputElement>('[data-v3-api-route-path]').forEach((input) => input.addEventListener('input', () => {
-    const route = state.v3APIRoutes.find((item) => item.id === input.dataset.v3ApiRoutePath)
-    if (route) { route.path = input.value.startsWith('/') ? input.value : `/${input.value}`; resolveAPIBridgeBoundField(`route:${route.routeId}`, 'path'); markAPIReviewModified(`route:${route.routeId}`) }
-  }))
-  fields.actionView.querySelectorAll<HTMLInputElement>('[data-v3-api-route-path]').forEach((input) => input.addEventListener('change', () => rerenderV3APIKeepingSecret(apiForm)))
-  fields.actionView.querySelectorAll<HTMLInputElement>('[data-v3-api-route-price]').forEach((input) => input.addEventListener('input', () => {
-    const route = state.v3APIRoutes.find((item) => item.id === input.dataset.v3ApiRoutePrice)
-    if (route) route.price = Math.max(0, Number(input.value || 0))
-  }))
-  const pricingTarget = (encoded?: string) => { const [routeId, rawIndex] = String(encoded || '').split(':'); const route = state.v3APIRoutes.find((item) => item.id === routeId); return { route, index: Number(rawIndex) } }
-  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-price-add]').forEach((button) => button.addEventListener('click', () => { const route = state.v3APIRoutes.find((item) => item.id === button.dataset.v3PriceAdd); if (route) { route.pricing ||= []; route.pricing.push({ dimension: 'request', rateAtomic: 0, per: 1, meterSource: 'gateway', chargeOn: 'started' }); markAPIReviewModified(`route:${route.routeId}`) }; rerenderV3APIKeepingSecret(apiForm) }))
-  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-price-remove]').forEach((button) => button.addEventListener('click', () => { const { route, index } = pricingTarget(button.dataset.v3PriceRemove); if (route?.pricing) { route.pricing.splice(index, 1); markAPIReviewModified(`route:${route.routeId}`) }; rerenderV3APIKeepingSecret(apiForm) }))
-  fields.actionView.querySelectorAll<HTMLSelectElement>('[data-v3-price-dimension]').forEach((input) => input.addEventListener('change', () => { const { route, index } = pricingTarget(input.dataset.v3PriceDimension); const component = route?.pricing?.[index]; if (component && route) { component.dimension = input.value as V3APIPricingComponent['dimension']; component.meterSource = component.dimension === 'provider_reported' ? 'provider_response' : 'gateway'; resolveAPIBridgeBoundField(`route:${route.routeId}`, 'dimension', index); markAPIReviewModified(`route:${route.routeId}`) }; rerenderV3APIKeepingSecret(apiForm) }))
-  fields.actionView.querySelectorAll<HTMLInputElement>('[data-v3-price-usdc]').forEach((input) => input.addEventListener('input', () => { const { route, index } = pricingTarget(input.dataset.v3PriceUsdc); if (route?.pricing?.[index]) { route.pricing[index].rateAtomic = Math.max(0, Math.round(Number(input.value || 0) * 1_000_000)); resolveAPIBridgeBoundField(`route:${route.routeId}`, 'rateAtomic', index); markAPIReviewModified(`route:${route.routeId}`) } }))
-  fields.actionView.querySelectorAll<HTMLInputElement>('[data-v3-price-rate]').forEach((input) => input.addEventListener('input', () => { const { route, index } = pricingTarget(input.dataset.v3PriceRate); if (route?.pricing?.[index]) { route.pricing[index].rateAtomic = Math.max(0, Math.round(Number(input.value || 0))); resolveAPIBridgeBoundField(`route:${route.routeId}`, 'rateAtomic', index); markAPIReviewModified(`route:${route.routeId}`) } }))
-  fields.actionView.querySelectorAll<HTMLInputElement>('[data-v3-price-per]').forEach((input) => input.addEventListener('input', () => { const { route, index } = pricingTarget(input.dataset.v3PricePer); if (route?.pricing?.[index]) { route.pricing[index].per = Math.max(1, Math.round(Number(input.value || 1))); resolveAPIBridgeBoundField(`route:${route.routeId}`, 'per', index); markAPIReviewModified(`route:${route.routeId}`) } }))
-  fields.actionView.querySelectorAll<HTMLInputElement>('[data-v3-price-selector]').forEach((input) => input.addEventListener('input', () => { const { route, index } = pricingTarget(input.dataset.v3PriceSelector); if (route?.pricing?.[index]) { route.pricing[index].selector = input.value.trim(); resolveAPIBridgeBoundField(`route:${route.routeId}`, 'selector', index); markAPIReviewModified(`route:${route.routeId}`) } }))
-  fields.actionView.querySelectorAll<HTMLSelectElement>('[data-v3-price-meter-source]').forEach((input) => input.addEventListener('change', () => { const { route, index } = pricingTarget(input.dataset.v3PriceMeterSource); if (route?.pricing?.[index]) { route.pricing[index].meterSource = input.value; resolveAPIBridgeBoundField(`route:${route.routeId}`, 'meterSource', index); markAPIReviewModified(`route:${route.routeId}`) }; rerenderV3APIKeepingSecret(apiForm) }))
-  fields.actionView.querySelectorAll<HTMLSelectElement>('[data-v3-price-charge-on]').forEach((input) => input.addEventListener('change', () => { const { route, index } = pricingTarget(input.dataset.v3PriceChargeOn); if (route?.pricing?.[index]) { route.pricing[index].chargeOn = input.value; resolveAPIBridgeBoundField(`route:${route.routeId}`, 'chargeOn', index); markAPIReviewModified(`route:${route.routeId}`) }; rerenderV3APIKeepingSecret(apiForm) }))
-  fields.actionView.querySelectorAll<HTMLInputElement>('[data-v3-max-charge]').forEach((input) => input.addEventListener('input', () => { const route = state.v3APIRoutes.find((item) => item.id === input.dataset.v3MaxCharge); if (route) { route.maxChargePerInvocationAtomic = Math.max(0, Math.round(Number(input.value || 0))); resolveAPIBridgeBoundField(`route:${route.routeId}`, 'maxChargePerInvocationAtomic'); markAPIReviewModified(`route:${route.routeId}`) } }))
-  fields.actionView.querySelectorAll<HTMLInputElement>('[data-v3-max-charge-usdc]').forEach((input) => input.addEventListener('input', () => { const route = state.v3APIRoutes.find((item) => item.id === input.dataset.v3MaxChargeUsdc); if (route) { route.maxChargePerInvocationAtomic = Math.max(0, Math.round(Number(input.value || 0) * 1_000_000)); resolveAPIBridgeBoundField(`route:${route.routeId}`, 'maxChargePerInvocationAtomic'); markAPIReviewModified(`route:${route.routeId}`) } }))
-  fields.actionView.querySelectorAll<HTMLInputElement>('[data-v3-price-usdc], [data-v3-price-rate], [data-v3-price-per], [data-v3-price-selector], [data-v3-max-charge], [data-v3-max-charge-usdc]').forEach((input) => input.addEventListener('change', () => rerenderV3APIKeepingSecret(apiForm)))
+  apiForm?.querySelectorAll<HTMLInputElement>('[data-v3-attestation]').forEach((input) => input.addEventListener('change', () => { if (input.dataset.v3Attestation === 'pricing') state.v3APIAttestPricing = input.checked; if (input.dataset.v3Attestation === 'usage') state.v3APIAttestUsage = input.checked; if (input.dataset.v3Attestation === 'rights') state.v3APIAttestRights = input.checked; state.v3APISellerAttestation = state.v3APIAttestPricing && state.v3APIAttestUsage && state.v3APIAttestRights; rerenderV3APIKeepingSecret(apiForm) }))
   action('api-probe', () => void run(async () => {
     syncV3APIDraftFromForm(apiForm)
-    const secret = apiForm?.querySelector<HTMLInputElement>('input[name="secret"]')?.value || ''
     if (!state.v3APIBaseURL) throw new Error('Enter the public HTTPS Base URL first.')
-    if (state.v3APIAuthType === 'basic' && !state.v3APIBasicUsername.trim()) throw new Error('Enter the Provider username first.')
-    if (state.v3APIAuthType !== 'none' && !secret) throw new Error('Enter the Provider credential first.')
+    if (!v3CredentialReady('api_bridge')) throw new Error('Complete every field required by the selected Provider authentication method.')
     state.v3APIProbe = undefined
     state.v3APIProbing = true
     rerenderV3APIKeepingSecret(apiForm)
     try {
-      const providerSecret = state.v3APIAuthType === 'basic' ? `${state.v3APIBasicUsername}:${secret}` : secret
-      state.v3APIProbe = await invoke<V3APIProbe>('provider_api_probe', { input: { baseUrl: state.v3APIBaseURL, healthPath: state.v3APIHealthPath, authType: state.v3APIAuthType, apiKeyHeader: state.v3APIKeyHeader, secret: providerSecret } })
+      state.v3APIProbe = await invoke<V3APIProbe>('provider_api_probe', { input: { baseUrl: state.v3APIBaseURL, healthPath: state.v3APIHealthPath, authType: state.v3APIAuthType, apiKeyHeader: state.v3APIKeyHeader, secret: v3RuntimeCredential('api_bridge') } })
       state.v3APIProbe.checkedAt = new Date().toISOString()
       if (!state.v3APIProbe.ok) state.v3APIProbe.error = `${state.v3APIProbe.error || 'Connection check failed'} · HTTP ${state.v3APIProbe.status || 0} · ${state.v3APIProbe.latencyMs || 0} ms · ${state.v3APIProbe.contentType || 'unknown content type'} · ${new Date(state.v3APIProbe.checkedAt).toLocaleString()}`
     } catch (error) {
@@ -4850,8 +5507,6 @@ function attachV3SurfaceHandlers() {
     } finally {
       state.v3APIProbing = false
       renderDecisionPanel()
-      const nextSecret = fields.actionView.querySelector<HTMLInputElement>('[data-v3-form="api_bridge"] input[name="secret"]')
-      if (nextSecret) nextSecret.value = secret
     }
   }))
   action('environment-cloud-open', () => { state.v3EnvironmentCloudOpen = true; renderDecisionPanel() })
@@ -4898,7 +5553,7 @@ function attachV3SurfaceHandlers() {
     }
     state.v3BaseFeeEnabled = !state.v3BaseFeeEnabled
     applyToggleState()
-    void invoke('provider_environment_update_storage', { input: { rootPath: state.v3EnvironmentRoot, workspaceGiB: state.v3EnvironmentWorkspaceGiB, pricing: { baseFee: state.v3BaseFee, baseFeeEnabled: state.v3BaseFeeEnabled, pricePerMinute: state.v3PricePerMinute, minimumMinutes: state.v3MinimumMinutes, longDiscountAfterMinutes: state.v3LongDiscountAfterMinutes, longDiscountPercent: state.v3LongDiscountPercent, longDiscountMinimumPricePercent: state.v3LongDiscountMinimumPricePercent, longDiscountEnabled: state.v3LongDiscountEnabled } } }).catch((error) => {
+    void invoke('provider_environment_update_storage', { input: { rootPath: state.v3EnvironmentRoot, workspaceGiB: state.v3EnvironmentWorkspaceGiB, pricing: v3EnvironmentPricingSettings() } }).then(() => renderDecisionPanel()).catch((error) => {
       state.v3BaseFeeEnabled = previousEnabled
       applyToggleState()
       showToast(humanizeError(error))
@@ -4924,10 +5579,19 @@ function attachV3SurfaceHandlers() {
     state.v3LongDiscountEnabled = !state.v3LongDiscountEnabled
     if (state.v3LongDiscountEnabled && state.v3LongDiscountPercent <= 0) state.v3LongDiscountPercent = 5
     applyToggleState()
-    void invoke('provider_environment_update_storage', { input: { rootPath: state.v3EnvironmentRoot, workspaceGiB: state.v3EnvironmentWorkspaceGiB, pricing: { baseFee: state.v3BaseFee, baseFeeEnabled: state.v3BaseFeeEnabled, pricePerMinute: state.v3PricePerMinute, minimumMinutes: state.v3MinimumMinutes, longDiscountAfterMinutes: state.v3LongDiscountAfterMinutes, longDiscountPercent: state.v3LongDiscountPercent, longDiscountMinimumPricePercent: state.v3LongDiscountMinimumPricePercent, longDiscountEnabled: state.v3LongDiscountEnabled } } }).catch((error) => {
+    void invoke('provider_environment_update_storage', { input: { rootPath: state.v3EnvironmentRoot, workspaceGiB: state.v3EnvironmentWorkspaceGiB, pricing: v3EnvironmentPricingSettings() } }).then(() => renderDecisionPanel()).catch((error) => {
       state.v3LongDiscountEnabled = previousEnabled
       state.v3LongDiscountPercent = previousPercent
       applyToggleState()
+      showToast(humanizeError(error))
+    })
+  })
+  action('sustained-performance-toggle', () => {
+    const previous = state.v3AllowSustainedCompute
+    state.v3AllowSustainedCompute = !previous
+    void invoke('provider_environment_update_storage', { input: { rootPath: state.v3EnvironmentRoot, workspaceGiB: state.v3EnvironmentWorkspaceGiB, pricing: v3EnvironmentPricingSettings() } }).then(() => renderDecisionPanel()).catch((error) => {
+      state.v3AllowSustainedCompute = previous
+      renderDecisionPanel()
       showToast(humanizeError(error))
     })
   })
@@ -4937,6 +5601,7 @@ function attachV3SurfaceHandlers() {
     if (input.dataset.v3Pricing === 'baseFee') state.v3BaseFee = value
     if (input.dataset.v3Pricing === 'pricePerMinute') state.v3PricePerMinute = value
     if (input.dataset.v3Pricing === 'minimumMinutes') state.v3MinimumMinutes = Math.max(1, Math.round(value))
+    if (input.dataset.v3Pricing === 'maximumMinutes') state.v3MaximumMinutes = Math.max(1, Math.min(10080, Math.round(value)))
     if (input.dataset.v3Pricing === 'longDiscountAfterMinutes') state.v3LongDiscountAfterMinutes = Math.max(1, Math.round(value))
     if (input.dataset.v3Pricing === 'longDiscountPercent') state.v3LongDiscountPercent = Math.min(90, value)
     if (input.dataset.v3Pricing === 'longDiscountMinimumPricePercent') state.v3LongDiscountMinimumPricePercent = Math.max(1, Math.min(100, value))
@@ -4946,9 +5611,12 @@ function attachV3SurfaceHandlers() {
   pricingInputs.forEach((input) => input.addEventListener('change', () => void run(async () => {
     if (!(state.v3PricePerMinute > 0)) throw new Error('Minute price must be greater than zero.')
     if (!(state.v3MinimumMinutes >= 1)) throw new Error('Minimum minutes must be at least one.')
+    if (state.v3MaximumMinutes < state.v3MinimumMinutes || state.v3MaximumMinutes > 10080) throw new Error('Maximum minutes must be between the minimum and 10,080.')
+    if (state.v3LongDiscountEnabled && state.v3LongDiscountAfterMinutes > state.v3MaximumMinutes) throw new Error('The discount interval cannot exceed the maximum rental time.')
     if (state.v3LongDiscountEnabled && state.v3LongDiscountPercent <= 0) throw new Error('The tiered discount must add at least 1% at each interval.')
     if (state.v3LongDiscountEnabled && !(state.v3LongDiscountMinimumPricePercent >= 1 && state.v3LongDiscountMinimumPricePercent <= 100)) throw new Error('The tiered discount price floor must be between 1% and 100% of the normal minute price.')
-    await invoke('provider_environment_update_storage', { input: { rootPath: state.v3EnvironmentRoot, workspaceGiB: state.v3EnvironmentWorkspaceGiB, pricing: { baseFee: state.v3BaseFee, baseFeeEnabled: state.v3BaseFeeEnabled, pricePerMinute: state.v3PricePerMinute, minimumMinutes: state.v3MinimumMinutes, longDiscountAfterMinutes: state.v3LongDiscountAfterMinutes, longDiscountPercent: state.v3LongDiscountPercent, longDiscountMinimumPricePercent: state.v3LongDiscountMinimumPricePercent, longDiscountEnabled: state.v3LongDiscountEnabled } } })
+    await invoke('provider_environment_update_storage', { input: { rootPath: state.v3EnvironmentRoot, workspaceGiB: state.v3EnvironmentWorkspaceGiB, pricing: v3EnvironmentPricingSettings() } })
+    renderDecisionPanel()
   })))
   fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-image-cloud-unavailable]').forEach((button) => button.addEventListener('click', () => { state.v3SellerError = 'Link this Dock to Exora Cloud to download the signed Ubuntu and CUDA artifacts.'; state.v3EnvironmentCloudOpen = false; renderDecisionPanel() }))
   action('vm-probe', () => {
@@ -4967,7 +5635,8 @@ function attachV3SurfaceHandlers() {
   fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-image-pick]').forEach((button) => button.addEventListener('click', () => {
     state.v3SelectedEnvironmentImageId = button.dataset.v3ImagePick
     state.v3VMTemplate = undefined
-    const installed = state.v3InstalledEnvironments.find((item) => item.attestation?.imageId === button.dataset.v3ImagePick && item.attestation?.status === 'ready')
+    const image = state.v3EnvironmentImages.find((item) => item.imageId === button.dataset.v3ImagePick)
+    const installed = v3ReadyInstalledEnvironment(image)
     if (installed) state.v3VMTemplate = { ...installed.attestation.report, imageId: installed.attestation.imageId, imageVersion: installed.attestation.imageVersion, environmentId: installed.environmentId, valid: true, runtimeBackend: 'wsl2' }
     state.v3EnvironmentCloudOpen = false
     renderDecisionPanel()
@@ -4975,6 +5644,8 @@ function attachV3SurfaceHandlers() {
   action('environment-save', () => void run(async () => {
     const image = state.v3EnvironmentImages.find((item) => item.imageId === state.v3SelectedEnvironmentImageId)
     if (!image) throw new Error('Choose an environment configuration first.')
+    const readyInstalled = v3ReadyInstalledEnvironment(image)
+    if (!readyInstalled && image.cloudAvailable === false) throw new Error('This environment is a preview and is not currently available to download.')
     if (!state.v3EnvironmentRoot) throw new Error('Choose a virtual environment root first.')
     const imageSizeBytes = Number(image.manifest?.artifact?.sizeBytes || 0)
     const maximumWorkspaceGiB = Math.floor((state.v3EnvironmentRootFreeBytes - 10 * 1024 ** 3 - imageSizeBytes) / 1024 ** 3)
@@ -4989,7 +5660,7 @@ function attachV3SurfaceHandlers() {
       await invoke('provider_environment_update_storage', { input: { rootPath: state.v3EnvironmentRoot, workspaceGiB: state.v3EnvironmentWorkspaceGiB } })
       const hold = await invoke<{ reservation?: { created?: boolean } }>('provider_environment_reserve', { input: { environmentId, imageId: image.imageId, imageVersion: image.version, workspaceGiB: state.v3EnvironmentWorkspaceGiB } })
       createdReservation = Boolean(hold.reservation?.created)
-      const installed = state.v3InstalledEnvironments.find((item) => item.attestation?.imageId === image.imageId && item.attestation?.imageVersion === image.version && item.attestation?.status === 'ready')
+      const installed = v3ReadyInstalledEnvironment(image)
       if (installed) {
         state.v3VMTemplate = { ...installed.attestation.report, imageId: installed.attestation.imageId, imageVersion: installed.attestation.imageVersion, environmentId: installed.environmentId, valid: true, runtimeBackend: 'wsl2' }
       } else {
@@ -5011,7 +5682,8 @@ function attachV3SurfaceHandlers() {
     const select = () => {
       state.v3SelectedEnvironmentImageId = card.dataset.v3ImageSelect
       state.v3VMTemplate = undefined
-      const installed = state.v3InstalledEnvironments.find((item) => item.attestation?.imageId === card.dataset.v3ImageSelect && item.attestation?.status === 'ready')
+      const image = state.v3EnvironmentImages.find((item) => item.imageId === card.dataset.v3ImageSelect)
+      const installed = v3ReadyInstalledEnvironment(image)
       if (installed) state.v3VMTemplate = { ...installed.attestation.report, imageId: installed.attestation.imageId, imageVersion: installed.attestation.imageVersion, environmentId: installed.environmentId, valid: true, runtimeBackend: 'wsl2' }
       state.v3EnvironmentCloudOpen = false
       renderDecisionPanel()
@@ -5032,15 +5704,33 @@ function attachV3SurfaceHandlers() {
     const data = new FormData(resourceForm)
     state.v3ResourceTitle = String(data.get('title') || '').trim()
     state.v3ResourceDescription = String(data.get('description') || '').trim()
-    state.v3ResourceVersion = String(data.get('version') || '').trim()
-    state.v3ResourceGrantHours = Math.max(1, Math.min(720, Number(data.get('grantHours') || 24)))
-    state.v3ResourcePrice = Math.max(0, Number(data.get('price') || 0))
+    state.v3ResourceCategory = String(data.get('category') || state.v3ResourceCategory)
+    state.v3ResourceGrantHours = Math.max(1, Math.min(720, Number(data.get('grantHours') || state.v3ResourceGrantHours)))
+    state.v3ResourceSources = state.v3ResourceSources.map((file) => ({
+      ...file,
+      title: file.name,
+      description: state.v3ResourceDescription,
+      price: Math.max(0, Number(data.get(`itemPrice:${file.token}`) || 0)),
+      tags: String(data.get(`itemTags:${file.token}`) || '').split(',').map((tag) => tag.trim()).filter(Boolean).slice(0, 12),
+      grantHours: state.v3ResourceGrantHours,
+      license: state.v3ResourceLicense,
+    }))
   }
-  resourceForm?.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input[name="title"], input[name="version"], textarea[name="description"], input[name="grantHours"], input[name="price"]').forEach((input) => {
+  resourceForm?.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>('input, textarea, select').forEach((input) => {
     input.addEventListener('input', syncResourceForm)
     input.addEventListener('change', () => { syncResourceForm(); renderDecisionPanel() })
   })
   action('choose-files', () => startV3ResourceFileSelection())
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-resource-remove]').forEach((button) => button.addEventListener('click', () => {
+    state.v3ResourceSources = state.v3ResourceSources.filter((file) => file.token !== button.dataset.v3ResourceRemove)
+    renderDecisionPanel()
+  }))
+  fields.actionView.querySelector<HTMLFormElement>('[data-v3-form="vm"]')?.addEventListener('submit', (event) => {
+    if (state.v3VMListingConstraint.available) return
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    showToast(sx(`This device already has VM Listing ${state.v3VMListingConstraint.listingId || ''}. Delete it before creating another.`, `此设备已有 VM 挂单 ${state.v3VMListingConstraint.listingId || ''}，请先删除后再创建。`))
+  }, { capture: true })
   action('resource-clear-files', () => void run(async () => {
     await invoke('provider_asset_clear_selection')
     state.v3ResourceArchive = undefined
@@ -5049,40 +5739,40 @@ function attachV3SurfaceHandlers() {
     clearV3ApplicationAttempt('resources')
     renderDecisionPanel()
   }))
-  fields.actionView.querySelector<HTMLFormElement>('[data-v3-form="vm"]')?.addEventListener('submit', (event) => { event.preventDefault(); const form = event.currentTarget as HTMLFormElement; void run(async () => { if (!state.v3VMTemplate || !state.v3VMTemplate.valid) throw new Error('Install and validate the selected environment first.'); const data = Object.fromEntries(new FormData(form)); const windows = navigator.userAgent.includes('Windows'); if (windows) { const rescanned = await invoke<{ result: Record<string, unknown> }>('provider_host_scan', { input: { reason: 'pre_publish' } }); state.v3VMProbe = rescanned.result; renderDecisionPanel() } const price = { amount: Number(data.price), currency: 'USD', unit: 'minute' }; const hold = windows ? await invoke<Record<string, any>>('provider_environment_reserve', { input: { environmentId: state.v3VMTemplate.environmentId, imageId: state.v3VMTemplate.imageId, imageVersion: state.v3VMTemplate.imageVersion, workspaceGiB: Number(data.workspaceGiB) } }) : undefined; const selected = state.v3EnvironmentImages.find((image) => image.imageId === state.v3VMTemplate?.imageId); const hardware = state.v3VMProbe?.hardware as Record<string, any> || {}; const gpu = state.v3VMProbe?.gpu as Record<string, any> || {}; const network = state.v3VMProbe?.network as Record<string, any> || {}; const title = windows ? `${gpu.name || hardware.Cpu || 'Windows PC'} · ${selected?.manifest?.name || state.v3VMTemplate.imageId}` : String(data.title || 'Verified compute environment'); const description = windows ? `Verified ${selected?.manifest?.os?.distribution || 'Linux'} environment on ${gpu.name || hardware.Cpu || 'Windows hardware'} with ${Number(data.workspaceGiB)} GiB reserved workspace and ${network.downloadMbps || 0} Mbps measured download capacity.` : String(data.description || 'Verified compute environment'); const manifest = windows ? { runtimeBackend: 'wsl2', hostOS: 'windows', isolationClass: 'managed_wsl2_shared_host', capacityGuarantee: 'disclosed_best_effort', gpuAccessMode: state.v3VMTemplate.cuda ? 'shared_windows_driver' : 'none', resourceGuarantees: { singleLeasePerHost: true, diskReservation: 'hard', cpuMemory: 'configured_caps', gpu: state.v3VMTemplate.cuda ? 'shared_best_effort' : 'none', hardwarePassthroughExclusive: false }, environmentImageId: state.v3VMTemplate.imageId, environmentImageVersion: state.v3VMTemplate.imageVersion, environmentRoot: hold?.environmentRoot, validationReceipt: state.v3VMTemplate, hardware, network, publicHost: network.publicIP || network.ip || '', capacitySnapshot: hold?.capacity, diskReservation: hold?.reservation, price, limits: { minMinutes: 1, maxMinutes: 240 }, workspaceGiB: Number(data.workspaceGiB), region: [network.city, network.region, network.country].filter(Boolean).join(', ') } : { runtimeBackend: 'kvm_libvirt', isolationClass: 'hardware_virtualized', templateId: state.v3VMTemplate.templateId, template: state.v3VMTemplate, price }; await v3CreateProductAndListing({ productKind: 'compute', title, description, manifest }, price, true, windows) }) })
+  fields.actionView.querySelector<HTMLFormElement>('[data-v3-form="vm"]')?.addEventListener('submit', (event) => { event.preventDefault(); const form = event.currentTarget as HTMLFormElement; void run(async () => { if (!state.v3VMTemplate || !state.v3VMTemplate.valid) throw new Error('Install and validate the selected environment first.'); if (!(state.v3PricePerMinute > 0) || state.v3MinimumMinutes < 1 || state.v3MaximumMinutes < state.v3MinimumMinutes || state.v3MaximumMinutes > 10080) throw new Error('Configure a valid minute price and rental range.'); if (state.v3LongDiscountEnabled && state.v3LongDiscountAfterMinutes > state.v3MaximumMinutes) throw new Error('The discount interval cannot exceed the maximum rental time.'); const data = Object.fromEntries(new FormData(form)); const windows = navigator.userAgent.includes('Windows'); if (windows) { const rescanned = await invoke<{ result: Record<string, unknown> }>('provider_host_scan', { input: { reason: 'pre_publish' } }); state.v3VMProbe = rescanned.result; renderDecisionPanel() } const price = v3ComputePriceFromState(); const hold = windows ? await invoke<Record<string, any>>('provider_environment_reserve', { input: { environmentId: state.v3VMTemplate.environmentId, imageId: state.v3VMTemplate.imageId, imageVersion: state.v3VMTemplate.imageVersion, workspaceGiB: Number(data.workspaceGiB) } }) : undefined; const selected = state.v3EnvironmentImages.find((image) => image.imageId === state.v3VMTemplate?.imageId); const hardware = state.v3VMProbe?.hardware as Record<string, any> || {}; const gpu = state.v3VMProbe?.gpu as Record<string, any> || {}; const network = state.v3VMProbe?.network as Record<string, any> || {}; const title = windows ? `${gpu.name || hardware.Cpu || 'Windows PC'} · ${selected?.manifest?.name || state.v3VMTemplate.imageId}` : String(data.title || 'Verified compute environment'); const description = windows ? `Verified ${selected?.manifest?.os?.distribution || 'Linux'} environment on ${gpu.name || hardware.Cpu || 'Windows hardware'} with ${Number(data.workspaceGiB)} GiB reserved workspace and ${network.downloadMbps || 0} Mbps measured download capacity.` : String(data.description || 'Verified compute environment'); const manifest = windows ? { runtimeBackend: 'wsl2', hostOS: 'windows', isolationClass: 'managed_wsl2_shared_host', capacityGuarantee: 'disclosed_best_effort', gpuAccessMode: state.v3VMTemplate.cuda ? 'shared_windows_driver' : 'none', resourceGuarantees: { singleLeasePerHost: true, diskReservation: 'hard', cpuMemory: 'configured_caps', gpu: state.v3VMTemplate.cuda ? 'shared_best_effort' : 'none', hardwarePassthroughExclusive: false }, environmentImageId: state.v3VMTemplate.imageId, environmentImageVersion: state.v3VMTemplate.imageVersion, environmentRoot: hold?.environmentRoot, validationReceipt: state.v3VMTemplate, hardware, network, capacitySnapshot: hold?.capacity, diskReservation: hold?.reservation, price, limits: v3ComputeLimitsFromState(), workspaceGiB: Number(data.workspaceGiB), region: [network.city, network.region, network.country].filter(Boolean).join(', ') } : { runtimeBackend: 'kvm_libvirt', isolationClass: 'hardware_virtualized', templateId: state.v3VMTemplate.templateId, template: state.v3VMTemplate, price, limits: v3ComputeLimitsFromState() }; await v3CreateProductAndListing({ productKind: 'compute', title, description, manifest }, price, true, windows) }) })
   resourceForm?.addEventListener('submit', (event) => {
     event.preventDefault()
     void run(async () => {
       syncResourceForm()
-      const archive = state.v3ResourceArchive
-      if (!archive) throw new Error('Choose source files and wait for Dock to create the ZIP.')
-      if (!state.v3ResourceTitle || !state.v3ResourceDescription || !state.v3ResourceVersion) throw new Error('Complete the Resource title, description, and version first.')
-      if (!(state.v3ResourcePrice > 0) || state.v3ResourceGrantHours < 1) throw new Error('Configure a valid access window and price.')
-      const price = { amount: state.v3ResourcePrice, currency: 'USD', unit: 'download' }
-      const attemptFingerprint = JSON.stringify({ archiveToken: archive.token, title: state.v3ResourceTitle, description: state.v3ResourceDescription, version: state.v3ResourceVersion, license: state.v3ResourceLicense, grantHours: state.v3ResourceGrantHours, delivery: 'downloadable', price })
+      if (!state.v3ResourceSources.length) throw new Error('Choose at least one Resource file.')
+      if (!state.v3ResourceTitle || !state.v3ResourceDescription) throw new Error('Complete the Res sheet title and description first.')
+      if (!state.v3ResourceCategory || !state.v3ResourceLicense || state.v3ResourceGrantHours < 1) throw new Error('Complete the resource type, authorization scope, and access window in the Res sheet settings.')
+      if (state.v3ResourceSources.some((file) => !(file.price > 0))) throw new Error('Set an independent price for every file.')
+      const attemptFingerprint = JSON.stringify({ title: state.v3ResourceTitle, description: state.v3ResourceDescription, category: state.v3ResourceCategory, license: state.v3ResourceLicense, grantHours: state.v3ResourceGrantHours, items: state.v3ResourceSources.map(({ token, price, tags, sha256 }) => ({ token, price, tags, sha256 })) })
       const idempotencyKey = v3StableApplicationAttempt('resources', attemptFingerprint)
       state.v3ResourceSubmitting = true
       renderDecisionPanel()
       try {
-        const created = await invoke<{ product: V3Product }>('provider_asset_create', { input: { productKind: 'download', applicationSource: 'resources', title: state.v3ResourceTitle, description: state.v3ResourceDescription, idempotencyKey, manifest: { applicationSource: 'resources', version: state.v3ResourceVersion, license: state.v3ResourceLicense, grantHours: state.v3ResourceGrantHours, delivery: 'downloadable', archive: { format: 'zip', sizeBytes: archive.sizeBytes, sourceCount: archive.sourceCount }, price } } })
-        archive.status = 'uploading'
-        state.v3AssetProgress = { phase: 'uploading', percent: 0, completed: 0, total: 1 }
+        const targetSheet = state.v3ResourceTargetSheet
+        const created = targetSheet ? undefined : await invoke<{ product: V3Product; listing: V3Listing }>('provider_asset_create', { input: { title: state.v3ResourceTitle, description: state.v3ResourceDescription, category: state.v3ResourceCategory, license: state.v3ResourceLicense, grantHours: state.v3ResourceGrantHours, idempotencyKey } })
+        const sheetId = targetSheet?.listingId || created?.listing.listingId || ''
+        state.v3ResourceSources = state.v3ResourceSources.map((file) => ({ ...file, status: 'uploading' }))
+        state.v3AssetProgress = { phase: 'uploading', percent: 0, completed: 0, total: state.v3ResourceSources.length }
         renderDecisionPanel()
-        await invoke('provider_asset_upload', { input: { bundleId: created.product.productId, fileToken: archive.token } })
-        archive.status = 'verified'
+        await invoke('provider_asset_upload', { input: { sheetId, idempotencyKey: `${idempotencyKey}:items`, items: state.v3ResourceSources.map((file) => ({ fileToken: file.token, title: file.name, description: state.v3ResourceDescription, tags: file.tags, license: state.v3ResourceLicense, grantHours: state.v3ResourceGrantHours, price: { amount: file.price, currency: 'USDC', unit: 'download' } })) } })
         state.v3AssetProgress = undefined
-        const saved = await invoke<{ listing: V3Listing }>('provider_listing_save', { input: { productId: created.product.productId, applicationSource: 'resources', idempotencyKey, status: 'draft', price, validation: { valid: true }, availability: { availableNow: false } } })
         state.v3ResourceArchive = undefined
         state.v3ResourceSources = []
         state.v3ResourceSubmitting = false
+        state.v3ResourceTargetSheet = undefined
         state.v3SellerTab = 'listings'
-        state.v3HighlightedListingId = saved.listing.listingId
-        state.v3ExpandedListingId = saved.listing.listingId
+        state.v3HighlightedListingId = sheetId
+        state.v3ExpandedListingId = sheetId
         state.v3ListingsLoaded = false
         await loadV3Listings()
         clearV3ApplicationAttempt('resources')
       } catch (error) {
-        if (archive.status === 'uploading') archive.status = 'failed'
+        state.v3ResourceSources = state.v3ResourceSources.map((file) => ({ ...file, status: file.status === 'uploading' ? 'failed' : file.status }))
         state.v3AssetProgress = undefined
         state.v3ResourceSubmitting = false
         renderDecisionPanel()
@@ -5092,38 +5782,41 @@ function attachV3SurfaceHandlers() {
   })
   apiForm?.addEventListener('submit', (event) => { event.preventDefault(); const form = event.currentTarget as HTMLFormElement; void run(async () => {
     syncV3APIDraftFromForm(form)
-    const data = Object.fromEntries(new FormData(form))
     if (!v3AgentMaterialsCurrent('api_bridge') || state.v3APIDraftDirty) throw new Error('Load, save, and review a fresh Agent draft for the current materials.')
     if (!state.v3APIProbe?.ok) throw new Error('Check the Health Path before submitting to Listings.')
     if (!state.v3APIAttestPricing || !state.v3APIAttestUsage || !state.v3APIAttestRights || state.v3APIUnresolvedFields.length) throw new Error('Resolve all fields and accept all three seller confirmations.')
-    if (state.v3APIReviewStatus.service !== 'confirmed' || state.v3APIRoutes.some((route) => state.v3APIReviewStatus[`route:${route.routeId}`] !== 'confirmed')) throw new Error('Approve every Agent draft item before submitting to Listings.')
-    if (state.v3APIAuthType !== 'none' && !data.secret) throw new Error('Configure the Provider credential.')
-    if (state.v3APIAuthType === 'basic' && !state.v3APIBasicUsername.trim()) throw new Error('Configure the Provider username.')
-    if (!state.v3APIRoutes.length) throw new Error('Expose at least one API route.')
-    const secretInput = form.querySelector<HTMLInputElement>('input[name="secret"]')
-    const providerSecret = state.v3APIAuthType === 'basic' ? `${state.v3APIBasicUsername}:${String(data.secret || '')}` : String(data.secret || '')
-    const reviewReceipt = ['service', ...state.v3APIRoutes.map((route) => `route:${route.routeId}`)].map((id) => ({ id, fingerprint: apiBridgeReviewFingerprint(id) }))
+    if (state.v3APIReviewStatus.service !== 'confirmed' || state.v3APIOperations.some((route) => state.v3APIReviewStatus[`operation:${route.operationId}`] !== 'confirmed')) throw new Error('Approve every Agent draft item before submitting to Listings.')
+    if (['service', ...state.v3APIOperations.map((route) => `operation:${route.operationId}`)].some((id) => v3ServiceReviewIssues('api_bridge', id).length)) throw new Error('Complete every ServiceManifest policy and pricing requirement before submitting to Listings.')
+    if (!v3CredentialReady('api_bridge')) throw new Error('Complete every field required by the selected Provider authentication method.')
+    if (!state.v3APIOperations.length) throw new Error('Expose at least one OpenAPI operation.')
+    const providerSecret = v3RuntimeCredential('api_bridge')
+    if (!state.v3APIDraft) throw new Error('Load the API Bridge Agent draft first.')
+    const reviewReceipt = await serviceDraftReviewReceipt(state.v3APIDraft)
     const materialFingerprint = v3MaterialFingerprint(state.v3APIMaterials)
     const attemptFingerprint = JSON.stringify({ draftId: state.v3APIDraftId, draftVersion: state.v3APIDraftVersion, materialFingerprint, reviewReceipt, authType: state.v3APIAuthType, apiKeyHeader: state.v3APIKeyHeader, price: { currency: 'USDC', pricingVersion: 1 } })
     state.v3APISaveAttemptKey = v3StableApplicationAttempt('api_bridge', attemptFingerprint)
     state.v3APISavingListing = true
     rerenderV3APIKeepingSecret(form)
     try {
-      const finalized = await invoke<{ product: V3Product; listing: V3Listing }>('provider_api_bridge_finalize', { input: {
+      const finalized = await invoke<{ product: V3Product; listing: V3Listing }>('provider_service_draft_submit', { input: {
         idempotencyKey: state.v3APISaveAttemptKey,
         draftId: state.v3APIDraftId,
-        draftVersion: state.v3APIDraftVersion,
-        materialFingerprint,
+        expectedVersion: state.v3APIDraftVersion,
         reviewReceipt,
         authType: state.v3APIAuthType,
-        apiKeyHeader: state.v3APIKeyHeader,
+        authName: state.v3APIKeyHeader,
         secret: providerSecret,
-        price: { currency: 'USDC', pricingVersion: 1 },
+        baseUrl: state.v3APIBaseURL,
+        healthPath: state.v3APIHealthPath,
+        credentialConfigured: state.v3APIAuthType === 'none' || Boolean(providerSecret),
+        connectivityPassed: true,
         sellerAttestationConfirmed: true,
       } })
-      if (secretInput) secretInput.value = ''
       state.v3APICredentialConfigured = state.v3APIAuthType === 'none'
+      state.v3APISecret = ''
       state.v3APIBasicUsername = ''
+      state.v3APIOAuthClientSecret = ''
+      state.v3APIMTLSPrivateKey = ''
       state.v3APISavingListing = false
       state.v3HighlightedListingId = finalized.listing.listingId
       state.v3ExpandedListingId = finalized.listing.listingId
@@ -5135,8 +5828,6 @@ function attachV3SurfaceHandlers() {
     } catch (error) {
       state.v3APISavingListing = false
       renderDecisionPanel()
-      const nextSecret = fields.actionView.querySelector<HTMLInputElement>('[data-v3-form="api_bridge"] input[name="secret"]')
-      if (nextSecret) nextSecret.value = String(data.secret || '')
       throw error
     }
   }) })
@@ -5159,6 +5850,7 @@ function attachV3SurfaceHandlers() {
     const previousId = state.v3ExpandedListingId
     const commit = () => {
       state.v3ExpandedListingId = changed ? id : undefined
+      if (state.v3EditingListingId && state.v3EditingListingId !== id) state.v3EditingListingId = undefined
       state.v3PublishConfirmListingId = undefined
       if (changed) {
         state.v3SelectedCatalogListingId = id
@@ -5170,15 +5862,37 @@ function attachV3SurfaceHandlers() {
         state.v3ConsumerTransferProgress = undefined
         state.v3ConsumerPurchase = undefined
         state.v3ConsumerLease = undefined
+        state.v3ConsumerEstimate = undefined
+        state.v3ConsumerEstimateLoading = false
+        const computeItem = v3UnifiedListingItems().find((candidate) => candidate.listing.listingId === id)
+        if (computeItem?.product.productKind === 'compute' && !computeItem.isOwner) state.v3ConsumerMinutes = v3ComputeListingLimits(computeItem.listing, computeItem.product).minMinutes
         void refreshV3ConsumerBalance()
       }
       renderDecisionPanel()
-      if (changed) animateV3ListingExpansion(id)
+      if (changed) {
+        animateV3ListingExpansion(id)
+        const computeItem = v3UnifiedListingItems().find((candidate) => candidate.listing.listingId === id)
+        if (computeItem?.product.productKind === 'compute' && !computeItem.isOwner) scheduleV3ComputeEstimate(String(id || ''), state.v3ConsumerMinutes)
+      }
     }
     if (previousId) animateV3ListingCollapse(previousId, commit)
     else commit()
   }))
   fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-listing-source]').forEach((button) => button.addEventListener('click', () => { state.v3SellerTab = normalizeV3SellerTab((button.dataset.v3ListingSource || 'vm') as V3SellerTab); renderDecisionPanel() }))
+  fields.actionView.querySelector<HTMLButtonElement>('[data-v3-vm-existing-listing]')?.addEventListener('click', (event) => {
+    const listingId = (event.currentTarget as HTMLButtonElement).dataset.v3VmExistingListing || ''
+    state.v3SellerTab = 'listings'
+    state.v3ListingMode = 'seller'
+    state.v3ListingSourceFilter = 'vm'
+    state.v3ExpandedListingId = listingId
+    state.v3HighlightedListingId = listingId
+    renderDecisionPanel()
+  })
+  fields.actionView.querySelector<HTMLButtonElement>('[data-v3-vm-slot-refresh]')?.addEventListener('click', () => {
+    state.v3SellerError = undefined
+    state.v3ListingsLoaded = false
+    void loadV3Listings()
+  })
   const listingSearch = fields.actionView.querySelector<HTMLInputElement>('[data-v3-listing-search]')
   const applyListingFilters = () => {
     const query = listingSearch?.value.trim().toLocaleLowerCase() || ''
@@ -5285,14 +5999,29 @@ function attachV3SurfaceHandlers() {
       } })
     })
   })
-  fields.actionView.querySelector<HTMLFormElement>('[data-v3-consumer-form="compute"]')?.addEventListener('input', (event) => {
+  fields.actionView.querySelectorAll<HTMLFormElement>('[data-v3-consumer-form="compute"], [data-v3-consumer-form="compute-extension"]').forEach((form) => form.addEventListener('input', (event) => {
     const input = (event.target as HTMLElement).closest<HTMLInputElement>('input[name="durationMinutes"]')
     if (!input) return
-    state.v3ConsumerMinutes = Math.max(1, Math.trunc(Number(input.value || 1)))
-    const item = v3UnifiedListingItems().find((candidate) => candidate.listing.listingId === (event.currentTarget as HTMLFormElement).dataset.listingId)
-    const charge = fields.actionView.querySelector<HTMLElement>('.v3-consumer-charge strong')
-    if (item && charge) charge.textContent = v3AtomicMoney(v3ConsumerMaxCharge(item.listing, item.product, state.v3ConsumerMinutes), 'USDC')
-  })
+    const minimum = Number(input.min || 1)
+    const maximum = Number(input.max || 10080)
+    const rawRequested = Number(input.value || 0)
+    const requested = Math.trunc(rawRequested)
+    if (!Number.isFinite(rawRequested) || rawRequested !== requested || requested < minimum || requested > maximum) {
+      if (v3ComputeEstimateTimer !== undefined) window.clearTimeout(v3ComputeEstimateTimer)
+      v3ComputeEstimateTimer = undefined
+      state.v3ConsumerEstimate = undefined
+      state.v3ConsumerEstimateLoading = false
+      state.v3ConsumerError = `Enter a whole-minute duration from ${minimum} to ${maximum}.`
+      syncV3ComputeEstimateDOM()
+      return
+    }
+    state.v3ConsumerMinutes = requested
+    state.v3ConsumerEstimate = undefined
+    state.v3ConsumerError = undefined
+    const listingId = String(form.dataset.listingId || '')
+    scheduleV3ComputeEstimate(listingId, state.v3ConsumerMinutes, form.dataset.purchaseId)
+    syncV3ComputeEstimateDOM()
+  }))
   fields.actionView.querySelector<HTMLFormElement>('[data-v3-consumer-form="compute"]')?.addEventListener('submit', (event) => {
     event.preventDefault()
     const form = event.currentTarget as HTMLFormElement
@@ -5302,21 +6031,26 @@ function attachV3SurfaceHandlers() {
       state.v3ConsumerMinutes = minutes
       const item = v3UnifiedListingItems().find((candidate) => candidate.listing.listingId === listingId)
       if (!item || item.isOwner) throw new Error('This marketplace listing is not available for purchase.')
-      const maxChargeAtomic = v3ConsumerMaxCharge(item.listing, item.product, minutes)
-      await invoke('consumer_purchase_estimate', { input: { listingId, durationMinutes: minutes } })
+      const estimate = await refreshV3ComputeEstimate(listingId, minutes)
+      if (!estimate) throw new Error(state.v3ConsumerError || 'Cloud could not quote this purchase.')
+      const maxChargeAtomic = Number(estimate.amountAtomic || 0)
       const response = await invoke<Record<string, any>>('consumer_purchase_compute', { input: { listingId, durationMinutes: minutes, idempotencyKey: `desktop:${crypto.randomUUID()}`, maxChargeAtomic, activitySessionId: `desktop:${listingId}:${crypto.randomUUID()}` } })
       state.v3ConsumerPurchase = response.purchase
-      state.v3ConsumerLease = response.lease
+      state.v3ConsumerLease = { ...(response.lease || {}), performance: response.performance || {} }
+      state.v3ConsumerEstimate = undefined
+      const remaining = v3ComputeListingLimits(item.listing, item.product).maxMinutes - Number(response.lease?.durationMinutes || minutes)
+      if (remaining > 0) scheduleV3ComputeEstimate(listingId, Math.min(minutes, remaining), String(response.purchase?.purchaseId || ''))
       return response
     })
   })
   fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-consumer-action="purchase-download"]').forEach((button) => button.addEventListener('click', () => void runV3Consumer(async () => {
     const listingId = String(button.dataset.listingId || '')
+    const resourceItemId = String(button.dataset.resourceItemId || '')
     const item = v3UnifiedListingItems().find((candidate) => candidate.listing.listingId === listingId)
     if (!item || item.isOwner) throw new Error('This marketplace listing is not available for purchase.')
-    const maxChargeAtomic = v3ConsumerMaxCharge(item.listing, item.product)
-    await invoke('consumer_purchase_estimate', { input: { listingId } })
-    const response = await invoke<Record<string, any>>('consumer_purchase_download', { input: { listingId, idempotencyKey: `desktop:${crypto.randomUUID()}`, maxChargeAtomic, activitySessionId: `desktop:${listingId}:${crypto.randomUUID()}` } })
+    const maxChargeAtomic = Number(button.dataset.maxCharge || 0)
+    await invoke('consumer_purchase_estimate', { input: { listingId, resourceItemId } })
+    const response = await invoke<Record<string, any>>('consumer_purchase_download', { input: { listingId, resourceItemId, idempotencyKey: `desktop:${crypto.randomUUID()}`, maxChargeAtomic, activitySessionId: `desktop:${listingId}:${crypto.randomUUID()}` } })
     state.v3ConsumerGrant = response.grant
     return response
   })))
@@ -5324,16 +6058,71 @@ function attachV3SurfaceHandlers() {
     state.v3ConsumerTransferProgress = { phase: 'starting', bytesDownloaded: 0, sizeBytes: Number(state.v3ConsumerGrant?.sizeBytes || 0) }
     void runV3Consumer(() => invoke<Record<string, any>>('consumer_create_transfer', { input: { grantId: button.dataset.grantId, download: true } }))
   }))
-  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-consumer-action="extend-compute"]').forEach((button) => button.addEventListener('click', () => void runV3Consumer(async () => {
-    const purchaseId = String(button.dataset.purchaseId || '')
-    const item = v3UnifiedListingItems().find((candidate) => candidate.listing.listingId === state.v3ExpandedListingId)
-    if (!purchaseId || !item) throw new Error('Compute purchase is unavailable.')
-    const maxChargeAtomic = v3ConsumerMaxCharge(item.listing, item.product, state.v3ConsumerMinutes)
-    const response = await invoke<Record<string, any>>('consumer_extend_compute', { input: { purchaseId, durationMinutes: state.v3ConsumerMinutes, idempotencyKey: `desktop:${crypto.randomUUID()}`, maxChargeAtomic } })
-    state.v3ConsumerPurchase = response.purchase || state.v3ConsumerPurchase
-    state.v3ConsumerLease = response.lease || state.v3ConsumerLease
-    return response
+  fields.actionView.querySelector<HTMLFormElement>('[data-v3-consumer-form="compute-extension"]')?.addEventListener('submit', (event) => {
+    event.preventDefault()
+    const form = event.currentTarget as HTMLFormElement
+    void runV3Consumer(async () => {
+      const purchaseId = String(form.dataset.purchaseId || '')
+      const listingId = String(form.dataset.listingId || '')
+      const minutes = Math.max(1, Math.trunc(Number(new FormData(form).get('durationMinutes') || 1)))
+      if (!purchaseId) throw new Error('Compute purchase is unavailable.')
+      const estimate = await refreshV3ComputeEstimate(listingId, minutes, purchaseId)
+      if (!estimate) throw new Error(state.v3ConsumerError || 'Cloud could not quote this extension.')
+      const response = await invoke<Record<string, any>>('consumer_extend_compute', { input: { purchaseId, durationMinutes: minutes, idempotencyKey: `desktop:${crypto.randomUUID()}`, maxChargeAtomic: Number(estimate.amountAtomic || 0) } })
+      state.v3ConsumerPurchase = response.purchase || state.v3ConsumerPurchase
+      state.v3ConsumerLease = response.lease || state.v3ConsumerLease
+      state.v3ConsumerEstimate = undefined
+      const item = v3UnifiedListingItems().find((candidate) => candidate.listing.listingId === listingId)
+      if (item) {
+        const remaining = v3ComputeListingLimits(item.listing, item.product).maxMinutes - Number(response.lease?.durationMinutes || 0)
+        if (remaining > 0) scheduleV3ComputeEstimate(listingId, Math.min(minutes, remaining), purchaseId)
+      }
+      return response
+    })
+  })
+  fields.actionView.querySelector<HTMLFormElement>('[data-v3-compute-command]')?.addEventListener('submit', (event) => {
+    event.preventDefault()
+    const form = event.currentTarget as HTMLFormElement
+    const output = form.closest<HTMLElement>('[data-v3-compute-control]')?.querySelector<HTMLElement>('[data-v3-compute-command-output]')
+    void run(async () => {
+      const command = String(new FormData(form).get('command') || '')
+      if (!command.trim()) throw new Error('Enter a VM command.')
+      if (output) output.textContent = 'Running through Exora…'
+      const response = await invoke<{ command?: Record<string, any> }>('consumer_run_compute_command', { input: { leaseId: form.dataset.leaseId, command } })
+      const result = response.command || {}
+      if (output) output.textContent = `${String(result.stdout || '')}${result.stderr ? `\n${String(result.stderr)}` : ''}\n[exit ${Number(result.exitCode || 0)}]`
+    })
+  })
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-compute-file-pick]').forEach((button) => button.addEventListener('click', () => void run(async () => {
+    const direction = button.dataset.v3ComputeFilePick || 'upload'
+    const form = button.closest<HTMLFormElement>('[data-v3-compute-transfer]')
+    const workspacePath = String((form ? new FormData(form) : new FormData()).get('workspaceRelativePath') || '')
+    const response = direction === 'upload'
+      ? await invoke<{ path?: string; canceled?: boolean }>('consumer_choose_compute_upload')
+      : await invoke<{ path?: string; canceled?: boolean }>('consumer_choose_compute_download', { input: { suggestedName: workspacePath.split('/').pop() || 'vm-file.bin' } })
+    if (!response.canceled && form) {
+      const input = form.querySelector<HTMLInputElement>('input[name="localPath"]')
+      if (input) input.value = String(response.path || '')
+    }
   })))
+  fields.actionView.querySelectorAll<HTMLFormElement>('[data-v3-compute-transfer]').forEach((form) => form.addEventListener('submit', (event) => {
+    event.preventDefault()
+    const status = form.closest<HTMLElement>('[data-v3-compute-control]')?.querySelector<HTMLElement>('[data-v3-compute-transfer-status]')
+    void run(async () => {
+      const data = new FormData(form)
+      const direction = form.dataset.v3ComputeTransfer || ''
+      const response = await invoke<{ transferId?: string }>('consumer_start_compute_transfer', { input: {
+        leaseId: form.dataset.leaseId,
+        direction,
+        localPath: String(data.get('localPath') || ''),
+        workspaceRelativePath: String(data.get('workspaceRelativePath') || ''),
+        sizeBytes: Number(data.get('sizeBytes') || 0),
+        sha256: String(data.get('sha256') || ''),
+      } })
+      if (!response.transferId) throw new Error('Direct transfer did not start.')
+      if (status) { status.textContent = 'Connecting directly…'; void pollV3ComputeTransfer(response.transferId, status) }
+    })
+  }))
   fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-consumer-action="release-lease"]').forEach((button) => button.addEventListener('click', () => void runV3Consumer(async () => {
     const response = await invoke<Record<string, any>>('consumer_release_lease', { input: { leaseId: button.dataset.leaseId } })
     state.v3ConsumerLease = response.lease || state.v3ConsumerLease
@@ -5352,20 +6141,120 @@ function attachV3SurfaceHandlers() {
     showToast(t('toast.listingReplacementStarted'))
     renderDecisionPanel()
   }))
-  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-listing-action]').forEach((button) => button.addEventListener('click', () => void run(async () => {
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-compute-terms-edit]').forEach((button) => button.addEventListener('click', () => {
     const listingId = String(button.dataset.listingId || '')
-    const listingAction = String(button.dataset.v3ListingAction || '')
-    const application = state.v3ListingApplications.find((item) => item.listing.listingId === listingId)
-    if (listingAction === 'publish' && application?.source === 'vm') {
-      const capacity = await invoke<{ result?: { providerBusy?: boolean } }>('provider_vm_capacity')
-      if (capacity.result?.providerBusy) throw new Error('VM capacity changed and the provider is currently busy. Recheck or recreate the draft before publishing.')
-    }
-    await invoke('provider_listing_action', { input: { listingId, action: listingAction } })
-    state.v3PublishConfirmListingId = undefined
+    const item = v3UnifiedListingItems().find((candidate) => candidate.listing.listingId === listingId)
+    if (!item?.isOwner || item.product.productKind !== 'compute') return
+    loadV3ComputeTermsForEditing(item.listing)
+    state.v3EditingListingId = listingId
+    renderDecisionPanel()
+  }))
+  fields.actionView.querySelector<HTMLButtonElement>('[data-v3-compute-terms-cancel]')?.addEventListener('click', () => {
+    state.v3EditingListingId = undefined
+    renderDecisionPanel()
+  })
+  fields.actionView.querySelector<HTMLFormElement>('[data-v3-compute-terms-form]')?.addEventListener('submit', (event) => {
+    event.preventDefault()
+    const form = event.currentTarget as HTMLFormElement
+    void run(async () => {
+      const listingId = String(form.dataset.listingId || '')
+      const item = v3UnifiedListingItems().find((candidate) => candidate.listing.listingId === listingId)
+      if (!item?.isOwner || item.product.productKind !== 'compute') throw new Error('Compute listing is unavailable for editing.')
+      if (!(state.v3PricePerMinute > 0)) throw new Error('Minute price must be greater than zero.')
+      if (state.v3MinimumMinutes < 1 || state.v3MaximumMinutes < state.v3MinimumMinutes || state.v3MaximumMinutes > 10080) throw new Error('Configure a valid rental range up to 10,080 minutes.')
+      if (state.v3LongDiscountEnabled && (state.v3LongDiscountAfterMinutes > state.v3MaximumMinutes || state.v3LongDiscountPercent <= 0)) throw new Error('Configure a valid long-rental discount within the maximum rental time.')
+      const saved = await invoke<{ listing: V3Listing }>('provider_listing_save', { input: {
+        listingId,
+        version: Number(item.listing.version || 0),
+        price: v3ComputePriceFromState(),
+        limits: v3ComputeLimitsFromState(),
+        workloadPolicy: v3ComputeWorkloadPolicy(),
+        performancePolicy: v3ComputePerformancePolicy(),
+        availability: item.listing.availability || {},
+      } })
+      state.v3EditingListingId = undefined
+      state.v3HighlightedListingId = saved.listing.listingId
+      state.v3ListingsLoaded = false
+      state.v3CatalogLoaded = false
+      await Promise.all([loadV3Listings(), loadV3Catalog()])
+    })
+  })
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-resource-add-files]').forEach((button) => button.addEventListener('click', () => {
+    state.v3ResourceTargetSheet = { listingId: String(button.dataset.listingId || ''), productId: String(button.dataset.productId || ''), title: String(button.dataset.title || ''), description: String(button.dataset.description || '') }
+    const existing = v3UnifiedListingItems().find((item) => item.listing.listingId === state.v3ResourceTargetSheet?.listingId && item.isOwner)
+    state.v3ResourceTitle = state.v3ResourceTargetSheet.title
+    state.v3ResourceDescription = state.v3ResourceTargetSheet.description
+    state.v3ResourceCategory = String(existing?.product.manifest?.category || 'other')
+    state.v3ResourceLicense = String(existing?.product.manifest?.license || 'commercial')
+    state.v3ResourceGrantHours = Number(existing?.product.manifest?.grantHours || 24)
+    state.v3ResourceSources = []
+    state.v3SellerTab = 'resources'
+    renderDecisionPanel()
+  }))
+  fields.actionView.querySelectorAll<HTMLFormElement>('[data-v3-resource-item-form]').forEach((form) => form.addEventListener('submit', (event) => {
+    event.preventDefault()
+    void run(async () => {
+      const data = new FormData(form)
+      await invoke('provider_resource_item_update', { input: { resourceItemId: form.dataset.resourceItemId, title: String(data.get('title') || '').trim(), description: String(data.get('description') || '').trim(), tags: String(data.get('tags') || '').split(',').map((tag) => tag.trim()).filter(Boolean).slice(0, 12), license: String(data.get('license') || '').trim(), grantHours: Number(data.get('grantHours') || 0), price: { amount: Number(data.get('price') || 0), currency: 'USDC', unit: 'download' } } })
+      state.v3ListingsLoaded = false
+      state.v3CatalogLoaded = false
+      await Promise.all([loadV3Listings(), loadV3Catalog()])
+    })
+  }))
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-resource-item-action]').forEach((button) => button.addEventListener('click', () => void run(async () => {
+    await invoke('provider_resource_item_action', { input: { resourceItemId: button.dataset.resourceItemId, action: button.dataset.v3ResourceItemAction } })
     state.v3ListingsLoaded = false
     state.v3CatalogLoaded = false
     await Promise.all([loadV3Listings(), loadV3Catalog()])
   })))
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-listing-delete-unavailable]').forEach((button) => button.addEventListener('click', (event) => {
+    event.stopPropagation()
+    showToast(sx(
+      'This Cloud deployment does not support Listing deletion yet. Deploy migration 033 and the matching Cloud binary, then retry.',
+      '当前 Cloud 尚不支持删除挂单。请先部署 migration 033 和匹配的 Cloud 二进制，再重试。',
+    ))
+  }))
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-listing-delete]').forEach((button) => button.addEventListener('click', (event) => {
+    event.stopPropagation()
+    const listingId = String(button.dataset.listingId || '')
+    if (!listingId || !window.confirm(sx('Delete this Listing? It will be removed from the market and cannot be restored. Existing transactions and audit history will be kept.', '删除这个挂单吗？它会立即下架且无法恢复；现有交易和审计历史将被保留。'))) return
+    void run(async () => {
+      await invoke('provider_listing_delete', { input: { listingId } })
+      if (state.v3ExpandedListingId === listingId) state.v3ExpandedListingId = undefined
+      if (state.v3HighlightedListingId === listingId) state.v3HighlightedListingId = undefined
+      state.v3ListingsLoaded = false
+      state.v3CatalogLoaded = false
+      await Promise.all([loadV3Listings(), loadV3Catalog()])
+      showToast(sx('Listing deleted.', '挂单已删除。'))
+    })
+  }))
+  fields.actionView.querySelectorAll<HTMLButtonElement>('[data-v3-listing-action]').forEach((button) => button.addEventListener('click', (event) => {
+    event.stopPropagation()
+    const listingId = String(button.dataset.listingId || '')
+    const listingAction = String(button.dataset.v3ListingAction || '')
+    if (!listingAction) return
+    const originalContent = button.innerHTML
+    const originalLabel = button.getAttribute('aria-label')
+    button.innerHTML = `<i></i>${escapeHTML(sx('Updating…', '处理中…'))}`
+    button.setAttribute('aria-label', sx('Updating Listing', '正在更新挂单'))
+    void runControlAction(button, async () => {
+      const application = state.v3ListingApplications.find((item) => item.listing.listingId === listingId)
+      if (listingAction === 'publish' && application?.source === 'vm') {
+        const capacity = await invoke<{ result?: { providerBusy?: boolean } }>('provider_vm_capacity')
+        if (capacity.result?.providerBusy) throw new Error('VM capacity changed and the provider is currently busy. Recheck or recreate the draft before publishing.')
+      }
+      await invoke('provider_listing_action', { input: { listingId, action: listingAction } })
+      state.v3PublishConfirmListingId = undefined
+      state.v3ListingsLoaded = false
+      state.v3CatalogLoaded = false
+      await Promise.all([loadV3Listings(), loadV3Catalog()])
+    }).finally(() => {
+      if (!button.isConnected) return
+      button.innerHTML = originalContent
+      if (originalLabel === null) button.removeAttribute('aria-label')
+      else button.setAttribute('aria-label', originalLabel)
+    })
+  }))
 }
 
 function renderDecisionPanel() {
@@ -5723,10 +6612,18 @@ function renderAccountSettings() {
   const email = state.authAccount?.email || sx('Workspace preview', '工作区预览')
   const verified = Boolean(state.authAccount?.emailVerifiedAt)
   const secure = state.cloudAuthState?.storageAvailable ?? state.settingsSystemStatus?.secureStorageAvailable
+  const apiKey = state.accountAPIKeyStatus
+  const apiKeyStatus = apiKey?.accessKey
+    ? apiKey.requiresImport ? settingStatus(sx('Import required', '需要导入'), 'warning') : settingStatus(apiKey.accessKey.maskedKey || sx('Active', '有效'), 'success')
+    : settingStatus(sx('Not created', '尚未创建'), 'warning')
+  const apiKeyActions = apiKey?.accessKey
+    ? `${apiKey.requiresImport ? settingButton('account-key-import', sx('Import', '导入'), 'soft') : ''}${settingButton('account-key-rotate', sx('Regenerate', '重新随机'), 'outline')}${settingButton('account-key-revoke', sx('Revoke', '撤销'), 'danger')}`
+    : settingButton('account-key-ensure', sx('Create', '创建'), 'soft')
   const identityRows = [
     settingRow(icon(BadgeCheck), sx('Cloud account', 'Cloud 账户'), email, verified ? settingStatus(sx('Verified', '已验证'), 'success') : settingStatus(sx('Verification unknown', '验证状态未知'), 'warning')),
     settingRow(icon(KeyRound), sx('Login password', '登录密码'), sx('Reset your password through a one-time code sent to the verified email.', '通过发送到已验证邮箱的一次性验证码重置密码。'), settingButton('change-password', sx('Change password', '修改密码'), 'soft')),
     settingRow(icon(ShieldCheck), sx('Payment PIN', '支付 PIN'), state.cloudPaymentPINConfigured === false ? sx('A six-digit PIN is still required before sensitive payments.', '执行敏感支付前仍需设置六位 PIN。') : sx('Used to approve spending, withdrawals, and other sensitive actions.', '用于批准消费、提现与其他敏感操作。'), `<div class="app-setting-actions">${settingStatus(state.cloudPaymentPINConfigured === false ? sx('Not set', '未设置') : sx('Protected', '已保护'), state.cloudPaymentPINConfigured === false ? 'warning' : 'success')}${settingButton('change-pin', sx('Change', '修改'), 'outline')}${settingButton('reset-pin', sx('Reset', '重置'), 'outline')}</div>`),
+    settingRow(icon(KeyRound), sx('Account API key', '账户 API 密钥'), sx('One long-lived sk-exora key for SDKs and servers. Cloud stores only its hash; this device stores the secret in the operating system vault.', '用于 SDK 与服务器的一把长期 sk-exora 密钥。Cloud 仅保存哈希，本机原文保存在系统凭据库。'), `<div class="app-setting-actions">${apiKeyStatus}${apiKeyActions}</div>`),
     settingRow(icon(Archive), sx('Secure storage', '安全存储'), sx('Sessions use the operating system credential vault; secrets never enter the settings file.', '会话使用操作系统凭据保险库；密钥不会写入普通设置文件。'), settingStatus(secure === false ? sx('Unavailable', '不可用') : sx('Available', '可用'), secure === false ? 'danger' : 'success')),
   ].join('')
   const accountRows = [
@@ -5744,17 +6641,31 @@ function renderAgentSettings() {
   const spendText = policy?.enabled
     ? sx(`Enabled · ${formatWalletAtomic(Number(policy.periodLimitAtomic || 0), walletUSDCDecimals())} USDC / 24h`, `已启用 · ${formatWalletAtomic(Number(policy.periodLimitAtomic || 0), walletUSDCDecimals())} USDC / 24 小时`)
     : sx('Disabled · every purchase requires human approval', '未启用 · 每笔消费均需人工批准')
+  const sessionPolicy = state.agentSessionPolicy
+  const enabledScopes = new Set(sessionPolicy?.scopes || ['market.read', 'compute.use', 'resources.use', 'api.invoke', 'account.read'])
+  const scopeChoices: Array<[string, string]> = [
+    ['market.read', sx('Market read', '市场读取')], ['compute.use', 'VM'], ['resources.use', 'Resources'],
+    ['api.invoke', 'Endpoint / API Bridge'], ['account.read', sx('Usage & activity', '用量与活动')], ['seller.draft', sx('Seller drafts', '卖家草稿')],
+  ]
+  const scopeControls = `<div class="agent-session-scope-grid">${scopeChoices.map(([scope, label]) => `<label><input type="checkbox" data-agent-session-scope="${escapeAttr(scope)}" ${enabledScopes.has(scope) ? 'checked' : ''}>${escapeHTML(label)}</label>`).join('')}</div>${settingButton('agent-session-policy-save', sx('Save permissions', '保存权限'), 'soft')}`
   const connectionRows = [
     settingRow(icon(Activity), sx('Dock MCP runtime', 'Dock MCP 运行时'), settingsRuntimeMessage(runtime), `<div class="app-setting-actions">${settingStatus(healthy ? sx('Running', '运行中') : sx('Offline', '离线'), healthy ? 'running' : 'danger')}${settingButton('test-connection', sx('Test', '测试'), 'soft')}</div>`),
     settingRow(icon(Copy), sx('Client configurations', '客户端配置'), sx('Copy a ready-to-use configuration without exposing tokens or account credentials.', '复制可直接使用的配置，不暴露 Token 或账户凭据。'), `<div class="app-setting-actions compact">${settingButton('copy-config', 'Codex', 'outline', 'data-settings-command="copy_mcp_command"')}${settingButton('copy-config', 'Claude', 'outline', 'data-settings-command="copy_mcp_command"')}${settingButton('copy-config', 'OpenCode', 'outline', 'data-settings-command="copy_opencode_config"')}${settingButton('copy-config', sx('Generic', '通用'), 'outline', 'data-settings-command="copy_mcp_command"')}</div>`),
     settingRow(icon(FolderOpen), 'Manifest', sx('Open the read-only discovery document used by local Agent clients.', '打开本地 Agent 客户端使用的只读发现文档。'), settingButton('open-manifest', sx('Open manifest', '打开 Manifest'), 'outline')),
+    settingRow(icon(Network), sx('Local REST entry', '本地 REST 入口'), sessionPolicy?.restBaseUrl || 'http://127.0.0.1:8080', settingStatus(sx('Session SK only', '仅会话 SK'), 'success')),
+    settingRow(icon(Network), sx('Supported service interface', '支持的服务接口'), 'OpenAPI 3.1 · HTTP/JSON + SSE', settingStatus(sx('Locked', '已锁定'), 'success')),
   ].join('')
   const permissionRows = [
     settingRow(icon(Hand), sx('Default approval policy', '默认审批策略'), sx('Spending, renewals, and APIs with external side effects require human approval by default.', '消费、续费与具有外部副作用的 API 默认要求人工批准。'), settingStatus(sx('Human approval', '人工批准'), 'warning')),
     settingRow(icon(Wallet), sx('Agent spending limit', 'Agent 消费限额'), spendText, settingButton('open-agent-limit', sx('Open Wallet', '前往 Wallet'), 'soft')),
+    settingRow(icon(ShieldCheck), sx('Default session permissions', '默认会话权限'), sx('Applied to the next MCP initialize. Existing sessions keep their issued scopes.', '应用于下一次 MCP 初始化；现有会话保留签发时的权限。'), scopeControls),
   ].join('')
+  const sessionRows = state.agentSessions.length
+    ? state.agentSessions.map((session) => settingRow(icon(Activity), session.clientName || sx('Agent session', 'Agent 会话'), `${(session.scopes || []).join(' · ')} · ${sx('expires', '到期')} ${compactTimestamp(session.expiresAt || '')}`, `<div class="app-setting-actions">${settingStatus(sx('Active', '有效'), 'running')}${settingButton('agent-session-revoke', sx('Revoke', '撤销'), 'outline', `data-session-id="${escapeAttr(session.sessionId)}"`)}</div>`)).join('')
+    : settingRow(icon(Activity), sx('Active sessions', '活动会话'), sx('Every MCP initialize creates a different local-only session key.', '每次 MCP initialize 都会创建不同的仅本机会话密钥。'), settingStatus(sx('None', '无'), 'neutral'))
   return settingsSection(sx('CONNECTION', '连接'), sx('Dock & MCP', 'Dock 与 MCP'), sx('Dock publishes one local connection surface for supported Agent clients.', 'Dock 为受支持的 Agent 客户端提供统一的本地连接入口。'), connectionRows)
     + settingsSection(sx('BOUNDARIES', '边界'), sx('Approval & spending', '审批与消费'), sx('Wallet remains the source of truth for balances and spending limits.', '余额与消费限额仍以 Wallet 为唯一事实来源。'), permissionRows)
+    + settingsSection(sx('SESSIONS', '会话'), sx('Local Agent sessions', '本地 Agent 会话'), sx('Session keys expire after 30 minutes idle or 24 hours maximum and never work against Cloud directly.', '会话密钥空闲 30 分钟或最长 24 小时后失效，且永远不能直接访问 Cloud。'), sessionRows)
     + renderSellerAutomationSettings()
 }
 
@@ -6399,14 +7310,20 @@ async function refreshSettingsStatus() {
   if (state.settingsOpen) renderSettingsPanel()
   try {
     if (hasDesktopBridge()) {
-      const [system, policy, credentials, runs] = await Promise.all([
+      const [system, policy, credentials, runs, accountKey, agentSessions, agentSessionPolicy] = await Promise.all([
         invoke<DesktopSystemStatus>('system_settings_status'),
         invoke<{ configured?: boolean; policy?: SellerAutomationPolicy }>('seller_automation_policy_get').catch(() => ({ configured: false, policy: undefined })),
         invoke<{ credentials?: SellerAutomationCredential[] }>('seller_automation_credentials').catch(() => ({ credentials: [] })),
         invoke<{ runs?: SellerDraftRunSummary[] }>('seller_automation_draft_runs', { input: { limit: 20 } }).catch(() => ({ runs: [] })),
+        invoke<AccountAPIKeyStatus>('account_api_key_status').catch(() => undefined),
+        invoke<{ sessions?: AgentSessionStatus[] }>('agent_session_status').catch(() => ({ sessions: [] })),
+        invoke<AgentSessionPolicy>('agent_session_policy_get').catch(() => undefined),
       ])
       state.settingsSystemStatus = system
       state.sellerAutomation = { configured: Boolean(policy.configured), policy: policy.policy, credentials: credentials.credentials || [], runs: runs.runs || [] }
+      state.accountAPIKeyStatus = accountKey
+      state.agentSessions = agentSessions.sessions || []
+      state.agentSessionPolicy = agentSessionPolicy
     } else {
       state.settingsSystemStatus = previewSystemSettingsStatus()
       state.sellerAutomation = { configured: false, credentials: [], runs: [] }
@@ -6590,8 +7507,10 @@ async function submitPINSettings() {
   renderPINSettingsModal()
   try {
     if (setup) {
-      await invoke<CloudAuthState>('auth_pin_set', { input: { pin: state.pinSettingsSetupValue, pinConfirm: state.pinSettingsSetupValue } })
+      const result = await invoke<CloudAuthState & { accountKey?: { token?: string; error?: string } }>('auth_pin_set', { input: { pin: state.pinSettingsSetupValue, pinConfirm: state.pinSettingsSetupValue } })
       state.cloudPaymentPINConfigured = true
+      if (result.accountKey?.token) window.prompt(sx('Copy this account key now. It will not be shown again.', '请立即复制账户密钥，之后不会再次显示。'), result.accountKey.token)
+      else if (result.accountKey?.error) showToast(result.accountKey.error)
     } else {
       await invoke<CloudAuthState>('auth_pin_change', {
         input: {
@@ -6903,6 +7822,42 @@ async function handleSettingsAction(action: string, button: HTMLButtonElement) {
       authGate.openPasswordReset()
       return
     }
+    if (action === 'account-key-ensure') {
+      const result = await invokeAction<{ token?: string }>('account_api_key_ensure')
+      if (result.token) window.prompt(sx('Copy this account key now. It will not be shown again.', '请立即复制账户密钥，之后不会再次显示。'), result.token)
+      await refreshSettingsStatus()
+      return
+    }
+    if (action === 'account-key-import') {
+      const key = window.prompt(sx('Paste your existing sk-exora account key. It will be encrypted in the operating system vault.', '粘贴已有的 sk-exora 账户密钥。它会被加密保存到系统凭据库。'))?.trim()
+      if (!key) return
+      await invokeAction('account_api_key_import', { input: { key } })
+      await refreshSettingsStatus()
+      return
+    }
+    if (action === 'account-key-rotate' || action === 'account-key-revoke') {
+      const pin = window.prompt(sx('Enter your six-digit Payment PIN in this trusted Desktop window.', '请在此可信 Desktop 窗口中输入六位支付 PIN。'))?.trim()
+      if (!pin) return
+      if (action === 'account-key-revoke' && !window.confirm(sx('Revoke the current account key? All clients using it will stop immediately.', '撤销当前账户密钥吗？所有使用它的客户端会立即停止工作。'))) return
+      const result = await invokeAction<{ token?: string }>(action === 'account-key-rotate' ? 'account_api_key_rotate' : 'account_api_key_revoke', { input: { pin } })
+      if (result.token) window.prompt(sx('Copy the new account key now. It will not be shown again.', '请立即复制新的账户密钥，之后不会再次显示。'), result.token)
+      await refreshSettingsStatus()
+      return
+    }
+    if (action === 'agent-session-policy-save') {
+      const scopes = Array.from(document.querySelectorAll<HTMLInputElement>('[data-agent-session-scope]:checked')).map((input) => input.dataset.agentSessionScope || '').filter(Boolean)
+      state.agentSessionPolicy = await invokeAction<AgentSessionPolicy>('agent_session_policy_save', { input: { scopes } })
+      showToast(sx('Default Agent session permissions saved.', '默认 Agent 会话权限已保存。'))
+      await refreshSettingsStatus()
+      return
+    }
+    if (action === 'agent-session-revoke') {
+      const sessionId = button.dataset.sessionId || ''
+      if (!sessionId) return
+      await invokeAction('agent_session_revoke', { input: { sessionId } })
+      await refreshSettingsStatus()
+      return
+    }
     if (action === 'sign-out') {
       if (window.confirm(sx('Sign out of Exora Cloud on this device?', '确定要在此设备上退出 Exora Cloud 吗？'))) signOutProfile()
       return
@@ -6922,10 +7877,12 @@ async function handleSettingsAction(action: string, button: HTMLButtonElement) {
       return
     }
     if (action === 'test-connection') {
+      const result = await invokeAction<{ ok?: boolean; categories?: Array<{ applicationSource?: string; ok?: boolean }> }>('mcp_connectivity_test')
       const runtime = await invokeAction<AppStatus>('app_status')
       state.appStatus = runtime
       if (state.settingsSystemStatus) state.settingsSystemStatus.runtime = runtime
-      showToast(runtime.daemon === 'healthy' ? sx('Dock connection is healthy.', 'Dock 连接正常。') : settingsRuntimeMessage(runtime))
+      const connected = Array.isArray(result.categories) && result.categories.length === 4 && result.categories.every((category) => category.ok)
+      showToast(connected ? sx('MCP and all four categories are connected.', 'MCP 与四个分类均已连通。') : sx('MCP connectivity is incomplete.', 'MCP 连通性不完整。'))
       renderSettingsPanel()
       return
     }
@@ -7159,7 +8116,7 @@ function paymentPINRequiredForElement(target: Element, submitter?: HTMLElement |
   if (target.closest('[data-pin-settings-modal]')) return false
   if (target.closest('[data-action="open-wallet"], [data-settings-action="change-pin"], [data-profile-action="change-pin"]')) return true
   if (target.closest('[data-wallet-withdraw-form], [data-wallet-limit-form], [data-wallet-tab="withdraw"], [data-wallet-tab="agent-limit"]')) return true
-  if (target.closest('[data-v3-consumer-form="api"], [data-v3-consumer-form="compute"]')) return true
+  if (target.closest('[data-v3-consumer-form="api"], [data-v3-consumer-form="compute"], [data-v3-consumer-form="compute-extension"]')) return true
   if (target.closest('[data-v3-consumer-action="purchase-download"], [data-v3-consumer-action="extend-compute"]')) return true
   const approvalForm = target.closest<HTMLFormElement>('[data-v3-approval-form]')
   if (approvalForm) {
@@ -7366,7 +8323,7 @@ async function bootstrapWorkspace() {
       updateV3HostScanProgressButton()
       return
     }
-    if (event.kind === 'asset_packaging' && event.phase && typeof event.percent === 'number') {
+    if ((event.kind === 'asset_packaging' || event.kind === 'asset_hashing') && event.phase && typeof event.percent === 'number') {
       state.v3AssetProgress = {
         phase: event.phase === 'complete' ? 'complete' : 'packaging',
         percent: event.percent,

@@ -9,6 +9,7 @@ const {
   readAPIBridgeMaterialManifest,
   removeAPIBridgeMaterial,
   storedMaterialPath,
+  validateTextMaterial,
   writeJSONAtomically,
 } = require('./api-materials.cjs')
 
@@ -90,3 +91,9 @@ test('does not overwrite a malformed manifest during removal', async () => withT
   await assert.rejects(removeAPIBridgeMaterial({ root, draftId: 'apid_invalid0', id: 'anything' }), /manifest is invalid/)
   assert.equal(await fsp.readFile(manifestPath, 'utf8'), '{not-json')
 }))
+
+test('accepts UTF-8 source materials and rejects binary or malformed text', () => {
+  assert.equal(validateTextMaterial(Buffer.from('export const answer = 42\n'), 'service.ts').toString('utf8'), 'export const answer = 42\n')
+  assert.throws(() => validateTextMaterial(Buffer.from([0x41, 0x00, 0x42]), 'model.bin'), /binary file/)
+  assert.throws(() => validateTextMaterial(Buffer.from([0xc3, 0x28]), 'broken.txt'), /valid UTF-8/)
+})

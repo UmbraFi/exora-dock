@@ -217,6 +217,87 @@ func TestExplicitNestedCommercialFieldKeepsSavedSiblingDefaults(t *testing.T) {
 	}
 }
 
+func TestVMCommercialValuesNormalizeToComputeTimeV2(t *testing.T) {
+	policy := SellerAutomationPolicy{}
+	request := CreateRequest{
+		Kind: KindVM,
+		Commercial: map[string]any{
+			"price": map[string]any{
+				"amount": 0.029, "currency": "USDC", "baseFee": 0.5,
+				"longDurationDiscount": map[string]any{"everyMinutes": 60, "additionalPercentOff": 5, "minimumRatePercent": 50},
+			},
+			"limits": map[string]any{"minimumMinutes": 10, "maximumMinutes": 240},
+		},
+		Specification: map[string]any{"environmentImageId": "ubuntu", "diskBytes": float64(20 << 30), "environmentRoot": `C:\\Exora`},
+	}
+	normalized, missing, err := normalizeRunInput(policy, request, []Candidate{{DisplayName: "VM", Summary: "verified VM"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("unexpected missing fields: %v", missing)
+	}
+	price := mapValue(normalized, "price")
+	if textValue(price, "model") != "compute_time_v2" {
+		t.Fatalf("price was not canonicalized: %+v", price)
+	}
+	if rate, _ := numberValue(price, "amountAtomicPerMinute"); rate != 29000 {
+		t.Fatalf("unexpected atomic minute rate: %+v", price)
+	}
+	if base, _ := numberValue(price, "baseFeeAtomic"); base != 500000 {
+		t.Fatalf("unexpected atomic base fee: %+v", price)
+	}
+	discount := mapValue(price, "longDurationDiscount")
+	if every, _ := numberValue(discount, "everyMinutes"); every != 60 {
+		t.Fatalf("unexpected discount interval: %+v", discount)
+	}
+	if bps, _ := numberValue(discount, "additionalBpsOff"); bps != 500 {
+		t.Fatalf("unexpected discount bps: %+v", discount)
+	}
+	limits := mapValue(normalized, "limits")
+	if minimum, _ := numberValue(limits, "minMinutes"); minimum != 10 {
+		t.Fatalf("unexpected minimum: %+v", limits)
+	}
+	if maximum, _ := numberValue(limits, "maxMinutes"); maximum != 240 {
+		t.Fatalf("unexpected maximum: %+v", limits)
+	}
+	workload := mapValue(normalized, "workloadPolicy")
+	performance := mapValue(normalized, "performancePolicy")
+	if textValue(workload, "sustainedCompute") != "allowed" || textValue(workload, "cryptocurrencyMining") != "prohibited" {
+		t.Fatalf("unexpected workload policy: %+v", workload)
+	}
+	if minimum, _ := numberValue(performance, "minimumDeliveryBps"); minimum != 8500 {
+		t.Fatalf("unexpected performance policy: %+v", performance)
+	}
+}
+
+func TestVMDisabledDecimalOptionsRemainDisabled(t *testing.T) {
+	request := CreateRequest{
+		Kind: KindVM,
+		Commercial: map[string]any{
+			"price":                           map[string]any{"amount": 0.029, "currency": "USDC"},
+			"baseFee":                         0.5,
+			"baseFeeEnabled":                  false,
+			"longDiscountAfterMinutes":        60,
+			"longDiscountPercent":             5,
+			"longDiscountMinimumPricePercent": 50,
+			"longDiscountEnabled":             false,
+		},
+		Specification: map[string]any{"environmentImageId": "ubuntu", "diskBytes": float64(20 << 30), "environmentRoot": `C:\\Exora`},
+	}
+	normalized, _, err := normalizeRunInput(SellerAutomationPolicy{}, request, []Candidate{{DisplayName: "VM"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	price := mapValue(normalized, "price")
+	if base, _ := numberValue(price, "baseFeeAtomic"); base != 0 {
+		t.Fatalf("disabled base fee was enabled: %+v", price)
+	}
+	if mapValue(price, "longDurationDiscount") != nil {
+		t.Fatalf("disabled discount was enabled: %+v", price)
+	}
+}
+
 func TestResourcesRejectVMMountDelivery(t *testing.T) {
 	policy := SellerAutomationPolicy{Defaults: map[string]map[string]any{KindResources: {
 		"commercial":    map[string]any{"price": map[string]any{"amount": float64(5), "currency": "USDC"}},

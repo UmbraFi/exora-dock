@@ -13,6 +13,7 @@ import (
 	"github.com/exora-dock/exora-dock/internal/cloudlink"
 	"github.com/exora-dock/exora-dock/internal/discovery"
 	"github.com/exora-dock/exora-dock/internal/endpoint"
+	"github.com/exora-dock/exora-dock/internal/localauth"
 	"github.com/exora-dock/exora-dock/internal/sellerdraft"
 )
 
@@ -23,6 +24,7 @@ type Options struct {
 	Endpoints      *endpoint.Store
 	EndpointTunnel *endpoint.TunnelClient
 	SellerDrafts   *sellerdraft.Service
+	LocalAuth      *localauth.Store
 }
 
 type Handler struct {
@@ -32,11 +34,12 @@ type Handler struct {
 	endpoints      *endpoint.Store
 	endpointTunnel *endpoint.TunnelClient
 	sellerDrafts   *sellerdraft.Service
+	localAuth      *localauth.Store
 	startTime      time.Time
 }
 
 func NewHandler(opts Options) *Handler {
-	return &Handler{discovery: opts.Discovery, cloudURL: opts.CloudURL, cloudTokenPath: opts.CloudTokenPath, endpoints: opts.Endpoints, endpointTunnel: opts.EndpointTunnel, sellerDrafts: opts.SellerDrafts, startTime: time.Now().UTC()}
+	return &Handler{discovery: opts.Discovery, cloudURL: opts.CloudURL, cloudTokenPath: opts.CloudTokenPath, endpoints: opts.Endpoints, endpointTunnel: opts.EndpointTunnel, sellerDrafts: opts.SellerDrafts, localAuth: opts.LocalAuth, startTime: time.Now().UTC()}
 }
 
 func (h *Handler) Health(w http.ResponseWriter, _ *http.Request) {
@@ -87,6 +90,59 @@ func (h *Handler) cloudV2Request(r *http.Request, method, path string, body any)
 	defer resp.Body.Close()
 	payload, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	return resp.StatusCode, payload, err
+}
+
+func (h *Handler) accountCloudRequest(r *http.Request, method, path string, body any) (int, []byte, error) {
+	if h.localAuth == nil {
+		return 0, nil, fmt.Errorf("Dock local authorization is unavailable")
+	}
+	_, accountKey, ok := h.localAuth.AccountKey()
+	if !ok {
+		return 0, nil, fmt.Errorf("Exora account API key is not configured on this Dock")
+	}
+	token, err := cloudlink.LoadToken(h.cloudTokenPath)
+	if err != nil {
+		return 0, nil, fmt.Errorf("Dock Cloud link unavailable: %w", err)
+	}
+	cloudURL := firstNonEmpty(strings.TrimSpace(h.cloudURL), strings.TrimSpace(token.CloudURL))
+	var reader io.Reader
+	if body != nil {
+		data, marshalErr := json.Marshal(body)
+		if marshalErr != nil {
+			return 0, nil, marshalErr
+		}
+		reader = bytes.NewReader(data)
+	}
+	ctx, cancel := contextWithTimeout(r, 3*time.Minute)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(cloudURL, "/")+path, reader)
+	if err != nil {
+		return 0, nil, err
+	}
+	for name, values := range r.Header {
+		if protectedLocalForwardHeader(name) {
+			continue
+		}
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Authorization", "Bearer "+accountKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	payload, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	return resp.StatusCode, payload, err
+}
+
+func protectedLocalForwardHeader(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	return name == "authorization" || name == "host" || name == "cookie" || strings.HasPrefix(name, "x-exora-")
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

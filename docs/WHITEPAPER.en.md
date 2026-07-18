@@ -1,4 +1,4 @@
-<!-- Source: WHITEPAPER.md; normalized-sha256: 1bb017149f37d5c5b76c1d31e061b06a97b19952abe54f6546b12d2b59591db7 -->
+<!-- Source: WHITEPAPER.md; normalized-sha256: b98e7e94e9c8a22eea64b5118b3ffbf7c817d5b1b9e1d82807cd83b504763791 -->
 
 # Exora V3.2 AI-First Resource Market Protocol Whitepaper
 
@@ -6,19 +6,19 @@
 **Status: Implemented Alpha protocol with Technical Preview constraints**<br>
 **Positioning: a fast, convenient, Agent-first resource exchange market connected through MCP**
 
-> Connect an existing Agent to Exora through MCP to buy or sell compute, packaged resources, local Endpoints, and public API Bridges. Dock keeps credentials and execution local; humans retain control of funds, public publishing, approvals, and payout.
+> Connect an existing Agent to Exora through MCP to buy or sell compute, independently priced Resource files, local Endpoints, and public API Bridges. Dock keeps local authority and Endpoint credentials inside its controlled boundary; humans retain control of funds, public publishing, approvals, and payout.
 
 ## 1. Abstract
 
-Exora V3.2 turns prepared digital resources into standardized products that an Agent can search, purchase, invoke, or prepare for sale. A provider may use Exora Dock to sell a verified KVM or managed WSL2 environment, package local files as a paid download, expose a private local service as an Endpoint, or connect a public HTTPS service as an API Bridge. Exora Cloud manages the catalog, purchases, leases, usage, balanced ledger, and provider revenue. Dock manages local authority, credentials, runtime validation, file transfer, tunnels, and execution.
+Exora V3.2 turns prepared digital resources into standardized products that an Agent can search, purchase, invoke, or prepare for sale. A provider may use Exora Dock to sell a verified KVM or managed WSL2 environment, place one or more local files as independently priced ResourceItems in a themed Resource sheet, expose a private local service as an Endpoint, or connect a public HTTPS service as an API Bridge. Exora Cloud manages the catalog, purchases, Leases, API Orders, usage, balanced ledger, and provider revenue. Dock manages local authority, Endpoint credentials, runtime validation, file transfer, tunnels, and execution.
 
 The protocol flow is:
 
 ```text
-Resource → Listing → Lease → Usage → Settlement
+Product → Listing → Purchase / Lease / API Order → Delivery / Invocation → Settlement
 ```
 
-The market exposes four first-class application categories: `vm`, `resources`, `endpoint`, and `api_bridge`. Top-level `applicationSource` defines responsibility; `productKind` describes only the billing/execution model: `compute` prepurchases VM minutes, `download` buys a time-limited DownloadGrant for one AssetVersion, and `api_operation` buys one declared operation. One `AgentProductManifest` describes them all.
+The market exposes four first-class application categories: `vm`, `resources`, `endpoint`, and `api_bridge`. Top-level `applicationSource` defines responsibility; `productKind` describes only the billing/execution model: `compute` prepurchases VM minutes, `download` buys a time-limited DownloadGrant for one fixed ResourceItem version, and `api_operation` buys one declared operation. One `AgentProductManifest` describes them all.
 
 Compute retains a strict 1:1 model: one physical computer, one `InventorySlot`, and one Consumer VM. Worker detects provider activity and pauses automatically without manual delisting. After the host becomes idle, three full checks restore the Listing. Consumer Agent receives Guest Root; Worker restores a clean VM from signed Golden Image after use.
 
@@ -33,8 +33,8 @@ The Dock daemon, Electron application, and Cloud repository implement the V3 mar
 | Consumer MCP | Search, manifest, estimate, compute purchase/extension, download grant/transfer, operation invocation, lease, usage, and release | The user brings their own MCP Agent; Dock is not a chat Agent |
 | Seller MCP | Authorized discovery and durable private drafts for VM, Resources, Endpoint, and API Bridge | Draft-only; public publishing, seller attestations, credentials, and unsaved commercial decisions remain human-controlled |
 | Compute | Linux KVM and Windows `managed_wsl2_shared_host`; one active Lease per host | KVM is the hardware-isolated path; WSL2 is explicitly disclosed as shared-host isolation and does not claim exclusive GPU passthrough |
-| Resources | Immutable ZIP upload, SHA-256 verification, paid time-limited DownloadGrant, retry and resume | The current Desktop packages one bundle up to its configured upload limit |
-| Endpoint / API Bridge | Dock tunnel for authorized private or loopback services; transparent Gateway for authorized public HTTPS services | Every route is reviewed and metered; arbitrary URLs and undeclared routes are rejected |
+| Resources | Themed sheet, per-file terms, SHA-256 verification, and paid time-limited per-file DownloadGrant | 1 GiB per file and 5 GiB default account quota; sellers compress folders themselves |
+| Endpoint / API Bridge | `dock_tunnel` for authorized private or loopback services; Cloud `cloud_direct` Gateway for authorized public HTTPS services | OpenAPI 3.1 is authoritative; every Operation, Policy, and price is reviewed |
 | Billing | Unified reserve, capture, release, refund, balanced journals, 24-hour seller revenue hold, and configured native-USDC deposit/withdrawal rails | Custody and withdrawal readiness depend on production Postgres, SMTP, Solana, and KMS configuration |
 
 The current desktop release is `0.1.0-preview.2`, a Technical Preview for Windows x64, macOS ARM64, and Linux x64 rather than a production release. Windows is not Authenticode-signed, macOS is ad-hoc signed and not notarized, and Linux packages rely on the signed release index. Users must verify the published SHA-256 and should expect platform security prompts appropriate to those signing states.
@@ -76,11 +76,11 @@ V3.2 Alpha does not:
 
 ### 3.1 Consumer and Consumer Agent
 
-The Consumer is the human account purchasing resources and owns budgets, payment methods, Leases, artifacts, and authorization policy. The Consumer Agent is a user-owned MCP client. It may search, estimate, request a Lease, and act inside a valid Capability, but cannot widen its authority, rewrite usage history, or decide a dispute for the human.
+The Consumer is the human account purchasing resources and owns budgets, payment methods, Leases, DownloadGrants, API Orders, result files, and authorization policy. The Consumer Agent is a user-owned MCP client. It may search, estimate, purchase, invoke, and act inside a valid Capability, but cannot widen its authority, rewrite usage history, or decide a dispute for the human.
 
 ### 3.2 Provider
 
-The Provider uploads data, connects a physical computer, or publishes an Endpoint or API Bridge and is responsible for availability, description, price, license, routes, credentials, and legality. A Provider may work entirely through the Electron companion or optionally authorize an existing Agent to prepare private drafts. Providers publish from the Listings workspace; a draft or a resource that fails automated validation is never public. Identity and payout-account verification are required before first payout where the payment rail requires them.
+The Provider uploads data, connects a physical computer, or publishes an Endpoint or API Bridge and is responsible for availability, description, price, license, Operations, credentials, and legality. A Provider may work entirely through the Electron companion or optionally authorize an existing Agent to prepare private drafts. Providers publish from the Listings workspace; a draft or a resource that fails automated validation is never public. Identity and payout-account verification are required before first payout where the payment rail requires them.
 
 ### 3.3 Exora Dock
 
@@ -264,7 +264,7 @@ A Lease binds Consumer, Listing, Slot, image version, maximum budget, capabiliti
   "expiresAt": "2026-07-12T10:38:00Z",
   "billingStartedAt": "2026-07-12T10:08:12Z",
   "maxBudget": {"currency": "USD", "amount": 5000},
-  "capabilities": ["guest_ssh", "sftp", "rsync"],
+  "capabilities": ["guest_isolation_v1", "lease_terminal_v1", "lease_transfer_webrtc_v1"],
   "version": 5
 }
 ```
@@ -281,8 +281,9 @@ Compute is prepurchased in whole minutes.
   "purchaseId": "cp_01",
   "leaseId": "lea_01",
   "durationMinutes": 30,
-  "pricePerMinute": {"currency": "USD", "amount": 20},
-  "prepaidAmount": {"currency": "USD", "amount": 600},
+  "priceSnapshot": {"model": "compute_time_v2", "currency": "USDC", "unit": "minute", "amountAtomicPerMinute": 29000, "baseFeeAtomic": 500000, "longDurationDiscount": {"everyMinutes": 60, "additionalBpsOff": 500, "minimumRateBps": 5000}},
+  "limitsSnapshot": {"minMinutes": 10, "maxMinutes": 240},
+  "amountAtomic": 1370000,
   "state": "active",
   "activatedAt": "2026-07-13T08:00:00Z",
   "expiresAt": "2026-07-13T08:30:00Z",
@@ -291,7 +292,7 @@ Compute is prepurchased in whole minutes.
 }
 ```
 
-`durationMinutes` is a positive integer. CapacityHold reserves the full amount; VM and Guest verification settle it in one charge. Voluntary early release does not refund unused minutes. Failed provisioning is not charged. Provider or platform fault refunds unused whole minutes under SLA. Extension is another integer-minute purchase.
+An initial `durationMinutes` is a positive integer within the Listing's minimum and maximum. The start fee is charged only when the Lease is first created. Each completed discount interval reduces only later minutes, using integer USDC atomic units and basis points; all segments are summed and rounded once. Extensions may start at one minute, continue the marginal discount schedule from cumulative purchased minutes, and cannot take the Lease beyond its snapshotted maximum. CapacityHold reserves the full quoted amount; VM and Guest verification settle it in one charge. Voluntary early release does not refund unused minutes. Failed provisioning refunds both start and minute charges. Provider or platform fault refunds unused whole minutes under SLA.
 
 ### 4.9 ProviderActivitySnapshot
 
@@ -314,27 +315,29 @@ Compute is prepurchased in whole minutes.
 
 The Snapshot distinguishes provider-local work from Exora Lease processes. If local work reduces guaranteed capacity, Listing pauses immediately without manual action.
 
-### 4.10 AssetBundle, DownloadGrant, and TransferSession
+### 4.10 ResourceSheet, ResourceItem, DownloadGrant, and TransferSession
 
-AssetBundle packages one or more files, text, license, and a fixed AssetVersion as a per-purchase `download` product. Payment creates a non-transferable DownloadGrant.
+A ResourceSheet is a themed container and does not grant whole-sheet download rights. It contains one or more independent ResourceItems. Every regular file has its own title, description, license, fixed version, price, and Grant duration and must be purchased separately. Payment creates a non-transferable DownloadGrant bound to exactly one ResourceItem.
 
 ```json
 {
-  "schemaVersion": "exora.download_grant.v3alpha1",
-  "downloadGrantId": "dg_01",
+  "grantId": "dgr_01",
+  "listingId": "lst_dataset_01",
   "productId": "prd_dataset_01",
-  "assetVersionId": "asset_sales_2026:v3",
-  "consumerAccountId": "acct_buyer",
-  "pricePaid": {"currency": "USD", "amount": 900},
-  "issuedAt": "2026-07-13T08:00:00Z",
+  "resourceItemId": "rit_sales_2026_01",
+  "buyerAccountId": "acct_buyer",
+  "status": "active",
+  "amountAtomic": 900000,
+  "resourceItemVersion": 3,
+  "priceSnapshot": {"currency": "USDC", "unit": "download", "amountAtomic": 900000},
+  "grantHoursSnapshot": 24,
+  "createdAt": "2026-07-13T08:00:00Z",
   "expiresAt": "2026-07-14T08:00:00Z",
-  "state": "active",
-  "urlReissueCount": 2,
-  "rangeRequestsAllowed": true
+  "sha256": "..."
 }
 ```
 
-Provider configures a Grant duration from one hour to 30 days. During validity the Agent may reissue short-lived URLs, resume with Range, and redownload the same AssetVersion without another charge. TransferSession contains only temporary URL, Range, size, SHA-256, and transfer state.
+Provider configures a Grant duration from one hour to 30 days for each ResourceItem. During validity the Agent may reissue short-lived URLs, resume with Range, and redownload the same purchased ResourceItem version without another charge. TransferSession contains only temporary URL, Range, size, SHA-256, and transfer state and cannot widen the Grant. The platform does not accept directories; a seller that wants to sell a directory as one item must compress it first and upload the archive as an ordinary ResourceItem.
 
 ### 4.11 ApiOperationProduct and ApprovalRequest
 
@@ -388,7 +391,7 @@ A missing receipt or any failed critical check moves the Slot to `quarantined`.
 
 The hardware-isolated profile uses Linux KVM/libvirt. Host runs Worker, Hypervisor, network controls, metering, and image reset and retains minimal CPU, memory, and disk. The Consumer VM receives the entire listed GPU through PCIe Passthrough and the remaining guaranteed CPU, memory, and workspace disk.
 
-The Windows Technical Preview uses `managed_wsl2_shared_host`. Dock validates a signed managed Linux environment, enforces one active Lease per host, installs the buyer's SSH public key, and exposes the Lease through Cloud reverse SSH when configured. The Manifest and Lease must disclose that CPU and memory are configured caps, the GPU uses the Windows host driver, and hardware-passthrough exclusivity is false. A buyer may reject this isolation class.
+The Windows Technical Preview uses `managed_wsl2_shared_host`. Dock validates a signed managed Linux environment, enforces one active Lease per host, blocks WSL inbound, outbound, and loopback networking with host Hyper-V firewall policy, and executes the Exora control channel through host-side stdio. The Manifest and Lease must disclose that CPU and memory are configured caps, the GPU uses the Windows host driver, and hardware-passthrough exclusivity is false. A buyer may reject this isolation class.
 
 The Agent has Guest Root in the leased Linux environment. It may install software, modify the Guest, run authorized workloads, and reboot the Guest. It cannot access Host Root, management networking, libvirt controls, Worker data, Golden Image, other credentials, or Host meters. Any configuration exposing those boundaries is non-compliant.
 
@@ -463,7 +466,7 @@ Every Lease uses:
 
 - a pinned read-only Golden Image;
 - an independently encrypted write layer and random Lease Disk Key;
-- temporary Guest identity, SSH credential, and Lease Capability.
+- temporary Guest control identity and Lease Capability.
 
 Release state is:
 
@@ -472,34 +475,32 @@ active → draining → stopping → sanitizing → resetting → verifying → 
                                       ↘ failure → quarantined
 ```
 
-Worker stops new work, provides a bounded artifact-export window, powers off the VM, revokes identities, destroys the disk key, deletes the write layer, rebuilds from Golden Image, and boots. It then checks image hash, GPU, RAM, disk, CUDA, network, and the absence of old users, SSH keys, processes, and files.
+Worker stops new work, provides a bounded direct-file export window, powers off the VM, revokes identities, destroys the disk key, deletes the write layer, rebuilds from Golden Image, and boots. It then checks image hash, GPU, RAM, disk, CUDA, isolation policy, and the absence of old users, control identities, processes, and files.
 
 A cleanup script cannot substitute for Reset. Any failure moves the Slot to `quarantined`, blocks new Leases, pauses relevant Settlement, and preserves evidence. Compute billing stops after `draining`; `stopping`, `sanitizing`, `resetting`, `verifying`, and `cleaning` are not billed.
 
 ## 6. File and data product protocol
 
-A Provider uses the Resources workspace or authorized seller-draft MCP to select local files. Dock revalidates the authorized candidates, packages them into one immutable ZIP AssetBundle, computes SHA-256, and uploads it with a text description, fixed AssetVersion, license, per-download price, and a DownloadGrant duration from one hour to 30 days. The current Desktop enforces its configured bundle-size limit. Files default to Exora-managed S3-compatible storage. Provider uploads directly with multipart and signed URLs; MCP and Cloud application server do not carry bodies. Completion supplies part manifest, total size, and SHA-256 and passes MIME, malware, duplicate-content, and license validation. Replacement creates a new immutable AssetVersion.
+A Provider uses the Resources workspace or authorized seller-draft MCP to create a themed Resource sheet and select one or more local files. Every file is an independent ResourceItem with its own title, required description, price, license, and DownloadGrant duration from one hour to 30 days; a purchase authorizes exactly one file. The platform accepts arbitrary regular-file formats but not directories. To sell a program directory or whole set as one item, the seller compresses it before upload and that archive is treated as an ordinary file. The limit is 1 GiB per file with a default hard quota of 5 GiB per account. Providers upload directly through multipart signed URLs and completion verifies each file's size and SHA-256. File content is never replaced in place; new content creates a new ResourceItem, while existing grants retain their purchased commercial-term snapshot.
 
 A Resources Listing has fixed `downloadable` delivery: a valid purchase receives an object-, account-, count-, and time-bound DownloadGrant. Resources never attach to a VM or Lease, never mount into compute, and never automatically receive VM code or results. Legacy `environment_only` and `downloadable_and_environment` Listings are paused for seller confirmation; the system does not automatically broaden download rights.
 
-Assets declare license, commercial and derivative rights, attribution, territory, and refund terms. A report can pause new Leases but never erase historical ledger or evidence.
+ResourceItems declare license, commercial and derivative rights, attribution, territory, and refund terms. A report can pause new ResourceItem purchases but never erase historical ledger, existing Grants, or evidence.
 
-A `download` purchase charges before DownloadGrant issuance. During validity, the same AssetVersion can receive replacement short-lived URLs, HTTP Range resume, and redownload without another charge. Consumer non-use, abandonment, or Grant expiry is not refundable. Corrupt objects, sustained platform failure, or final SHA-256 mismatch are delivery failures and are refunded.
+A `download` purchase charges before DownloadGrant issuance. During validity, the same ResourceItem version locked at purchase can receive replacement short-lived URLs, HTTP Range resume, and redownload without another charge. Consumer non-use, abandonment, or Grant expiry is not refundable. Corrupt objects, sustained platform failure, or final SHA-256 mismatch are delivery failures and are refunded.
 
 ## 7. Endpoint and API Bridge operation protocol
 
-The Electron application exposes two seller paths that both normalize approved routes as `api_operation` products:
+Endpoint and API Bridge share one authoritative `ExoraServiceManifest v1`, nested under `AgentProductManifest.serviceManifest`. It contains exactly a canonical OpenAPI 3.1 `interface`, locked `delivery`, an exact one-to-one `operationPolicies` list, and a USDC `pricingTemplate`.
 
-- **Endpoint:** an authorized private or loopback service stays behind Dock. Its local URL, plaintext Secret, and `credentialRef` remain only in Dock secure storage and never enter the Cloud database, responses, or logs; Cloud stores only configured proof, routes, and metering contract. Dock performs side-effect-free health checks and serves requests through its outbound tunnel. An offline or unhealthy Dock makes the Endpoint unavailable.
-- **API Bridge:** an authorized public HTTPS service is reached through Exora Cloud's transparent Gateway. It requires a validated public HTTPS `baseUrl`, forbids `tunnelEndpointId`, and keeps credentials encrypted in Cloud. Once published it does not require Dock to remain online. Import accepts OpenAPI 3.x or a seller-reviewed structured route draft.
+- **Endpoint:** `delivery` is `dock_tunnel`. The local target and credentials remain only in Dock private runtime storage. An offline or unhealthy Dock makes the service unavailable.
+- **API Bridge:** `delivery` is `cloud_direct`. The public HTTPS target and encrypted credentials remain in Cloud private runtime storage. Calls do not depend on Dock after publishing.
 
-Every approved operation generates an independent ApiOperationProduct and stable Capability. Manifest contains natural-language description, input/output JSON Schema, fixed or metered price, rate, timeout, idempotency, privacy, and side-effect class. One data row, report, query result, file conversion, and meal order are different operation results or effects, not new first-class application categories.
+The public product interface supports only HTTP/JSON request-response and HTTP SSE server streaming. OpenAI-compatible paths are ordinary OpenAPI Operations. gRPC, Webhook/Callback, public WebSocket, GraphQL, SOAP, JSON-RPC, OData, messaging protocols, WebRTC, raw TCP/UDP, and FTP are not product interfaces. The private Cloud–Dock tunnel may use WebSocket or binary frames internally, but it only carries declared HTTP/JSON and SSE Operations.
 
-Consumer Agent calls only the Exora Gateway or Dock's listing-scoped Gateway. The Gateway verifies Lease, Schema, rate, budget, and operation before injecting Provider credentials. The Agent never receives origin secrets. Arbitrary URLs, headers, private-network redirects, and undeclared paths are denied by default.
+An Agent normally audits or normalizes seller materials to OpenAPI 3.1 without inventing or silently changing method, path, or schema semantics. A deterministic validator canonicalizes JSON, computes SHA-256, rejects external references, multipart/binary bodies, callbacks, webhooks, real server URLs, and undeclared responses, and requires every unique `operationId` to have exactly one Policy. Audited manual fallback is available only after an Agent failure or absence is recorded.
 
-API pricing may use request, successful request, input/output byte, or a provable business unit. Gateway emits signed UsageRecord. Oversized output becomes a controlled Artifact.
-
-`sideEffect: external_action` returns ApprovalRequest by default and requires human confirmation before execution. It may run automatically only under explicit pre-authorization for operation, merchant scope, and capability-fee budget. Exora displays and settles only `capabilityFee`; it does not display, custody, or settle meal, shipping, or other external merchandise amounts.
+The seller reviews the interface, every Operation Policy, side effect, idempotency declaration, limit, metering capability, and price. Runtime targets, secrets, credential references, health state, and endpoint identifiers never enter the public Manifest. Publication expands pricing into an immutable per-Operation snapshot used by every Invocation.
 
 ## 8. Listing, Lease, and state machines
 
@@ -560,7 +561,7 @@ refund        Provider pending/refund reserve → Consumer available
 payout        Provider payable → external payment rail
 ```
 
-Compute amount is `durationMinutes × pricePerMinute`. CapacityHold reserves the whole amount. VM and Guest verification enter `active`, settle the full purchase, and set expiry from the activation time. Voluntary early release is not refundable. Reset, verification, and cleanup consume no purchased minute. Failed provisioning is not charged. Provider or platform fault refunds unused complete minutes under SLA. Extension purchases a new integer-minute block before expiry.
+For `compute_time_v2`, the initial amount is `baseFeeAtomic + round(sum(segmentMinutes × amountAtomicPerMinute × segmentRateBps) / 10000)`. The first interval uses 10,000 bps; every completed interval lowers only subsequent minutes until `minimumRateBps`. An extension omits the start fee and begins the same marginal calculation at the Lease's cumulative purchased minute. Both price and limits are snapshotted when the Lease is created, so later Listing edits affect only new Leases. CapacityHold reserves the whole quote. VM and Guest verification enter `active`, settle the purchase, and set expiry from activation. Voluntary early release is not refundable. Reset, verification, and cleanup consume no purchased minute. Failed provisioning is fully refunded. Provider or platform fault refunds unused complete minutes under SLA.
 
 DownloadGrant is issued after charge; URL reissue and Range resume during validity are free. ApiOperationProduct writes only capability fee to the Exora ledger. External purchase value enters no Exora account.
 
@@ -578,17 +579,20 @@ The implemented marketplace surface exposes these Consumer Agent tools:
 | `get_product_manifest` | Read authoritative text, Schema, price, delivery, and availability |
 | `estimate_purchase` | Produce an expiring structured purchase estimate |
 | `purchase_compute_minutes` | Create Hold and prepay integer minutes |
+| `estimate_compute_extension` | Quote additional minutes from the Lease's cumulative duration and pricing snapshot |
 | `extend_compute_minutes` | Purchase another minute block before expiry |
 | `purchase_download` | Charge and create DownloadGrant |
 | `create_download_transfer` | Issue a short URL or resume session under a Grant |
 | `invoke_operation` | Invoke a normalized OpenAPI operation |
+| `run_compute_command` / `read_compute_command_output` | Execute through Exora control and read temporary output retained for at most 15 minutes |
+| `transfer_compute_file` / `get_compute_transfer` | Start and inspect Dock-to-Dock WebRTC transfer under `/workspace` |
 | `get_lease` | Read state, usage, expiry, and allowed actions |
 | `release_lease` | Stop new actions and begin export, Reset, and Settlement |
 | `get_usage` | Read usage, charge, and remaining budget |
 
-Compute work uses the Lease's disclosed, lease-scoped SSH Capability; the current marketplace MCP surface does not pretend that `run_command`, log streaming, or artifact download are separate registered marketplace tools. Approval decisions are made by the owning human session and then referenced by the Agent when it retries a purchase or invocation.
+Compute work uses the Lease's disclosed Exora terminal and WebRTC file capabilities. MCP exposes `run_compute_command`, temporary output reads, direct file transfer, and transfer status without inventing SSH or port-forwarding access. Approval decisions for financial actions remain owned by the human session; ordinary Lease commands and files need no per-operation seller approval.
 
-When the owner enables seller automation and Dock issues a separate Provider Agent token, the same MCP connection may also expose draft-only tools:
+Every MCP initialization issues a different `sk-exora-session-...` key accepted only by the local Dock. The response includes its scoped local HTTP base URL, session ID, permissions, and expiry. Dock removes the session Authorization and protected metadata, then injects its in-memory `sk-exora-...` account key toward Cloud. The account key is unique per buyer account, returned once, stored only as a hash by Cloud, and governed by the unified Wallet. When the owner enables the `seller.draft` session permission, the same MCP connection may also expose draft-only tools:
 
 | Tool | Purpose and authority limit |
 |---|---|
@@ -596,9 +600,9 @@ When the owner enables seller automation and Dock issues a separate Provider Age
 | `discover_sellable_resources` | Return short-lived candidate IDs only for authorized files, registered services, and verified runtimes |
 | `read_seller_material` | Read a bounded chunk, up to 256 KiB, from an authorized text candidate |
 | `create_vm_listing_draft` | Validate WSL2/KVM, reserve capacity for 24 hours, and create a private compute draft |
-| `create_resource_listing_draft` | Revalidate files, package ZIP, upload, verify SHA-256, and create a private download draft |
-| `create_endpoint_listing_draft` | Probe an authorized private/loopback service and create a private tunnel-backed draft |
-| `create_api_bridge_listing_draft` | Probe protected public HTTPS and create a private transparent-Gateway draft |
+| `create_resource_listing_draft` | Revalidate, upload, and verify each file, then create a private Resource sheet with independent per-file terms |
+| `save_endpoint_draft` | Save an Agent-normalized OpenAPI 3.1 private service draft with `dock_tunnel` delivery; Runtime and credentials are forbidden |
+| `save_api_bridge_draft` | Save an Agent-normalized OpenAPI 3.1 private service draft with `cloud_direct` delivery; Runtime and credentials are forbidden |
 | `get_seller_draft_run` / `list_my_listing_drafts` | Read durable progress and ready-to-publish private results |
 | `resume_seller_draft_run` / `cancel_seller_draft_run` | Continue with seller-supplied values or cooperatively clean up an unfinished run |
 
@@ -606,7 +610,7 @@ Seller discovery never accepts arbitrary filesystem paths from an Agent. Candida
 
 Tool output grants no extra human authority. Expensive Lease, price-increasing extension, sensitive download, and high-risk action intersect Consumer AutomationPolicy. Required consent returns structured `approval_required`.
 
-Implemented Cloud APIs include public `/v3/catalog/products` and `/v3/catalog/listings`; buyer `/v3/purchase-estimates`, `/v3/compute-purchases`, `/v3/download-grants`, `/v3/invocations`, `/v3/leases`, `/v3/approvals`, and `/v3/ledger`; provider `/v3/provider/products`, `/v3/provider/listings`, `/v3/provider/asset-bundles`, `/v3/provider/api-imports`, `/v3/provider/endpoint-imports`, and `/v3/provider/tunnels/connect`; and billing `/v3/billing/balance`, `/v3/billing/ledger`, deposit-address, deposit, withdrawal-quote, withdrawal-challenge, and withdrawal paths.
+Implemented Cloud APIs include public `/v3/catalog/products`, `/v3/catalog/listings`, and `/v3/catalog/resource-items`; buyer `/v3/purchase-estimates`, `/v3/compute-purchases`, `/v3/compute-purchases/{id}/extension-estimates`, `/v3/download-grants`, `/v3/invocations`, `/v3/api-orders`, `/v3/leases`, `/v3/approvals`, and `/v3/ledger`; HTTP/SSE Gateway `/v3/gateway/{listingId}/...`; provider `/v3/provider/products`, `/v3/provider/listings`, `/v3/provider/resource-sheets`, `/v3/provider/resource-items`, `/v3/provider/service-drafts` and `/v3/provider/tunnels/connect`; and billing `/v3/billing/balance`, `/v3/billing/ledger`, deposit-address, deposit, withdrawal-quote, withdrawal-challenge, and withdrawal paths.
 
 Worker uses an outbound persistent connection or long polling; Provider need not expose a management port. Typed messages include `ResourceHeartbeat`, `CapacitySnapshot`, `CreateCapacityHold`, `ProvisionLease`, `RenewLeaseEpoch`, `CancelExecution`, `UsageBatch`, `ResetVM`, and `ResetReceipt`. Each has command ID, epoch, deadline, signature, and persisted deduplication result.
 
@@ -615,8 +619,8 @@ Worker uses an outbound persistent connection or long polling; Provider need not
 ```text
 small control data  MCP / HTTPS JSON
 large files         S3 multipart + short-lived signed URL
-workspace deltas    temporary Lease SSH/SFTP/rsync
-live logs           bounded WebSocket/SSE stream
+workspace files     Dock-to-Dock WebRTC DataChannel; Guest remains offline
+live logs           bounded event stream
 Resources data      independent S3 object version + DownloadGrant
 ```
 
@@ -625,7 +629,7 @@ The Cloud application server does not proxy large bodies. A signed URL allows on
 ## 12. Security, privacy, and disputes
 
 - Dock private keys use OS secure storage; Cloud stores public keys and revocation state.
-- Provider Host SSH, libvirt, and Golden Image never enter Consumer Agent.
+- Provider Host control identities, libvirt, and Golden Image never enter Consumer Agent; public SSH, SFTP, SCP, rsync, port forwarding, and Host ports are not Lease capabilities.
 - Guest does not mount Host Docker socket, management directories, or privileged devices. GPU is delivered only through declared PCIe Passthrough.
 - Endpoint secrets are injected only by Provider Dock; API Bridge secrets are encrypted and injected by Cloud Gateway.
 - Seller MCP can reference only locally stored credential aliases; it cannot retrieve plaintext credentials or place them in a draft.
@@ -634,7 +638,7 @@ The Cloud application server does not proxy large bodies. A signed URL allows on
 - Gateway prevents SSRF, header injection, undeclared redirects, oversized responses, and credential reflection.
 - `managed_wsl2_shared_host` is disclosed as a weaker Preview isolation class; it must never be described as KVM-equivalent GPU passthrough.
 
-Evidence may include Resource checks, CapacitySnapshots, Hold, Lease, heartbeats, UsageRecords, Gateway status, Execution summary, Artifact hashes, Transfer integrity, and ResetReceipt. Parties explicitly select and redact supplemental evidence. Settlement pauses during dispute; decisions create new ledger adjustments.
+Evidence may include ResourceItem upload and verification records, CapacitySnapshots, Hold, Lease, heartbeats, UsageRecords, Gateway status, Execution summary, Compute Transfer final hashes, Download Transfer integrity, and ResetReceipt. Parties explicitly select and redact supplemental evidence. Settlement pauses during dispute; decisions create new ledger adjustments.
 
 ## 13. Failure semantics
 
@@ -654,7 +658,7 @@ Evidence may include Resource checks, CapacitySnapshots, Hold, Lease, heartbeats
 ### 14.1 Seller Agent creates a private Listing draft
 
 ```text
-1. Seller enables seller automation, chooses allowed resource roots/services, saves commercial defaults, and connects an existing Agent through the Provider Agent token.
+1. Seller enables seller automation, chooses allowed resource roots/services, saves commercial defaults, enables the `seller.draft` session permission, and initializes the existing Agent through MCP.
 2. Agent reads capabilities and discovers only short-lived candidate IDs inside that policy.
 3. Agent may read bounded authorized text material, but never an arbitrary path or plaintext credential.
 4. Agent starts a VM, Resources, Endpoint, or API Bridge draft run with explicit commercial values.
@@ -673,19 +677,19 @@ Evidence may include Resource checks, CapacitySnapshots, Hold, Lease, heartbeats
 5. Cloud creates an exclusive CapacityHold; Worker uses a nonce to recheck VRAM, RAM, disk, and GPU processes.
 6. Cloud reserves all 30-minute funds; Worker creates an encrypted write layer, passes through GPU, and starts the only VM.
 7. Guest verification moves Lease to active, settles the full amount, and starts the 30-minute countdown; Agent receives Guest Root.
-8. Agent uploads code, executes work, reads logs, and downloads Artifact.
+8. Agent uploads code into `/workspace` over Dock-to-Dock WebRTC, executes and reads logs through Exora control, then transfers result files directly back to the local Dock.
 9. Agent may release early, but voluntary release does not refund remaining minutes; Worker resets the VM.
 10. Verified ResetReceipt returns Slot to ready; failure moves it to quarantined.
 ```
 
-On a Windows Preview provider, the same purchase path uses one managed WSL2 environment and one active Lease per host. The buyer receives root SSH access, while the Manifest discloses configured CPU/memory caps, shared Windows GPU-driver access, and no hardware-passthrough exclusivity. Release deletes the lease identity and managed environment state, rebuilds it from the selected signed environment, and emits ResetReceipt.
+On a Windows Preview provider, the same purchase path uses one managed WSL2 environment and one active Lease per host. The buyer receives root control through Exora while host Hyper-V policy blocks Guest networking. The Manifest discloses configured CPU/memory caps, shared Windows GPU-driver access, and no hardware-passthrough exclusivity. Release deletes the lease identity and managed environment state, rebuilds it from the selected signed environment, and emits ResetReceipt.
 
 ### 14.3 Time-limited file download
 
 ```text
-1. Provider packages multiple files as AssetBundle with text, license, fixed version, and per-download price.
-2. Provider configures a 24-hour DownloadGrant and publishes.
-3. Consumer Agent reads Manifest, pays, and receives a non-transferable DownloadGrant.
+1. Provider creates a Resource sheet and gives every regular file its own title, description, license, fixed version, price, and Grant duration; the seller compresses directories first.
+2. Provider configures a 24-hour DownloadGrant for the target ResourceItem and publishes.
+3. Consumer Agent reads the Manifest, selects one ResourceItem, pays, and receives a non-transferable DownloadGrant bound to that file version.
 4. Agent creates a short TransferSession, downloads with Range, and verifies SHA-256.
 5. After interruption, Agent reissues a URL and resumes within 24 hours without another fee.
 6. Non-use is not refunded; corrupt data or checksum failure is refunded as delivery failure.
@@ -698,8 +702,8 @@ On a Windows Preview provider, the same purchase path uses one managed WSL2 envi
 2. Exora normalizes one-row query and report generation as separate ApiOperationProducts.
 3. Consumer Agent reads Schema and capability fee, then calls invoke_operation.
 4. Gateway validates Schema, rate, and budget, injects Provider credentials, and forwards.
-5. Success creates UsageRecord; large output becomes a short-lived Artifact.
-6. Release returns unused budget and revenue enters Provider refundable hold.
+5. The JSON or SSE response returns directly and creates UsageRecords from Gateway-observable or seller-declared metering dimensions.
+6. Completion releases unused reserve and revenue enters the Provider refundable hold.
 ```
 
 ### 14.5 Meal-order API with human approval
@@ -712,9 +716,27 @@ On a Windows Preview provider, the same purchase path uses one managed WSL2 envi
 5. Exora settles only API capability fee; meal, shipping, and external payment remain the target API's responsibility.
 ```
 
-## 15. V3.2 Alpha commitment
+## 15. Isolated VM control and direct files
 
-V3.2 Alpha implements an AI-first AgentProductManifest, BYO-Agent Consumer MCP, optional draft-only Seller MCP, Electron Listings/VM/Resources/Endpoint/API Bridge workspaces, automatic `provider_busy` delisting, approximately 15-minute recovery, integer-minute prepurchase, AssetBundle, time-limited DownloadGrant, normalized ApiOperationProduct, side-effect ApprovalRequest, strict one-Host-one-Slot-one-active-Lease, KVM and disclosed managed WSL2 runtimes, reset receipts, transparent Gateway, balanced journals, revenue hold, and configured Provider Payout.
+New compute Leases use `isolated_control_p2p_v1`. The Consumer has root or Administrator authority inside the Guest, while the Provider host enforces a network boundary the Guest cannot change. KVM guests have no routable virtual NIC and communicate with the Worker through a host-only guest channel. Managed WSL2 uses host Hyper-V firewall policy to block inbound, outbound, and loopback networking. Public SSH, SFTP, SCP, port forwarding, and Provider-host ports are not Lease capabilities.
+
+Commands and terminal output use the authenticated Exora control plane. Terminal content is not stored as business history; the first 100 MiB per Consumer account per UTC day is full speed and later terminal bytes share a 256 KiB/s limit. Because arbitrary terminal text can encode bytes, Exora does not claim that Cloud can never relay file-shaped terminal data.
+
+Official VM files use WebRTC DTLS DataChannels directly between Consumer Dock and Provider Dock. Cloud relays short-lived signaling but rejects relay ICE candidates and provides no TURN or file relay. Both Docks automatically validate the active Lease and sign local review and final hash receipts; there is no per-file seller approval. VM file ingress and egress is restricted to `/workspace`, uses partial files plus atomic rename, and verifies size and SHA-256. Cloud persists parties, direction, byte count, status, signatures, and final SHA-256, but not filenames, local paths, VM paths, SDP, ICE, or file content.
+
+Compute pricing uses `compute_time_v2`: one initial start fee plus marginal minute tiers. The first interval is full price, later intervals reduce only future minutes, extensions continue from cumulative purchased minutes, and a Lease always uses its creation-time price and rental-limit snapshots.
+
+### 15.1 Dual probes and sustained-performance policy
+
+Every new compute Listing declares `dual_probe_v1`. The Host Enforcement Probe samples only Lease-level aggregate CPU, GPU, memory, workspace-disk, and host-contention metrics every 30 seconds; it does not inspect process names, commands, files, network content, or algorithm type. The Guest Experience Probe runs three fixed challenges of at most two seconds during provisioning and uses the median as its baseline, then repeats every five minutes while active. Challenge load is excluded from buyer-utilization windows. An unavailable Guest Agent produces `guest_probe_unavailable` and cannot independently penalize either party.
+
+Seller under-delivery requires both Guest `deliveryBps < 8500` and Host evidence of deficient allocation, steal time, abnormal downclocking, contention, or thermal/power throttling for three consecutive five-minute windows. Confirmation moves the Listing to `performance_degraded` while active Leases continue. Complete affected minutes are refunded from the Lease's creation-time marginal price snapshot; the start fee is not refunded. Two healthy windows close the event and three healthy windows restore the Listing.
+
+Listings allow sustained use of purchased compute by default and always declare cryptocurrency mining prohibited. This is a contractual rule; probes do not identify mining or task semantics. With `burst_only`, a 15-minute rolling CPU or GPU average at or above 80% starts a warning and five-minute grace period. Linux/KVM then limits promised performance to 50% until the rolling load remains below 60% for ten minutes. Windows/WSL2 records the same events as `monitor_only_preview` and does not claim hard throttling.
+
+## 16. V3.2 Alpha commitment
+
+V3.2 Alpha implements an AI-first AgentProductManifest, BYO-Agent Consumer MCP, optional draft-only Seller MCP, Electron Listings/VM/Resources/Endpoint/API Bridge workspaces, automatic `provider_busy` delisting, approximately 15-minute recovery, integer-minute prepurchase, Resource sheets with independently priced ResourceItems, time-limited DownloadGrant, normalized ApiOperationProduct, persistent API Order, side-effect ApprovalRequest, strict one-Host-one-Slot-one-active-Lease, KVM and disclosed managed WSL2 runtimes, Exora terminal control, Dock-to-Dock WebRTC files, reset receipts, `dock_tunnel` Endpoint, `cloud_direct` API Bridge, balanced journals, revenue hold, and configured Provider Payout.
 
 V3.2 Alpha does not promise multi-tenant VMs, MIG resale, bare Host Root, Hyper-V/VMware, KVM-equivalent isolation on WSL2, prose-to-API inference without seller review, settlement of external merchandise value, decentralized storage, platform inference, a general chat interface, autonomous public publishing, or autonomous dispute verdicts. The three-platform Technical Preview and locally configured Cloud are not production availability or custody certifications.
 

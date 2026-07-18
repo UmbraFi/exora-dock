@@ -52,7 +52,18 @@ func TestTunnelClientForwardsBodyAndStreamsSSE(t *testing.T) {
 	defer c.Close()
 	store := NewStore(c)
 	endpointID := "epd_stream_test_1234"
-	_, err = store.Save(context.Background(), Config{EndpointID: endpointID, LocalBaseURL: local.URL, HealthPath: "/health", Routes: []Route{{OperationID: "echo", Method: "POST", Path: "/echo"}, {OperationID: "events", Method: "GET", Path: "/events"}}, TimeoutSeconds: 5, Concurrency: 2, AuthType: "bearer", CredentialRef: "cred-local-test"})
+	manifest := endpointTestManifest()
+	manifestInterface := manifest["interface"].(map[string]any)
+	paths := manifestInterface["paths"].(map[string]any)
+	paths["/echo"] = paths["/run"]
+	delete(paths, "/run")
+	paths["/echo"].(map[string]any)["post"].(map[string]any)["operationId"] = "echo"
+	limits := map[string]any{"timeoutSeconds": 5, "maxRequestBytes": 1048576, "maxResponseBytes": 1048576, "maxConcurrency": 2}
+	manifest["operationPolicies"] = []any{
+		map[string]any{"operationId": "echo", "interaction": "request_response", "sideEffect": false, "idempotent": true, "limits": limits, "meteringCapabilities": []any{"request"}},
+		map[string]any{"operationId": "events", "interaction": "server_stream", "sideEffect": false, "idempotent": true, "limits": limits, "meteringCapabilities": []any{"request"}},
+	}
+	_, err = store.Save(context.Background(), Config{EndpointID: endpointID, LocalBaseURL: local.URL, HealthPath: "/health", ServiceManifest: manifest, TimeoutSeconds: 5, Concurrency: 2, AuthType: "bearer", CredentialRef: "cred-local-test"})
 	if err != nil {
 		t.Fatal(err)
 	}

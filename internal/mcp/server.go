@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/exora-dock/exora-dock/internal/discovery"
@@ -18,17 +19,20 @@ import (
 const protocolVersion = "2025-06-18"
 
 type Options struct {
-	BaseURL            string
-	StartCommand       []string
-	AgentToken         string
-	ProviderAgentToken string
-	ClientName         string
-	HTTPClient         *http.Client
+	BaseURL      string
+	StartCommand []string
+	OwnerToken   string
+	ClientName   string
+	HTTPClient   *http.Client
 }
 
 type Server struct {
-	opts   Options
-	client *http.Client
+	opts         Options
+	client       *http.Client
+	sessionMu    sync.RWMutex
+	sessionID    string
+	sessionToken string
+	sessionMeta  map[string]any
 }
 
 func NewServer(opts Options) *Server {
@@ -40,6 +44,7 @@ func NewServer(opts Options) *Server {
 }
 
 func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
+	defer s.revokeSession(context.Background())
 	scanner := bufio.NewScanner(in)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	encoder := json.NewEncoder(out)
@@ -76,11 +81,17 @@ func (s *Server) handle(ctx context.Context, req rpcRequest) any {
 		if notification {
 			return nil
 		}
+		connection, err := s.ensureSession(ctx)
+		if err != nil {
+			return rpcError(req.ID, -32001, "Unable to create a local Exora session", err.Error())
+		}
+		connectionJSON, _ := json.Marshal(connection)
 		return rpcResult(req.ID, map[string]any{
 			"protocolVersion": protocolVersion,
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
 			"serverInfo":      map[string]any{"name": "exora-dock", "title": "Exora Dock", "version": "0.1.0"},
-			"instructions":    "Use the four authoritative Exora marketplace categories: vm, resources, endpoint, and api_bridge. VM files move through lease-scoped SSH/SFTP/rsync; Resources use DownloadGrants; Endpoint requires an online Dock; API Bridge is Cloud-hosted. Seller tools create private drafts only and never publish or reveal credentials.",
+			"instructions":    "Use the four authoritative Exora marketplace categories: vm, resources, endpoint, and api_bridge. For direct local HTTP calls, use this initialize-time connection object only for this MCP process: " + string(connectionJSON) + ". The session key works only on this Dock and expires on idle, process exit, logout, or revocation. Seller tools create private drafts only and never publish or reveal credentials.",
+			"_meta":           map[string]any{"exoraConnection": connection},
 		})
 	case "notifications/initialized":
 		return nil
@@ -88,6 +99,7 @@ func (s *Server) handle(ctx context.Context, req rpcRequest) any {
 		if notification {
 			return nil
 		}
+		_ = s.heartbeatSession(ctx)
 		return rpcResult(req.ID, map[string]any{})
 	case "tools/list":
 		if notification {
@@ -134,7 +146,7 @@ func (s *Server) handle(ctx context.Context, req rpcRequest) any {
 
 func (s *Server) callTool(ctx context.Context, name string, args map[string]any) (toolResult, error) {
 	if isSellerDraftTool(name) {
-		if strings.TrimSpace(s.opts.ProviderAgentToken) == "" {
+		if strings.TrimSpace(s.currentSessionToken()) == "" {
 			return errorResult("seller draft tools are unavailable", nil), nil
 		}
 		return s.callSellerDraftTool(ctx, name, args)
@@ -157,6 +169,14 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 			return errorResult("listingId and idempotencyKey required", nil), nil
 		}
 		return s.proxy(ctx, http.MethodPost, "/v3/compute-purchases", nil, args)
+	case "exora.estimate_compute_extension":
+		id := firstString(args, "purchaseId")
+		if id == "" {
+			return errorResult("purchaseId required", nil), nil
+		}
+		body := cloneArgs(args)
+		delete(body, "purchaseId")
+		return s.proxy(ctx, http.MethodPost, "/v3/compute-purchases/"+url.PathEscape(id)+"/extension-estimates", nil, body)
 	case "exora.extend_compute_minutes":
 		id := firstString(args, "purchaseId")
 		if id == "" || firstString(args, "idempotencyKey") == "" {
@@ -165,6 +185,23 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 		body := cloneArgs(args)
 		delete(body, "purchaseId")
 		return s.proxy(ctx, http.MethodPost, "/v3/compute-purchases/"+url.PathEscape(id)+"/extend", nil, body)
+	case "exora.run_compute_command":
+		id := firstString(args, "leaseId")
+		if id == "" || firstString(args, "command") == "" {
+			return errorResult("leaseId and command required", nil), nil
+		}
+		body := cloneArgs(args)
+		delete(body, "leaseId")
+		return s.proxy(ctx, http.MethodPost, "/v3/leases/"+url.PathEscape(id)+"/commands", nil, body)
+	case "exora.read_compute_command_output":
+		return s.proxyRequiredID(ctx, http.MethodGet, "/v3/compute-commands/", args, "commandId", "commandId")
+	case "exora.transfer_compute_file":
+		if firstString(args, "leaseId") == "" || firstString(args, "direction") == "" || firstString(args, "localPath") == "" || firstString(args, "authorizedLocalRoot") == "" || firstString(args, "workspaceRelativePath") == "" {
+			return errorResult("leaseId, direction, localPath, authorizedLocalRoot, and workspaceRelativePath required", nil), nil
+		}
+		return s.proxy(ctx, http.MethodPost, "/v3/local/compute-transfers", nil, args)
+	case "exora.get_compute_transfer":
+		return s.proxyRequiredID(ctx, http.MethodGet, "/v3/local/compute-transfers/", args, "transferId", "transferId")
 	case "exora.purchase_download":
 		if firstString(args, "listingId") == "" || firstString(args, "idempotencyKey") == "" {
 			return errorResult("listingId and idempotencyKey required", nil), nil
@@ -195,34 +232,37 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 		}
 		return s.proxy(ctx, http.MethodGet, "/v3/ledger", nil, nil)
 	case "exora.save_endpoint_draft":
-		return s.saveAPIDraft(ctx, args, "dock_tunnel")
+		return s.saveServiceDraft(ctx, args, "endpoint", "dock_tunnel")
 	case "exora.save_api_bridge_draft":
-		return s.saveAPIDraft(ctx, args, "transparent")
+		return s.saveServiceDraft(ctx, args, "api_bridge", "cloud_direct")
 	default:
 		return toolResult{}, fmt.Errorf("Unknown tool: %s", name)
 	}
 }
 
-func (s *Server) saveAPIDraft(ctx context.Context, args map[string]any, bridgeMode string) (toolResult, error) {
+func (s *Server) saveServiceDraft(ctx context.Context, args map[string]any, applicationSource, delivery string) (toolResult, error) {
 	body := cloneArgs(args)
-	for _, forbidden := range []string{"secret", "providerSecret", "credentialRef", "sellerAttestationConfirmed", "publish", "status"} {
-		delete(body, forbidden)
-	}
-	if supplied := firstString(body, "bridgeMode"); supplied != "" && supplied != bridgeMode {
-		return errorResult("bridgeMode must be "+bridgeMode, nil), nil
-	}
-	body["bridgeMode"] = bridgeMode
-	baseURL := firstString(body, "baseUrl")
-	if bridgeMode == "dock_tunnel" && baseURL != "" {
-		return errorResult("Endpoint drafts must not include baseUrl", nil), nil
-	}
-	if bridgeMode == "transparent" {
-		parsed, err := url.Parse(baseURL)
-		if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
-			return errorResult("API Bridge drafts require a public HTTPS baseUrl", nil), nil
+	for _, forbidden := range []string{"secret", "providerSecret", "credentialRef", "baseUrl", "localBaseUrl", "endpointId", "healthPath", "authType", "sellerAttestationConfirmed", "publish", "status"} {
+		if _, supplied := body[forbidden]; supplied {
+			return errorResult("service drafts must not include runtime, credentials, seller confirmation, or publishing fields", nil), nil
 		}
 	}
-	return s.proxy(ctx, http.MethodPost, "/v3/provider/api-bridge-drafts", nil, body)
+	manifest, ok := body["serviceManifest"].(map[string]any)
+	if !ok {
+		return errorResult("serviceManifest is required", nil), nil
+	}
+	if supplied := firstString(manifest, "delivery"); supplied != "" && supplied != delivery {
+		return errorResult("serviceManifest.delivery must be "+delivery, nil), nil
+	}
+	manifest["delivery"] = delivery
+	body["serviceManifest"] = manifest
+	body["applicationSource"] = applicationSource
+	method, path := http.MethodPost, "/v3/provider/service-drafts"
+	if draftID := firstString(body, "draftId"); draftID != "" {
+		method = http.MethodPut
+		path += "/" + url.PathEscape(draftID)
+	}
+	return s.proxy(ctx, method, path, nil, body)
 }
 
 func (s *Server) proxyRequiredID(ctx context.Context, method, prefix string, args map[string]any, key, label string) (toolResult, error) {
@@ -234,11 +274,94 @@ func (s *Server) proxyRequiredID(ctx context.Context, method, prefix string, arg
 }
 
 func (s *Server) proxy(ctx context.Context, method, path string, query url.Values, body any) (toolResult, error) {
-	payload, err := s.daemonJSONWithToken(ctx, method, path, query, body, s.opts.AgentToken)
+	token := s.currentSessionToken()
+	payload, err := s.daemonJSONWithToken(ctx, method, path, query, body, token)
 	if err != nil {
 		return errorResult(err.Error(), nil), nil
 	}
 	return successResult(payload), nil
+}
+
+func (s *Server) ensureSession(ctx context.Context) (map[string]any, error) {
+	s.sessionMu.RLock()
+	if s.sessionToken != "" {
+		meta := cloneMap(s.sessionMeta)
+		s.sessionMu.RUnlock()
+		return meta, nil
+	}
+	s.sessionMu.RUnlock()
+	if strings.TrimSpace(s.opts.OwnerToken) == "" {
+		return nil, fmt.Errorf("Dock owner authorization is unavailable")
+	}
+	payload, err := s.daemonJSONWithToken(ctx, http.MethodPost, "/v3/local/agent-sessions", nil, map[string]any{
+		"clientName": s.opts.ClientName,
+	}, s.opts.OwnerToken)
+	if err != nil {
+		return nil, err
+	}
+	values, ok := payload.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("Dock returned an invalid session response")
+	}
+	token, _ := values["sessionKey"].(string)
+	session, _ := values["session"].(map[string]any)
+	sessionID, _ := session["sessionId"].(string)
+	if strings.TrimSpace(token) == "" || strings.TrimSpace(sessionID) == "" {
+		return nil, fmt.Errorf("Dock did not return a session credential")
+	}
+	meta := map[string]any{
+		"sessionId":     sessionID,
+		"sessionKey":    token,
+		"baseUrl":       values["baseUrl"],
+		"scopes":        session["scopes"],
+		"idleExpiresAt": session["idleExpiresAt"],
+		"expiresAt":     session["expiresAt"],
+	}
+	s.sessionMu.Lock()
+	if s.sessionToken == "" {
+		s.sessionID = sessionID
+		s.sessionToken = token
+		s.sessionMeta = cloneMap(meta)
+	}
+	meta = cloneMap(s.sessionMeta)
+	s.sessionMu.Unlock()
+	return meta, nil
+}
+
+func (s *Server) currentSessionToken() string {
+	s.sessionMu.RLock()
+	defer s.sessionMu.RUnlock()
+	return s.sessionToken
+}
+
+func (s *Server) heartbeatSession(ctx context.Context) error {
+	s.sessionMu.RLock()
+	id, token := s.sessionID, s.sessionToken
+	s.sessionMu.RUnlock()
+	if id == "" || token == "" {
+		return nil
+	}
+	_, err := s.daemonJSONWithToken(ctx, http.MethodPost, "/v3/local/agent-sessions/"+url.PathEscape(id)+"/heartbeat", nil, map[string]any{}, token)
+	return err
+}
+
+func (s *Server) revokeSession(ctx context.Context) {
+	s.sessionMu.Lock()
+	id := s.sessionID
+	s.sessionID, s.sessionToken, s.sessionMeta = "", "", nil
+	s.sessionMu.Unlock()
+	if id == "" || strings.TrimSpace(s.opts.OwnerToken) == "" {
+		return
+	}
+	_, _ = s.daemonJSONWithToken(ctx, http.MethodDelete, "/v3/local/agent-sessions/"+url.PathEscape(id), nil, nil, s.opts.OwnerToken)
+}
+
+func cloneMap(source map[string]any) map[string]any {
+	copy := make(map[string]any, len(source))
+	for key, value := range source {
+		copy[key] = value
+	}
+	return copy
 }
 
 func (s *Server) daemonJSONWithToken(ctx context.Context, method, path string, query url.Values, body any, token string) (any, error) {
@@ -330,17 +453,22 @@ func marketplaceToolDefinitions() []toolDefinition {
 	return []toolDefinition{
 		tool("exora.search_products", "Search Products", "Search authoritative V3 Listings by text and applicationSource.", map[string]any{"q": stringProp("Search text."), "applicationSource": enumStringProp("Authoritative category.", "vm", "resources", "endpoint", "api_bridge")}, nil),
 		tool("exora.get_product_manifest", "Get Product Manifest", "Read one Listing and its AgentProductManifest.", map[string]any{"listingId": stringProp("Listing id.")}, []string{"listingId"}),
-		tool("exora.estimate_purchase", "Estimate Purchase", "Estimate a purchase without reserving funds.", map[string]any{"listingId": stringProp("Listing id."), "durationMinutes": integerProp("VM duration."), "operationId": stringProp("Operation id.")}, []string{"listingId"}),
+		tool("exora.estimate_purchase", "Estimate Purchase", "Estimate a purchase without reserving funds. Resource purchases require resourceItemId.", map[string]any{"listingId": stringProp("Listing id."), "resourceItemId": stringProp("Independently priced Resource item id."), "durationMinutes": integerProp("VM duration."), "operationId": stringProp("Operation id.")}, []string{"listingId"}),
 		tool("exora.purchase_compute_minutes", "Purchase Compute Minutes", "Purchase an exclusive VM Lease.", purchaseProps(true), []string{"listingId", "idempotencyKey"}),
+		tool("exora.estimate_compute_extension", "Estimate Compute Extension", "Estimate additional VM minutes using the active Lease pricing snapshot.", map[string]any{"purchaseId": stringProp("Purchase id."), "durationMinutes": integerProp("Additional whole minutes.")}, []string{"purchaseId", "durationMinutes"}),
 		tool("exora.extend_compute_minutes", "Extend Compute Minutes", "Extend an active VM purchase.", map[string]any{"purchaseId": stringProp("Purchase id."), "durationMinutes": integerProp("Additional whole minutes."), "idempotencyKey": stringProp("Stable retry key.")}, []string{"purchaseId", "durationMinutes", "idempotencyKey"}),
-		tool("exora.purchase_download", "Purchase Resources", "Purchase a time-limited S3 DownloadGrant.", purchaseProps(false), []string{"listingId", "idempotencyKey"}),
+		tool("exora.run_compute_command", "Run Compute Command", "Run one command as the Lease administrator through the metered Exora control channel.", map[string]any{"leaseId": stringProp("Lease id."), "command": stringProp("Shell command."), "timeoutSeconds": integerProp("Optional execution timeout.")}, []string{"leaseId", "command"}),
+		tool("exora.read_compute_command_output", "Read Compute Command Output", "Read temporary command output retained for at most 15 minutes.", map[string]any{"commandId": stringProp("Command id.")}, []string{"commandId"}),
+		tool("exora.transfer_compute_file", "Transfer Compute File", "Start an automatically reviewed WebRTC file transfer between this Dock and /workspace in the Lease.", map[string]any{"leaseId": stringProp("Lease id."), "direction": enumStringProp("Transfer direction.", "upload", "download"), "localPath": stringProp("Local source or destination path."), "authorizedLocalRoot": stringProp("Previously authorized local transfer root."), "workspaceRelativePath": stringProp("Path relative to /workspace."), "sizeBytes": integerProp("Required expected size for downloads."), "sha256": stringProp("Required expected SHA-256 for downloads.")}, []string{"leaseId", "direction", "localPath", "authorizedLocalRoot", "workspaceRelativePath"}),
+		tool("exora.get_compute_transfer", "Get Compute Transfer", "Read local WebRTC connection, progress, and hash-verification state.", map[string]any{"transferId": stringProp("Transfer id.")}, []string{"transferId"}),
+		tool("exora.purchase_download", "Purchase Resource File", "Purchase one independently priced Resource file and receive a time-limited DownloadGrant.", purchaseProps(false), []string{"listingId", "resourceItemId", "idempotencyKey"}),
 		tool("exora.create_download_transfer", "Create Download Transfer", "Create or resume a signed object-store transfer.", map[string]any{"grantId": stringProp("DownloadGrant id.")}, []string{"grantId"}),
 		tool("exora.invoke_operation", "Invoke Operation", "Invoke a declared Endpoint or API Bridge operation.", map[string]any{"listingId": stringProp("Listing id."), "operationId": stringProp("Declared operation id."), "input": objectProp("Operation input."), "idempotencyKey": stringProp("Stable retry key.")}, []string{"listingId", "operationId", "idempotencyKey"}),
-		tool("exora.get_lease", "Get Lease", "Read Lease state and SSH capability metadata.", map[string]any{"leaseId": stringProp("Lease id.")}, []string{"leaseId"}),
+		tool("exora.get_lease", "Get Lease", "Read Lease state and isolated Exora control capability metadata.", map[string]any{"leaseId": stringProp("Lease id.")}, []string{"leaseId"}),
 		tool("exora.release_lease", "Release Lease", "Release an active VM Lease.", map[string]any{"leaseId": stringProp("Lease id.")}, []string{"leaseId"}),
 		tool("exora.get_usage", "Get Usage", "Read Lease or account usage.", map[string]any{"leaseId": stringProp("Optional Lease id.")}, nil),
-		tool("exora.save_endpoint_draft", "Save Endpoint Draft", "Save a private dock_tunnel Endpoint draft without URL or credentials.", draftProps(false), []string{"draftId", "expectedVersion"}),
-		tool("exora.save_api_bridge_draft", "Save API Bridge Draft", "Save a private transparent API Bridge draft for a public HTTPS service.", draftProps(true), []string{"draftId", "expectedVersion", "baseUrl"}),
+		tool("exora.save_endpoint_draft", "Save Endpoint Service Draft", "Save an Agent-normalized OpenAPI 3.1 HTTP/JSON or SSE contract with dock_tunnel delivery. Runtime and credentials are forbidden.", draftProps(), []string{"title", "serviceManifest", "normalization"}),
+		tool("exora.save_api_bridge_draft", "Save API Bridge Service Draft", "Save an Agent-normalized OpenAPI 3.1 HTTP/JSON or SSE contract with cloud_direct delivery. Runtime and credentials are forbidden.", draftProps(), []string{"title", "serviceManifest", "normalization"}),
 	}
 }
 
@@ -348,16 +476,22 @@ func purchaseProps(withDuration bool) map[string]any {
 	props := map[string]any{"listingId": stringProp("Listing id."), "idempotencyKey": stringProp("Stable retry key.")}
 	if withDuration {
 		props["durationMinutes"] = integerProp("Whole purchased minutes.")
+	} else {
+		props["resourceItemId"] = stringProp("Independently priced Resource item id.")
 	}
 	return props
 }
 
-func draftProps(withBaseURL bool) map[string]any {
-	props := map[string]any{"draftId": stringProp("Existing private draft id."), "expectedVersion": integerProp("Optimistic concurrency version."), "interfaceMode": enumStringProp("Interface mode.", "passthrough", "agent_managed"), "openapi": objectProp("Reviewed OpenAPI 3.1 document."), "adapter": objectProp("Optional exora.adapter.v1 mappings."), "routes": arrayProp("Reviewed routes."), "pricing": objectProp("Explicit seller pricing."), "unresolvedFields": arrayProp("Uncertain field paths."), "agentNotes": stringProp("Safe notes.")}
-	if withBaseURL {
-		props["baseUrl"] = stringProp("Public HTTPS base URL.")
+func draftProps() map[string]any {
+	return map[string]any{
+		"draftId":          stringProp("Existing private service draft id; omit to create."),
+		"expectedVersion":  integerProp("Required optimistic concurrency version when updating."),
+		"title":            stringProp("Seller-visible service title."),
+		"description":      stringProp("Seller-visible service description."),
+		"serviceManifest":  objectProp("ExoraServiceManifest v1: interface, locked delivery, operationPolicies, and pricingTemplate only."),
+		"normalization":    objectProp("Agent normalization audit with runId, sourceSha256, outputSha256, mode, and actor."),
+		"unresolvedFields": arrayProp("Fields which still require explicit seller confirmation."),
 	}
-	return props
 }
 
 func tool(name, title, description string, properties map[string]any, required []string) toolDefinition {

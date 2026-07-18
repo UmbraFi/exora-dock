@@ -4,6 +4,17 @@ const path = require('node:path')
 
 const materialMutationQueues = new Map()
 
+function validateTextMaterial(contents, name = 'Material') {
+  if (!Buffer.isBuffer(contents)) throw new Error(`${name} could not be read as a file`)
+  if (contents.includes(0)) throw new Error(`${name} appears to be a binary file`)
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(contents)
+  } catch {
+    throw new Error(`${name} must be valid UTF-8 text`)
+  }
+  return contents
+}
+
 function operationWithTimeout(label, operation, timeoutMs) {
   let timer
   const deadline = new Promise((_, reject) => {
@@ -110,6 +121,7 @@ module.exports = {
   readAPIBridgeMaterialManifest,
   removeAPIBridgeMaterial,
   storedMaterialPath,
+  validateTextMaterial,
   withAPIBridgeMaterialMutation,
   writeJSONAtomically,
 }

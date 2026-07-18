@@ -3,7 +3,9 @@ package endpoint
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -14,6 +16,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -26,25 +31,26 @@ import (
 const frameVersion = 2
 
 type Frame struct {
-	Version    int                 `json:"version"`
-	Type       string              `json:"type"`
-	RequestID  string              `json:"requestId,omitempty"`
-	EndpointID string              `json:"endpointId,omitempty"`
-	Method     string              `json:"method,omitempty"`
-	Path       string              `json:"path,omitempty"`
-	RawQuery   string              `json:"rawQuery,omitempty"`
-	Headers    map[string][]string `json:"headers,omitempty"`
-	Status     int                 `json:"status,omitempty"`
-	DataBase64 string              `json:"dataBase64,omitempty"`
-	Error      string              `json:"error,omitempty"`
-	TimeoutSec int                 `json:"timeoutSeconds,omitempty"`
-	Endpoints  []TunnelStatus      `json:"endpoints,omitempty"`
-	Control    *ControlCommand     `json:"control,omitempty"`
-	Result     map[string]any      `json:"result,omitempty"`
-	Features   []string            `json:"features,omitempty"`
-	StreamID   string              `json:"streamId,omitempty"`
-	LeaseID    string              `json:"leaseId,omitempty"`
-	LeaseEpoch int64               `json:"leaseEpoch,omitempty"`
+	Version         int                 `json:"version"`
+	Type            string              `json:"type"`
+	RequestID       string              `json:"requestId,omitempty"`
+	EndpointID      string              `json:"endpointId,omitempty"`
+	Method          string              `json:"method,omitempty"`
+	Path            string              `json:"path,omitempty"`
+	RawQuery        string              `json:"rawQuery,omitempty"`
+	Headers         map[string][]string `json:"headers,omitempty"`
+	Status          int                 `json:"status,omitempty"`
+	DataBase64      string              `json:"dataBase64,omitempty"`
+	Error           string              `json:"error,omitempty"`
+	TimeoutSec      int                 `json:"timeoutSeconds,omitempty"`
+	Endpoints       []TunnelStatus      `json:"endpoints,omitempty"`
+	Control         *ControlCommand     `json:"control,omitempty"`
+	Result          map[string]any      `json:"result,omitempty"`
+	Features        []string            `json:"features,omitempty"`
+	DevicePublicKey string              `json:"devicePublicKey,omitempty"`
+	StreamID        string              `json:"streamId,omitempty"`
+	LeaseID         string              `json:"leaseId,omitempty"`
+	LeaseEpoch      int64               `json:"leaseEpoch,omitempty"`
 }
 
 type ControlCommand struct {
@@ -58,11 +64,11 @@ type ControlCommand struct {
 }
 
 type TunnelStatus struct {
-	EndpointID       string    `json:"endpointId"`
-	Healthy          bool      `json:"healthy"`
-	RouteFingerprint string    `json:"routeFingerprint"`
-	LastSeenAt       time.Time `json:"lastSeenAt"`
-	Error            string    `json:"error,omitempty"`
+	EndpointID     string    `json:"endpointId"`
+	Healthy        bool      `json:"healthy"`
+	ContractSHA256 string    `json:"contractSha256"`
+	LastSeenAt     time.Time `json:"lastSeenAt"`
+	Error          string    `json:"error,omitempty"`
 }
 
 type requestState struct {
@@ -83,17 +89,21 @@ type TunnelClient struct {
 	// final local forwarding boundary. Callers must never log its return value.
 	CredentialResolver func(string) (authType, apiKeyHeader, secret string, err error)
 
-	writeMu    sync.Mutex
-	stateMu    sync.Mutex
-	requests   map[string]*requestState
-	streams    map[string]*streamState
-	semaphores map[string]chan struct{}
-	notify     chan struct{}
-	controlKey []byte
+	writeMu            sync.Mutex
+	stateMu            sync.Mutex
+	requests           map[string]*requestState
+	streams            map[string]*streamState
+	semaphores         map[string]chan struct{}
+	notify             chan struct{}
+	controlKey         []byte
+	identityPrivateKey ed25519.PrivateKey
+	identityPublicKey  string
+	transferMu         sync.RWMutex
+	computeTransfers   map[string]ComputeTransferStatus
 }
 
 func NewTunnelClient(cloudURL, tokenPath string, store *Store) *TunnelClient {
-	return &TunnelClient{CloudURL: strings.TrimRight(strings.TrimSpace(cloudURL), "/"), TokenPath: strings.TrimSpace(tokenPath), Store: store, requests: map[string]*requestState{}, streams: map[string]*streamState{}, semaphores: map[string]chan struct{}{}, notify: make(chan struct{}, 1)}
+	return &TunnelClient{CloudURL: strings.TrimRight(strings.TrimSpace(cloudURL), "/"), TokenPath: strings.TrimSpace(tokenPath), Store: store, requests: map[string]*requestState{}, streams: map[string]*streamState{}, semaphores: map[string]chan struct{}{}, notify: make(chan struct{}, 1), computeTransfers: map[string]ComputeTransferStatus{}}
 }
 
 func (c *TunnelClient) Notify() {
@@ -208,9 +218,12 @@ func (c *TunnelClient) healthLoop(ctx context.Context, conn *websocket.Conn) {
 }
 
 func (c *TunnelClient) sendRegister(ctx context.Context, conn *websocket.Conn) error {
+	if err := c.ensureIdentity(); err != nil {
+		return err
+	}
 	statuses := make([]TunnelStatus, 0)
 	for _, cfg := range c.Store.List() {
-		status := Status{EndpointID: cfg.EndpointID, Healthy: cfg.LastProbeHealthy, RouteFingerprint: cfg.RouteFingerprint, CheckedAt: cfg.LastProbeAt, Error: cfg.LastProbeError}
+		status := Status{EndpointID: cfg.EndpointID, Healthy: cfg.LastProbeHealthy, ContractSHA256: cfg.ContractSHA256, CheckedAt: cfg.LastProbeAt, Error: cfg.LastProbeError}
 		if strings.TrimSpace(cfg.AuthType) == "" || cfg.AuthType == "none" {
 			probeCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 			status = Probe(probeCtx, ProbeInput{Config: cfg})
@@ -226,9 +239,69 @@ func (c *TunnelClient) sendRegister(ctx context.Context, conn *websocket.Conn) e
 				cancel()
 			}
 		}
-		statuses = append(statuses, TunnelStatus{EndpointID: cfg.EndpointID, Healthy: status.Healthy, RouteFingerprint: cfg.RouteFingerprint, LastSeenAt: status.CheckedAt, Error: status.Error})
+		statuses = append(statuses, TunnelStatus{EndpointID: cfg.EndpointID, Healthy: status.Healthy, ContractSHA256: cfg.ContractSHA256, LastSeenAt: status.CheckedAt, Error: status.Error})
 	}
-	return c.send(conn, Frame{Version: frameVersion, Type: "register", Endpoints: statuses, Features: []string{"lease_tcp_v1"}})
+	features := []string{"guest_isolation_v1", "lease_terminal_v1", "lease_transfer_webrtc_v1", "lease_host_probe_v1", "lease_guest_probe_v1", "endpoint_http_sse_v1"}
+	if runtime.GOOS == "linux" {
+		features = append(features, "lease_load_throttle_v1")
+	}
+	return c.send(conn, Frame{Version: frameVersion, Type: "register", Endpoints: statuses, Features: features, DevicePublicKey: c.identityPublicKey})
+}
+
+func (c *TunnelClient) ensureIdentity() error {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	if len(c.identityPrivateKey) == ed25519.PrivateKeySize {
+		return nil
+	}
+	path := strings.TrimSpace(c.TokenPath) + ".identity.ed25519"
+	if path == ".identity.ed25519" {
+		return errors.New("Dock identity path is unavailable")
+	}
+	if raw, err := os.ReadFile(path); err == nil {
+		decoded, decodeErr := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
+		if decodeErr == nil && len(decoded) == ed25519.PrivateKeySize {
+			c.identityPrivateKey = ed25519.PrivateKey(decoded)
+			c.identityPublicKey = base64.StdEncoding.EncodeToString(c.identityPrivateKey.Public().(ed25519.PublicKey))
+			return nil
+		}
+	}
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	temporary := path + ".tmp"
+	if err := os.WriteFile(temporary, []byte(base64.StdEncoding.EncodeToString(privateKey)), 0600); err != nil {
+		return err
+	}
+	if err := os.Rename(temporary, path); err != nil {
+		return err
+	}
+	c.identityPrivateKey = privateKey
+	c.identityPublicKey = base64.StdEncoding.EncodeToString(publicKey)
+	return nil
+}
+
+func (c *TunnelClient) DevicePublicKey() (string, error) {
+	if err := c.ensureIdentity(); err != nil {
+		return "", err
+	}
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	return c.identityPublicKey, nil
+}
+
+func (c *TunnelClient) SignIdentityPayload(payload []byte) (string, error) {
+	if err := c.ensureIdentity(); err != nil {
+		return "", err
+	}
+	c.stateMu.Lock()
+	privateKey := append(ed25519.PrivateKey(nil), c.identityPrivateKey...)
+	c.stateMu.Unlock()
+	return base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, payload)), nil
 }
 
 func (c *TunnelClient) send(conn *websocket.Conn, frame Frame) error {
@@ -242,7 +315,7 @@ func (c *TunnelClient) send(conn *websocket.Conn, frame Frame) error {
 func (c *TunnelClient) handleFrame(ctx context.Context, conn *websocket.Conn, frame Frame) error {
 	switch frame.Type {
 	case "stream_open":
-		return c.openStream(ctx, conn, frame)
+		return c.send(conn, Frame{Type: "stream_error", StreamID: frame.StreamID, Error: "lease TCP and SSH forwarding are disabled"})
 	case "stream_data":
 		return c.writeStream(frame)
 	case "stream_eof":
@@ -422,7 +495,25 @@ func (c *TunnelClient) handleControl(ctx context.Context, conn *websocket.Conn, 
 	if err := verifyControlCommandSignature(*command, key); err != nil {
 		return err
 	}
-	workerCommand := map[string]string{"ProvisionLease": "provision_lease", "RenewLeaseEpoch": "renew_lease_epoch", "ResetVM": "reset_lease", "CapacityRecheck": "lease_recheck"}[command.Command]
+	if command.Command == "StartTransfer" {
+		start := ComputeTransferStart{TransferID: fmt.Sprint(command.Input["transferId"]), LeaseID: command.LeaseID, LeaseEpoch: command.LeaseEpoch, Direction: fmt.Sprint(command.Input["direction"]), SizeBytes: int64(intFromAny(command.Input["sizeBytes"])), SHA256: fmt.Sprint(command.Input["sha256"])}
+		if raw, _ := command.Input["expiresAt"].(string); raw != "" {
+			start.ExpiresAt, _ = time.Parse(time.RFC3339Nano, raw)
+		}
+		if err := c.startProviderTransfer(start); err != nil {
+			return c.send(conn, Frame{Version: frameVersion, Type: "control_error", RequestID: frame.RequestID, Error: err.Error()})
+		}
+		return c.send(conn, Frame{Version: frameVersion, Type: "control_result", RequestID: frame.RequestID, Result: map[string]any{"started": true}})
+	}
+	workerCommand := map[string]string{
+		"ProvisionLease": "provision_lease", "RenewLeaseEpoch": "renew_lease_epoch", "ResetVM": "reset_lease", "CapacityRecheck": "lease_recheck",
+		"TerminalExec":                 "lease_terminal_exec",
+		"ReviewTransfer":               "lease_transfer_review",
+		"CollectHostPerformanceProbe":  "lease_host_performance_probe",
+		"CollectGuestPerformanceProbe": "lease_guest_performance_probe",
+		"ApplyLeaseLoadThrottle":       "lease_apply_load_throttle",
+		"ClearLeaseLoadThrottle":       "lease_clear_load_throttle",
+	}[command.Command]
 	if workerCommand == "" {
 		return c.send(conn, Frame{Version: frameVersion, Type: "control_error", RequestID: frame.RequestID, Error: "unsupported provider control command"})
 	}
@@ -440,7 +531,64 @@ func (c *TunnelClient) handleControl(ctx context.Context, conn *websocket.Conn, 
 	if callErr != nil {
 		return c.send(conn, Frame{Version: frameVersion, Type: "control_error", RequestID: frame.RequestID, Error: callErr.Error()})
 	}
+	if command.Command == "ReviewTransfer" {
+		receipt, receiptErr := c.signTransferReview(command)
+		if receiptErr != nil {
+			return c.send(conn, Frame{Version: frameVersion, Type: "control_error", RequestID: frame.RequestID, Error: receiptErr.Error()})
+		}
+		result["receipt"] = receipt
+	}
+	if command.Command == "CollectHostPerformanceProbe" {
+		rawHost, _ := json.Marshal(result["host"])
+		result["devicePublicKey"] = c.identityPublicKey
+		result["hostSignature"], callErr = c.SignIdentityPayload(rawHost)
+		if callErr != nil {
+			return c.send(conn, Frame{Version: frameVersion, Type: "control_error", RequestID: frame.RequestID, Error: callErr.Error()})
+		}
+	}
 	return c.send(conn, Frame{Version: frameVersion, Type: "control_result", RequestID: frame.RequestID, Result: result})
+}
+
+type signedTransferReceipt struct {
+	ReceiptID       string    `json:"receiptId"`
+	TransferID      string    `json:"transferId"`
+	LeaseID         string    `json:"leaseId"`
+	Party           string    `json:"party"`
+	Kind            string    `json:"kind"`
+	Approved        bool      `json:"approved"`
+	Direction       string    `json:"direction"`
+	SizeBytes       int64     `json:"sizeBytes"`
+	SHA256          string    `json:"sha256,omitempty"`
+	PolicyVersion   string    `json:"policyVersion"`
+	DevicePublicKey string    `json:"devicePublicKey"`
+	CreatedAt       time.Time `json:"createdAt"`
+	ExpiresAt       time.Time `json:"expiresAt"`
+	Signature       string    `json:"signature"`
+}
+
+func (c *TunnelClient) signTransferReview(command *ControlCommand) (signedTransferReceipt, error) {
+	if err := c.ensureIdentity(); err != nil {
+		return signedTransferReceipt{}, err
+	}
+	now := time.Now().UTC()
+	expiresAt := command.Deadline.UTC()
+	if raw, _ := command.Input["expiresAt"].(string); raw != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+			expiresAt = parsed
+		}
+	}
+	receipt := signedTransferReceipt{
+		ReceiptID: "rcp_" + command.CommandID, TransferID: fmt.Sprint(command.Input["transferId"]), LeaseID: command.LeaseID,
+		Party: "provider", Kind: "local_review", Approved: true, Direction: fmt.Sprint(command.Input["direction"]),
+		SizeBytes: int64(intFromAny(command.Input["sizeBytes"])), SHA256: fmt.Sprint(command.Input["sha256"]),
+		PolicyVersion: fmt.Sprint(command.Input["policyVersion"]), DevicePublicKey: c.identityPublicKey, CreatedAt: now, ExpiresAt: expiresAt,
+	}
+	unsigned, _ := json.Marshal(receipt)
+	c.stateMu.Lock()
+	privateKey := append(ed25519.PrivateKey(nil), c.identityPrivateKey...)
+	c.stateMu.Unlock()
+	receipt.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, unsigned))
+	return receipt, nil
 }
 
 func verifyControlCommandSignature(command ControlCommand, key []byte) error {
@@ -573,9 +721,29 @@ func (c *TunnelClient) forward(ctx context.Context, conn *websocket.Conn, cfg Co
 		if err != nil {
 			return errors.New("configured endpoint credential is unavailable")
 		}
-		applyCredential(request.Header, authType, header, secret)
+		transport, authErr := applyRequestCredential(ctx, request, authType, header, secret)
+		if authErr != nil {
+			return errors.New("configured endpoint credential is invalid")
+		}
+		client, clientErr := privateHTTPClient(ctx, base, time.Duration(cfg.TimeoutSeconds)*time.Second)
+		if clientErr != nil {
+			return clientErr
+		}
+		if transport != nil {
+			if secured, ok := client.Transport.(*http.Transport); ok {
+				secured.TLSClientConfig = transport.TLSClientConfig
+			}
+		}
+		return c.forwardWithClient(ctx, conn, cfg, frame, request, client)
 	}
-	client := &http.Client{Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client, clientErr := privateHTTPClient(ctx, base, time.Duration(cfg.TimeoutSeconds)*time.Second)
+	if clientErr != nil {
+		return clientErr
+	}
+	return c.forwardWithClient(ctx, conn, cfg, frame, request, client)
+}
+
+func (c *TunnelClient) forwardWithClient(ctx context.Context, conn *websocket.Conn, cfg Config, frame Frame, request *http.Request, client *http.Client) error {
 	response, err := client.Do(request)
 	if err != nil {
 		return err
@@ -610,11 +778,32 @@ func (c *TunnelClient) forward(ctx context.Context, conn *websocket.Conn, cfg Co
 
 func routeAllowed(routes []Route, method, path string) bool {
 	for _, route := range routes {
-		if strings.EqualFold(route.Method, method) && route.Path == path {
+		if strings.EqualFold(route.Method, method) && matchPathTemplate(route.Path, path) {
 			return true
 		}
 	}
 	return false
+}
+
+func matchPathTemplate(template, actual string) bool {
+	templateParts := strings.Split(strings.Trim(template, "/"), "/")
+	actualParts := strings.Split(strings.Trim(actual, "/"), "/")
+	if len(templateParts) != len(actualParts) {
+		return false
+	}
+	for index, expected := range templateParts {
+		if strings.HasPrefix(expected, "{") && strings.HasSuffix(expected, "}") {
+			decoded, err := url.PathUnescape(actualParts[index])
+			if err != nil || decoded == "" || strings.Contains(decoded, "/") {
+				return false
+			}
+			continue
+		}
+		if expected != actualParts[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func protectedHeader(name string) bool {

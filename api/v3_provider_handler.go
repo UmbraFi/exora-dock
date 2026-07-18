@@ -13,6 +13,15 @@ import (
 )
 
 func (h *Handler) V3Gateway(w http.ResponseWriter, r *http.Request) {
+	if h.localAuth == nil {
+		writeJSON(w, 503, map[string]string{"error": "Dock local authorization is unavailable"})
+		return
+	}
+	_, accountKey, configured := h.localAuth.AccountKey()
+	if !configured {
+		writeJSON(w, 503, map[string]string{"error": "Exora account API key is not configured on this Dock"})
+		return
+	}
 	token, err := cloudlink.LoadToken(h.cloudTokenPath)
 	if err != nil {
 		writeJSON(w, 503, map[string]string{"error": "Exora Cloud is not configured"})
@@ -29,13 +38,14 @@ func (h *Handler) V3Gateway(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for k, values := range r.Header {
-		if strings.EqualFold(k, "Host") {
+		if protectedLocalForwardHeader(k) {
 			continue
 		}
 		for _, v := range values {
 			up.Header.Add(k, v)
 		}
 	}
+	up.Header.Set("Authorization", "Bearer "+accountKey)
 	resp, err := http.DefaultClient.Do(up)
 	if err != nil {
 		writeJSON(w, 502, map[string]string{"error": err.Error()})
@@ -56,10 +66,10 @@ func (h *Handler) V3Catalog(w http.ResponseWriter, r *http.Request) {
 	if r.URL.RawQuery != "" {
 		path += "?" + r.URL.RawQuery
 	}
-	h.v3CloudProxy(w, r, http.MethodGet, path, nil)
+	h.v3BuyerCloudProxy(w, r, http.MethodGet, path, nil)
 }
 func (h *Handler) V3CatalogProduct(w http.ResponseWriter, r *http.Request) {
-	h.v3CloudProxy(w, r, http.MethodGet, "/v3/catalog/products/"+r.PathValue("id"), nil)
+	h.v3BuyerCloudProxy(w, r, http.MethodGet, "/v3/catalog/products/"+r.PathValue("id"), nil)
 }
 
 func (h *Handler) V3ConsumerProxy(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +89,18 @@ func (h *Handler) V3ConsumerProxy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	h.v3CloudProxy(w, r, r.Method, path, body)
+	if path == "/v3/compute-purchases" && h.endpointTunnel != nil {
+		if values, ok := body.(map[string]any); ok {
+			publicKey, err := h.endpointTunnel.DevicePublicKey()
+			if err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Dock device identity is unavailable"})
+				return
+			}
+			values["buyerDevicePublicKey"] = publicKey
+			delete(values, "sshPublicKey")
+		}
+	}
+	h.v3BuyerCloudProxy(w, r, r.Method, path, body)
 }
 
 func (h *Handler) V3ActivitySessions(w http.ResponseWriter, r *http.Request) {
@@ -87,11 +108,11 @@ func (h *Handler) V3ActivitySessions(w http.ResponseWriter, r *http.Request) {
 	if r.URL.RawQuery != "" {
 		path += "?" + r.URL.RawQuery
 	}
-	h.v3CloudProxy(w, r, http.MethodGet, path, nil)
+	h.v3BuyerCloudProxy(w, r, http.MethodGet, path, nil)
 }
 
 func (h *Handler) V3ActivitySession(w http.ResponseWriter, r *http.Request) {
-	h.v3CloudProxy(w, r, http.MethodGet, "/v3/activity-sessions/"+r.PathValue("id"), nil)
+	h.v3BuyerCloudProxy(w, r, http.MethodGet, "/v3/activity-sessions/"+r.PathValue("id"), nil)
 }
 
 func (h *Handler) V3EnvironmentImageCatalog(w http.ResponseWriter, r *http.Request) {
@@ -129,6 +150,15 @@ func (h *Handler) V3ProviderProxy(w http.ResponseWriter, r *http.Request) {
 }
 func (h *Handler) v3CloudProxy(w http.ResponseWriter, r *http.Request, method, path string, body any) {
 	status, payload, err := h.cloudV2Request(r, method, path, body)
+	if err != nil {
+		writeJSON(w, 502, map[string]string{"error": err.Error()})
+		return
+	}
+	writeCloudPayload(w, status, payload)
+}
+
+func (h *Handler) v3BuyerCloudProxy(w http.ResponseWriter, r *http.Request, method, path string, body any) {
+	status, payload, err := h.accountCloudRequest(r, method, path, body)
 	if err != nil {
 		writeJSON(w, 502, map[string]string{"error": err.Error()})
 		return

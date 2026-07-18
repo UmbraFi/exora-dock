@@ -134,6 +134,21 @@
   max-width: 320px;
 }
 
+.agent-session-scope-grid {
+  display: grid;
+  gap: 7px 12px;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  text-align: left;
+}
+
+.agent-session-scope-grid label {
+  align-items: center;
+  display: inline-flex;
+  font-size: 11px;
+  gap: 6px;
+  white-space: nowrap;
+}
+
 .app-setting-button {
   align-items: center;
   border-radius: 8px;

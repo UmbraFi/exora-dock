@@ -71,24 +71,25 @@ func BuildWithBaseURL(baseURL, dockID string) Manifest {
 		AgentPrompt: AgentPrompt(), OpenCodeConfig: OpenCodeConfig(mcp), RESTFallback: RESTFallback(baseURL),
 		Capabilities: []Capability{
 			{Name: "mcp.stdio", Description: "Authoritative MCP entrypoint for the four V3 marketplace categories."},
+			{Name: "security.session_key", Description: "Each MCP initialize creates a scoped local-only session key; Cloud accepts the account key injected by Dock."},
 			{Name: "marketplace.vm.ssh", Description: "Purchase exclusive VM minutes and transfer code or results through lease-scoped SSH, SFTP, or rsync."},
 			{Name: "marketplace.resources.s3", Description: "Purchase immutable Resources and receive a time-limited S3-compatible DownloadGrant."},
-			{Name: "marketplace.endpoint.tunnel", Description: "Invoke seller-authorized private services through an online Dock tunnel."},
-			{Name: "marketplace.api_bridge.cloud", Description: "Invoke declared public HTTPS APIs through the Cloud Gateway without requiring Dock online."},
+			{Name: "marketplace.endpoint.http_sse", Description: "Invoke OpenAPI 3.1 HTTP/JSON or SSE operations on private services through an online Dock tunnel."},
+			{Name: "marketplace.api_bridge.http_sse", Description: "Invoke OpenAPI 3.1 HTTP/JSON or SSE APIs through Cloud without requiring Dock online."},
 		},
 		Endpoints: map[string]Endpoint{
 			"health":    {Method: "GET", Path: "/health", URL: baseURL + "/health", Description: "Check whether this Dock is online."},
 			"manifest":  {Method: "GET", Path: "/.well-known/exora-dock.json", URL: baseURL + "/.well-known/exora-dock.json", Description: "Read this discovery manifest."},
 			"mcp.stdio": {Method: "STDIO", Description: "Launch the MCP server with mcpCommand."},
 			"catalog":   {Method: "GET", Path: "/v3/catalog/listings", URL: baseURL + "/v3/catalog/listings", Description: "Search the four authoritative marketplace categories."},
-			"gateway":   {Method: "POST", Path: "/v3/gateway/{listingId}/{route}", URL: baseURL + "/v3/gateway/{listingId}/{route}", Description: "Invoke a declared Endpoint or API Bridge route."},
+			"gateway":   {Method: "POST", Path: "/v3/gateway/{listingId}/{operation}", URL: baseURL + "/v3/gateway/{listingId}/{operation}", Description: "Invoke a declared OpenAPI HTTP/JSON or SSE operation with a session key."},
 		},
 		LastSeen: time.Now().UTC().Format(time.RFC3339),
 	}
 }
 
 func AgentPrompt() string {
-	return "Read the local Exora Dock discovery manifest and start its stdio MCP server. Use only vm, resources, endpoint, and api_bridge. VM files move through SSH/SFTP/rsync; Resources use DownloadGrants. Never publish a seller draft, reveal credentials, or invent a category."
+	return "Read the local Exora Dock discovery manifest and start its stdio MCP server. MCP initialize returns a local-only session key plus a REST base URL. Endpoint and API Bridge use only OpenAPI 3.1 HTTP/JSON or SSE. VM files move through SSH/SFTP/rsync; Resources use DownloadGrants. Never publish a seller draft, reveal credentials, or invent a category."
 }
 
 func OpenCodeConfig(command []string) map[string]any {

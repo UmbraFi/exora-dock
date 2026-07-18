@@ -34,7 +34,7 @@
 .v3-listing-agent-actions > button:hover { color: var(--color-primary); background: var(--color-primary-soft); box-shadow: none; transform: none; }
 .v3-listing-agent-actions svg { width: 14px; height: 14px; color: currentColor; }
 :root[data-theme="dark"] .v3-listing-mode-switch { --view-switch-tone: var(--color-primary-rgb); --listing-switch-active-background: rgb(var(--view-switch-tone) / .12); --listing-switch-active-border: rgb(var(--view-switch-tone) / .24); border-color: var(--color-border); background: var(--color-surface-soft); }
-:root[data-theme="dark"] .v3-listing-search-switch .v3-listing-search input { background: var(--color-surface-soft); }
+:root[data-theme="dark"] .v3-listing-search-switch .v3-listing-search input { border-color: var(--color-border); background: var(--color-surface-soft); }
 :root[data-theme="dark"] .v3-listing-search-switch .v3-listing-search input:focus,
 :root[data-theme="dark"] .v3-listing-search-switch .v3-listing-search input:not(:placeholder-shown) { background: var(--color-surface); }
 :root[data-theme="dark"] .app-shell.seller-surface-mode .v3-listing-mode-switch > button { color: var(--color-text-tertiary); }
@@ -73,9 +73,12 @@
 .v3-consumer-parameters label { display: grid; gap: 5px; color: var(--color-text-secondary); font-size: 8px; }
 .v3-consumer-parameters label small { color: var(--color-text-tertiary); font-size: 7px; }
 .v3-consumer-panel textarea { min-height: 112px; resize: vertical; font: 9px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
-.v3-consumer-charge { display: flex; justify-content: space-between; gap: 12px; align-items: center; min-height: 37px; padding: 8px 11px; border: 1px solid var(--color-border); border-radius: 9px; background: var(--color-surface); }
+.v3-consumer-charge { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 5px 12px; align-items: center; min-height: 37px; padding: 8px 11px; border: 1px solid var(--color-border); border-radius: 9px; background: var(--color-surface); }
 .v3-consumer-charge span { color: var(--color-text-tertiary); font-size: 8px; }
 .v3-consumer-charge strong { color: var(--color-text-primary); font-size: 10px; font-variant-numeric: tabular-nums; }
+.v3-consumer-charge small { flex-basis: 100%; color: var(--color-text-tertiary); font-size: 7px; line-height: 1.45; }
+.v3-compute-estimate-error { align-self: center; color: var(--color-danger); font-size: 8px; line-height: 1.4; }
+.v3-consumer-limit-reached { padding: 10px 12px; border: 1px solid var(--color-border); border-radius: 9px; color: var(--color-text-tertiary); background: var(--color-surface); font-size: 8px; font-weight: 700; }
 .v3-consumer-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .v3-consumer-transfer { display: grid; grid-template-columns: auto minmax(120px, 1fr) auto; gap: 9px; align-items: center; padding: 9px 11px; border: 1px solid var(--color-border); border-radius: 9px; background: var(--color-surface); }
 .v3-consumer-transfer span { color: var(--color-primary); font-size: 8px; font-weight: 800; text-transform: uppercase; }
@@ -104,4 +107,41 @@
   .v3-listing-mode-switch { width: 100%; }
   .v3-consumer-panel form { grid-template-columns: 1fr; }
   .v3-consumer-panel form > label:has(textarea) { grid-column: auto; }
+}
+.v3-compute-control {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid rgba(190, 255, 0, 0.22);
+  border-radius: 14px;
+  background: rgba(5, 12, 10, 0.46);
+}
+
+.v3-compute-control > header,
+.v3-compute-control > header > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.v3-compute-control > header > div { align-items: flex-start; flex-direction: column; }
+.v3-compute-control > header span { color: var(--accent, #bfff00); font-size: 11px; letter-spacing: .08em; }
+.v3-compute-control > header em { color: #f4bd5d; font-size: 12px; font-style: normal; }
+.v3-compute-control textarea { min-height: 72px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.v3-compute-control pre { max-height: 220px; overflow: auto; white-space: pre-wrap; }
+
+.v3-compute-file-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.v3-compute-file-grid form { display: grid; gap: 8px; padding: 12px; border: 1px solid rgba(255,255,255,.08); border-radius: 12px; }
+.v3-file-picker { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.v3-compute-transfer-status { color: var(--muted, #9ca39d); font-size: 12px; }
+
+@media (max-width: 860px) {
+  .v3-compute-file-grid { grid-template-columns: 1fr; }
 }
