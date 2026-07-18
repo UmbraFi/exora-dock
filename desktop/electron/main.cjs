@@ -4,10 +4,12 @@ const crypto = require('node:crypto')
 const fs = require('node:fs')
 const fsp = require('node:fs/promises')
 const net = require('node:net')
+const https = require('node:https')
 const path = require('node:path')
 const YAML = require('yaml')
 const { autoUpdater } = require('electron-updater')
 const { registerIpcHandlers } = require('./ipc.cjs')
+const { probeMCPConnectivity } = require('./mcp-connectivity.cjs')
 const { assertDesktopCommandSupported, desktopCapabilities } = require('./platform-capabilities.cjs')
 const { releaseWarningForArtifact, selectReleaseArtifact } = require('./release-manifest.cjs')
 const { createCloudAuth } = require('./cloud-auth.cjs')
@@ -22,17 +24,11 @@ const { SETTINGS_VERSION, normalizeAppSettingsV3, redactDiagnostics } = require(
 const {
   readAPIBridgeMaterialManifest: readStoredAPIBridgeMaterialManifest,
   removeAPIBridgeMaterial,
+  validateTextMaterial,
   withAPIBridgeMaterialMutation,
   writeJSONAtomically,
 } = require('./api-materials.cjs')
-const {
-  MAX_RESOURCE_ARCHIVE_BYTES,
-  cleanupResourceArchive,
-  cleanupResourceArchiveSync,
-  cleanupStaleResourceArchives,
-  createResourceArchive,
-  validateResourceArchiveForUpload,
-} = require('./resource-archive.cjs')
+const { inspectResourceFiles, validateResourceFile } = require('./resource-files.cjs')
 
 const APP_ID = 'io.exora.dock'
 const BASE_URL = 'http://127.0.0.1:8080'
@@ -40,7 +36,7 @@ const DAEMON_NAME = 'exora-dockd'
 const DAEMON_LOG_NAME = 'daemon.log'
 const DESKTOP_STATE_NAME = 'desktop-state.json'
 const PERSISTENCE_DIR_NAME = 'exora-data'
-const v3SelectedArchives = new Map()
+const v3SelectedResourceFiles = new Map()
 const v3EnvironmentDownloads = new Map()
 const DEV_URL = process.env.EXORA_DOCK_DESKTOP_DEV_URL || 'http://127.0.0.1:1420'
 const WINDOW_ICON = process.platform === 'win32'
@@ -156,9 +152,6 @@ app.whenReady().then(async () => {
   await migrateLegacyFrontendData().catch((error) => {
     console.error('Failed to remove retired frontend data; cleanup will retry next launch:', error)
   })
-  await cleanupStaleResourceArchives(resourceArchiveTempRoot(), { maxAgeMs: 1 }).catch((error) => {
-    console.error('Failed to clean stale resource archives:', error)
-  })
   await ensureWindowsWSLBroker().catch((error) => {
     console.error('Failed to start the Windows WSL broker:', error)
   })
@@ -175,10 +168,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   appIsQuitting = true
-  for (const archive of v3SelectedArchives.values()) {
-    try { cleanupResourceArchiveSync(archive) } catch (error) { console.error('Failed to remove a temporary resource archive:', error) }
-  }
-  v3SelectedArchives.clear()
+  v3SelectedResourceFiles.clear()
   if (wslBrokerChild && !wslBrokerChild.killed) wslBrokerChild.kill()
 })
 
@@ -193,7 +183,7 @@ function updateTrayMenu() {
   if (!tray) return
   const chinese = currentAppSettings.language === 'zh'
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: chinese ? '打开 Exora Dock' : 'Open Exora Dock', click: () => { mainWindow?.show(); mainWindow?.focus() } },
+    { label: chinese ? '鎵撳紑 Exora Dock' : 'Open Exora Dock', click: () => { mainWindow?.show(); mainWindow?.focus() } },
     { type: 'separator' },
     { label: chinese ? '退出' : 'Quit', click: () => { appIsQuitting = true; app.quit() } },
   ]))
@@ -216,7 +206,6 @@ const INTERACTIVE_OR_STREAMING_COMMANDS = new Set([
   'provider_asset_choose_files',
   'provider_asset_upload',
   'provider_api_bridge_materials_choose',
-  'provider_openapi_choose',
   'seller_automation_choose_root',
 ])
 
@@ -253,6 +242,7 @@ function createIpcHandlerGroups() {
       start_dock,
       stop_dock,
       restart_dock,
+      mcp_connectivity_test,
       daemon_status,
       start_daemon,
       stop_daemon,
@@ -284,10 +274,9 @@ function createIpcHandlerGroups() {
       catalog_products,
       catalog_product,
       catalog_listings,
-      order_access_key_status,
-      order_access_key_create,
-      order_access_key_rotate,
-      order_access_key_revoke,
+      api_order_status,
+      api_order_deactivate,
+      api_order_reactivation_request,
       consumer_approval_decide,
       consumer_account_balance,
       consumer_purchase_estimate,
@@ -296,9 +285,15 @@ function createIpcHandlerGroups() {
       consumer_create_transfer,
       consumer_purchase_compute,
       consumer_compute_purchase,
+      consumer_estimate_compute_extension,
       consumer_extend_compute,
       consumer_get_lease,
       consumer_release_lease,
+      consumer_run_compute_command,
+      consumer_start_compute_transfer,
+      consumer_compute_transfer_status,
+      consumer_choose_compute_upload,
+      consumer_choose_compute_download,
       activity_sessions,
       activity_session,
       provider_vm_probe,
@@ -329,21 +324,21 @@ function createIpcHandlerGroups() {
       provider_api_bridge_materials_add,
       provider_api_bridge_material_remove,
       provider_api_bridge_materials_get,
-      provider_api_bridge_draft_get,
-      provider_api_bridge_draft_save,
-      provider_api_bridge_finalize,
-      provider_openapi_choose,
+      provider_service_material_note_save,
+      provider_service_draft_get,
+      provider_service_draft_save,
+      provider_service_draft_submit,
       provider_api_probe,
-      provider_openapi_import,
-      provider_api_bridge_import,
       provider_endpoint_local_save,
       provider_endpoint_local_list,
       provider_endpoint_probe,
       provider_endpoint_test_route,
-      provider_endpoint_import,
       provider_listings,
       provider_listing_save,
       provider_listing_action,
+      provider_listing_delete,
+      provider_resource_item_update,
+      provider_resource_item_action,
       seller_automation_policy_get,
       seller_automation_policy_save,
       seller_automation_credentials,
@@ -357,6 +352,15 @@ function createIpcHandlerGroups() {
       wallet_spend_policy_save,
       wallet_withdraw,
       security_status,
+      account_api_key_status,
+      account_api_key_ensure,
+      account_api_key_import,
+      account_api_key_rotate,
+      account_api_key_revoke,
+      agent_session_status,
+      agent_session_policy_get,
+      agent_session_policy_save,
+      agent_session_revoke,
     },
   }
 }
@@ -411,13 +415,24 @@ function windowSizeForWorkArea(profile, workArea) {
 async function auth_status() { return cloudAuth.status() }
 async function auth_registration_start(payload) { return cloudAuth.registrationStart(payload) }
 async function auth_registration_complete(payload) { return cloudAuth.registrationComplete(payload) }
-async function auth_login(payload) { return cloudAuth.login(payload) }
+async function auth_login(payload) {
+  const result = await cloudAuth.login(payload)
+  await syncStoredAccountKeyToDock().catch(() => undefined)
+  return result
+}
 async function auth_password_reset_start(payload) { return cloudAuth.passwordResetStart(payload) }
 async function auth_password_reset_complete(payload) { return cloudAuth.passwordResetComplete(payload) }
-async function auth_pin_set(payload) { return cloudAuth.setPIN(payload) }
+async function auth_pin_set(payload) {
+  const result = await cloudAuth.setPIN(payload)
+  const accountKey = await account_api_key_ensure().catch((error) => ({ error: errorMessage(error) }))
+  return { ...result, accountKey }
+}
 async function auth_pin_change(payload) { return cloudAuth.changePIN(payload) }
 async function auth_pin_reset(payload) { return cloudAuth.resetPIN(payload) }
-async function auth_logout() { return cloudAuth.logout() }
+async function auth_logout() {
+  await lockLocalAccountKey().catch(() => undefined)
+  return cloudAuth.logout()
+}
 
 async function app_status() {
   const paths = await dockPaths()
@@ -480,6 +495,9 @@ async function start_dock() {
     if (await healthOk()) break
     await sleep(500)
   }
+  if (await healthOk()) {
+    await syncStoredAccountKeyToDock({ retryOnOffline: false }).catch(() => undefined)
+  }
   return app_status()
 }
 
@@ -493,6 +511,16 @@ async function restart_dock() {
   const paths = await dockPaths()
   await stopTrackedDaemon(paths)
   return start_dock()
+}
+
+async function mcp_connectivity_test() {
+  const paths = await dockPaths()
+  const runtime = await start_dock()
+  if (runtime.daemon !== 'healthy') throw new Error(statusMessage(runtime))
+  return probeMCPConnectivity([paths.helperPath, 'mcp', paths.configPath], {
+    cwd: paths.rootDir,
+    timeoutMs: 30000,
+  })
 }
 
 async function open_health() {
@@ -757,7 +785,7 @@ async function system_notification_test(payload = {}) {
 
 async function system_choose_download_directory() {
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: currentAppSettings.language === 'zh' ? '选择默认下载目录' : 'Choose default download directory',
+    title: currentAppSettings.language === 'zh' ? '閫夋嫨榛樿涓嬭浇鐩綍' : 'Choose default download directory',
     defaultPath: currentAppSettings.downloadDirectory || app.getPath('downloads'),
     properties: ['openDirectory', 'createDirectory'],
   })
@@ -821,7 +849,7 @@ async function system_export_diagnostics() {
     }),
   }
   const result = await dialog.showSaveDialog(mainWindow, {
-    title: currentAppSettings.language === 'zh' ? '导出脱敏诊断包' : 'Export redacted diagnostics',
+    title: currentAppSettings.language === 'zh' ? '导出已脱敏的诊断信息' : 'Export redacted diagnostics',
     defaultPath: path.join(app.getPath('downloads'), `exora-diagnostics-${new Date().toISOString().slice(0, 10)}.json`),
     filters: [{ name: 'JSON', extensions: ['json'] }],
   })
@@ -979,6 +1007,144 @@ async function security_status() {
 	  paymentPinLockedUntil: String(pin?.lockedUntil || ''),
 	  cloudManaged: true,
   }
+}
+
+function decryptStoredAccountKey(state, accountID) {
+  const record = objectOr(state.accountAPIKey)
+  if (String(record.accountId || '') !== String(accountID || '') || record.storageMode !== 'safeStorage' || !record.encryptedKey || !safeStorage.isEncryptionAvailable()) return ''
+  try { return safeStorage.decryptString(Buffer.from(String(record.encryptedKey), 'base64')) } catch { return '' }
+}
+
+async function storeAccountKey(accountID, key, accessKey = {}) {
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('Operating system secure storage is required for an account API key.')
+  const paths = await dockPaths()
+  const state = await readDesktopState(paths)
+  state.accountAPIKey = {
+    accountId: String(accountID),
+    storageMode: 'safeStorage',
+    encryptedKey: safeStorage.encryptString(String(key)).toString('base64'),
+    maskedKey: String(accessKey.maskedKey || `sk-exora-...${String(key).slice(-6)}`),
+    tokenId: String(accessKey.tokenId || ''),
+    createdAt: String(accessKey.createdAt || new Date().toISOString()),
+    updatedAt: new Date().toISOString(),
+  }
+  await writeDesktopState(paths, state)
+}
+
+async function syncAccountKeyToDock(accountID, key, options = {}) {
+  const paths = await dockPaths()
+  await httpJson('PUT', '/v3/local/account-key', { accountId: accountID, key }, await localOwnerToken(paths), options)
+}
+
+async function syncStoredAccountKeyToDock(options = {}) {
+  const connection = await cloudAuth.connection()
+  const paths = await dockPaths()
+  const state = await readDesktopState(paths)
+  const key = decryptStoredAccountKey(state, connection.account?.accountId)
+  if (!key) return { configured: false, requiresImport: true }
+  await syncAccountKeyToDock(connection.account.accountId, key, options)
+  return { configured: true }
+}
+
+async function lockLocalAccountKey() {
+  const paths = await dockPaths()
+  return httpJson('DELETE', '/v3/local/account-key', undefined, await localOwnerToken(paths))
+}
+
+async function account_api_key_status() {
+  const connection = await cloudAuth.connection()
+  const paths = await dockPaths()
+  const state = await readDesktopState(paths)
+  const stored = Boolean(decryptStoredAccountKey(state, connection.account?.accountId))
+  const cloud = await cloudAuth.apiRequest('GET', '/v3/account/api-key')
+  const local = await httpJson('GET', '/v3/local/account-key', undefined, await localOwnerToken(paths)).catch(() => ({ configured: false }))
+  return {
+    accessKey: cloud.accessKey || null,
+    secureStorageAvailable: safeStorage.isEncryptionAvailable(),
+    stored,
+    dockConfigured: local.configured === true,
+    requiresImport: Boolean(cloud.accessKey) && !stored,
+  }
+}
+
+async function account_api_key_ensure() {
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('Secure storage is unavailable; Exora did not create a long-term account key.')
+  const connection = await cloudAuth.connection()
+  const paths = await dockPaths()
+  const state = await readDesktopState(paths)
+  const existing = decryptStoredAccountKey(state, connection.account?.accountId)
+  if (existing) {
+    await syncAccountKeyToDock(connection.account.accountId, existing)
+    return { created: false, configured: true }
+  }
+  const response = await cloudAuth.apiRequest('POST', '/v3/account/api-key/ensure', {})
+  const key = String(response.token || '')
+  if (!key) return { created: false, configured: false, requiresImport: Boolean(response.accessKey), accessKey: response.accessKey }
+  await storeAccountKey(connection.account.accountId, key, response.accessKey)
+  await syncAccountKeyToDock(connection.account.accountId, key)
+  return { created: true, configured: true, token: key, accessKey: response.accessKey }
+}
+
+async function account_api_key_import(payload = {}) {
+  const key = String(payload?.input?.key || '').trim()
+  if (!/^sk-exora-[a-f0-9]{64}$/.test(key)) throw new Error('Enter a valid sk-exora account key.')
+  const connection = await cloudAuth.connection()
+  const verified = await cloudAbsoluteJSON(connection.cloudURL, 'GET', '/v3/account/balance', undefined, key)
+  if (String(verified?.balance?.accountId || '') !== connection.account.accountId) throw new Error('This account key belongs to a different Exora account.')
+  const status = await cloudAuth.apiRequest('GET', '/v3/account/api-key')
+  await storeAccountKey(connection.account.accountId, key, status.accessKey || {})
+  await syncAccountKeyToDock(connection.account.accountId, key)
+  return { configured: true, accessKey: status.accessKey }
+}
+
+async function account_api_key_rotate(payload = {}) {
+  const pin = String(payload?.input?.pin || '').trim()
+  if (!/^\d{6}$/.test(pin)) throw new Error('Payment PIN must be exactly 6 digits.')
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('Secure storage is required before rotating the account key.')
+  const connection = await cloudAuth.connection()
+  const response = await cloudAuth.apiRequest('POST', '/v3/account/api-key/rotate', { pin })
+  const key = String(response.token || '')
+  if (!key) throw new Error('Cloud did not return the new account key.')
+  await storeAccountKey(connection.account.accountId, key, response.accessKey)
+  await syncAccountKeyToDock(connection.account.accountId, key)
+  return { configured: true, token: key, accessKey: response.accessKey }
+}
+
+async function account_api_key_revoke(payload = {}) {
+  const pin = String(payload?.input?.pin || '').trim()
+  if (!/^\d{6}$/.test(pin)) throw new Error('Payment PIN must be exactly 6 digits.')
+  const result = await cloudAuth.apiRequest('DELETE', '/v3/account/api-key', { pin })
+  const paths = await dockPaths()
+  const state = await readDesktopState(paths)
+  delete state.accountAPIKey
+  await writeDesktopState(paths, state)
+  await lockLocalAccountKey().catch(() => undefined)
+  return result
+}
+
+async function agent_session_status() {
+  const paths = await dockPaths()
+  return httpJson('GET', '/v3/local/agent-sessions', undefined, await localOwnerToken(paths))
+}
+
+async function agent_session_policy_get() {
+  const paths = await dockPaths()
+  const policy = await httpJson('GET', '/v3/local/agent-session-policy', undefined, await localOwnerToken(paths))
+  return { ...policy, restBaseUrl: BASE_URL }
+}
+
+async function agent_session_policy_save(payload = {}) {
+  const scopes = Array.isArray(payload?.input?.scopes) ? payload.input.scopes.map((value) => String(value || '').trim()).filter(Boolean) : []
+  const paths = await dockPaths()
+  const policy = await httpJson('PUT', '/v3/local/agent-session-policy', { scopes }, await localOwnerToken(paths), { timeoutMs: 15000 })
+  return { ...policy, restBaseUrl: BASE_URL }
+}
+
+async function agent_session_revoke(payload = {}) {
+  const id = String(payload?.input?.sessionId || '').trim()
+  if (!id) throw new Error('Session ID is required.')
+  const paths = await dockPaths()
+  return httpJson('DELETE', `/v3/local/agent-sessions/${encodeURIComponent(id)}`, undefined, await localOwnerToken(paths))
 }
 
 async function daemon_status() {
@@ -1427,6 +1593,9 @@ function discoveryManifestJson(baseUrl, helperPath, configPath, startCommand) {
     capabilities: [
       { name: 'mcp.stdio', description: 'Default local agent entrypoint. Launch exora-dockd mcp with the host config path.' },
       { name: 'native.daemon', description: 'Desktop shell manages the bundled local Exora Dock daemon.' },
+      { name: 'security.session_key', description: 'Each MCP initialize creates a local-only scoped session key; Cloud accepts account keys only.' },
+      { name: 'marketplace.endpoint.http_sse', description: 'Endpoint tunnels OpenAPI 3.1 HTTP/JSON and SSE operations while its Dock is online.' },
+      { name: 'marketplace.api_bridge.http_sse', description: 'API Bridge reaches OpenAPI 3.1 HTTP/JSON and SSE operations directly from Cloud.' },
     ],
     endpoints: {
       health: { method: 'GET', path: '/health', url: `${baseUrl}/health`, description: 'Check whether this local Exora Dock is online.' },
@@ -1604,8 +1773,10 @@ async function cloudAbsoluteJSON(cloudURL, method, route, body, token = '', time
 
 async function cloudConsumerJson(method, route, body, explicitKey = '') {
   const connection = await cloudAuth.connection()
-  const key = String(explicitKey || connection.token).trim()
-  if (!key) throw new Error('Sign in to Exora Cloud before purchasing or invoking a product.')
+  const paths = await dockPaths()
+  const state = await readDesktopState(paths)
+  const key = String(explicitKey || decryptStoredAccountKey(state, connection.account?.accountId)).trim()
+  if (!key) throw new Error('Import or regenerate your Exora account API key before purchasing or invoking a product.')
   const { cloudURL } = connection
   const result = await fetchTextWithTimeout(`${cloudURL}${route}`, {
     method,
@@ -1618,40 +1789,27 @@ async function cloudConsumerJson(method, route, body, explicitKey = '') {
   let decoded = {}
   try { decoded = text.trim() ? JSON.parse(text) : {} } catch { decoded = { error: text } }
   if (!response.ok) {
-    if (response.status === 401 && !explicitKey) await cloudAuth.unauthorized()
     throw new Error(`Exora Cloud returned ${response.status}: ${String(decoded?.error || text || response.statusText)}`)
   }
   return decoded
 }
 
-async function order_access_key_status(payload = {}) {
-	const id = String(payload?.input?.activitySessionId || '').trim()
-	if (!id) throw new Error('activitySessionId is required')
-	return cloudAuth.apiRequest('GET', `/v3/activity-sessions/${encodeURIComponent(id)}/access-key`)
+async function api_order_status(payload = {}) {
+  const listingId = String(payload?.input?.listingId || '').trim()
+  if (!listingId) throw new Error('listingId is required')
+  return cloudConsumerJson('GET', `/v3/api-orders/${encodeURIComponent(listingId)}`)
 }
 
-async function issueOrderAccessKey(payload = {}, rotate = false) {
-	const input = payload.input || {}
-	const id = String(input.activitySessionId || '').trim()
-	const listingId = String(input.listingId || '').trim()
-	if (!id || !listingId) throw new Error('activitySessionId and listingId are required')
-	const suffix = rotate ? '/rotate' : ''
-	const response = await cloudAuth.apiRequest('POST', `/v3/activity-sessions/${encodeURIComponent(id)}/access-key${suffix}`, { listingId, allowedActions: Array.isArray(input.allowedActions) ? input.allowedActions : [] })
-	const token = String(response.token || '')
-	if (token) {
-		clipboard.writeText(token)
-		setTimeout(() => { if (clipboard.readText() === token) clipboard.clear() }, 60_000)
-	}
-	delete response.token
-	return { ...response, copied: Boolean(token) }
+async function api_order_deactivate(payload = {}) {
+  const listingId = String(payload?.input?.listingId || '').trim()
+  if (!listingId) throw new Error('listingId is required')
+  return cloudConsumerJson('POST', `/v3/api-orders/${encodeURIComponent(listingId)}/deactivate`, {})
 }
 
-async function order_access_key_create(payload = {}) { return issueOrderAccessKey(payload, false) }
-async function order_access_key_rotate(payload = {}) { return issueOrderAccessKey(payload, true) }
-async function order_access_key_revoke(payload = {}) {
-	const id = String(payload?.input?.activitySessionId || '').trim()
-	if (!id) throw new Error('activitySessionId is required')
-	return cloudAuth.apiRequest('DELETE', `/v3/activity-sessions/${encodeURIComponent(id)}/access-key`)
+async function api_order_reactivation_request(payload = {}) {
+  const listingId = String(payload?.input?.listingId || '').trim()
+  if (!listingId) throw new Error('listingId is required')
+  return cloudConsumerJson('POST', `/v3/api-orders/${encodeURIComponent(listingId)}/reactivation-requests`, {})
 }
 
 async function consumer_approval_decide(payload = {}) {
@@ -1732,55 +1890,51 @@ async function downloadConsumerTransfer(response) {
   mainWindow?.webContents.send('exora:v3-progress', { kind: 'marketplace_download', phase: 'complete', bytesDownloaded: downloaded, sizeBytes: expectedSize })
   return { status: 'complete', fileName: path.basename(destination), sizeBytes: downloaded, sha256: actualSHA256, resumedFromBytes: offset }
 }
-function uint32Buffer(value) {
-  const out = Buffer.alloc(4)
-  out.writeUInt32BE(value, 0)
-  return out
-}
-
-function ed25519OpenSSHPublicKey(publicKey) {
-  const raw = publicKey.export({ format: 'der', type: 'spki' }).subarray(-32)
-  const type = Buffer.from('ssh-ed25519')
-  const blob = Buffer.concat([uint32Buffer(type.length), type, uint32Buffer(raw.length), raw])
-  return `ssh-ed25519 ${blob.toString('base64')} exora-dock`
-}
-
 async function consumer_purchase_compute(payload = {}) {
   const input = { ...(payload.input || {}) }
-  let temporaryKeyPath = ''
-  if (!String(input.sshPublicKey || '').trim()) {
-    const paths = await dockPaths()
-    const keyDirectory = path.join(paths.persistenceDir, 'lease-keys')
-    await fsp.mkdir(keyDirectory, { recursive: true, mode: 0o700 })
-    const keyID = crypto.randomUUID()
-    temporaryKeyPath = path.join(keyDirectory, `${keyID}.key`)
-    const pair = crypto.generateKeyPairSync('ed25519')
-    input.sshPublicKey = ed25519OpenSSHPublicKey(pair.publicKey)
-    await fsp.writeFile(temporaryKeyPath, pair.privateKey.export({ format: 'pem', type: 'pkcs8' }), { mode: 0o600, flag: 'wx' })
-  }
-  try {
-    const response = await cloudConsumerJson('POST', '/v3/compute-purchases', input)
-    const leaseID = String(response?.lease?.leaseId || '').trim()
-    if (temporaryKeyPath && leaseID) {
-      const finalPath = path.join(path.dirname(temporaryKeyPath), `${leaseID}.key`)
-      await fsp.rename(temporaryKeyPath, finalPath)
-      response.lease = { ...response.lease, localSSHPrivateKeyPath: finalPath }
-    }
-    return response
-  } catch (error) {
-    if (temporaryKeyPath) await fsp.rm(temporaryKeyPath, { force: true })
-    throw error
-  }
+  const identity = await httpJson('GET', '/v3/local/device-identity', undefined, await localOwnerToken(await dockPaths()), { timeoutMs: 15000 })
+  input.buyerDevicePublicKey = String(identity?.devicePublicKey || '')
+  delete input.sshPublicKey
+  return cloudConsumerJson('POST', '/v3/compute-purchases', input)
 }
 async function consumer_compute_purchase(payload = {}) { return cloudConsumerJson('GET', `/v3/compute-purchases/${encodeURIComponent(String(payload?.input?.purchaseId || ''))}`) }
+async function consumer_estimate_compute_extension(payload = {}) { const input = { ...(payload.input || {}) }; const purchaseId = String(input.purchaseId || ''); delete input.purchaseId; return cloudConsumerJson('POST', `/v3/compute-purchases/${encodeURIComponent(purchaseId)}/extension-estimates`, input) }
 async function consumer_extend_compute(payload = {}) { const input = { ...(payload.input || {}) }; const purchaseId = String(input.purchaseId || ''); delete input.purchaseId; return cloudConsumerJson('POST', `/v3/compute-purchases/${encodeURIComponent(purchaseId)}/extend`, input) }
 async function consumer_get_lease(payload = {}) { return cloudConsumerJson('GET', `/v3/leases/${encodeURIComponent(String(payload?.input?.leaseId || ''))}`) }
 async function consumer_release_lease(payload = {}) {
   const leaseID = String(payload?.input?.leaseId || '')
-  const response = await cloudConsumerJson('POST', `/v3/leases/${encodeURIComponent(leaseID)}/release`, {})
-  const paths = await dockPaths()
-  await fsp.rm(path.join(paths.persistenceDir, 'lease-keys', `${leaseID}.key`), { force: true })
-  return response
+  return cloudConsumerJson('POST', `/v3/leases/${encodeURIComponent(leaseID)}/release`, {})
+}
+
+async function consumer_run_compute_command(payload = {}) {
+  const leaseID = String(payload?.input?.leaseId || '').trim()
+  const command = String(payload?.input?.command || '')
+  if (!leaseID || !command.trim()) throw new Error('leaseId and command are required')
+  return cloudConsumerJson('POST', `/v3/leases/${encodeURIComponent(leaseID)}/commands`, { command })
+}
+
+async function consumer_choose_compute_upload() {
+  const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile'], title: 'Choose a file to send directly to the VM' })
+  return { canceled: result.canceled, path: result.filePaths[0] || '' }
+}
+
+async function consumer_choose_compute_download(payload = {}) {
+  const suggested = String(payload?.input?.suggestedName || 'vm-file.bin').replace(/[\\/:*?"<>|]/g, '_')
+  const result = await dialog.showSaveDialog(mainWindow, { title: 'Choose where to save the VM file', defaultPath: suggested })
+  return { canceled: result.canceled, path: result.filePath || '' }
+}
+
+async function consumer_start_compute_transfer(payload = {}) {
+  const input = { ...(payload.input || {}) }
+  const localPath = path.resolve(String(input.localPath || ''))
+  input.localPath = localPath
+  input.authorizedLocalRoot = path.dirname(localPath)
+  return httpJson('POST', '/v3/local/compute-transfers', input, await localOwnerToken(await dockPaths()), { timeoutMs: 180000 })
+}
+
+async function consumer_compute_transfer_status(payload = {}) {
+  const transferID = String(payload?.input?.transferId || '').trim()
+  return httpJson('GET', `/v3/local/compute-transfers/${encodeURIComponent(transferID)}`, undefined, await localOwnerToken(await dockPaths()), { timeoutMs: 15000 })
 }
 
 async function activity_sessions(payload = {}) {
@@ -1964,7 +2118,7 @@ function bundledEnvironmentCatalog() {
       manifest: {
         schema: 'exora.environment_image.v3alpha1', name: 'Ubuntu 24.04', description: 'Official minimal Ubuntu environment for CPU workloads and custom software stacks.',
         architecture: 'amd64', runtimeBackends: ['wsl2'], os: { distribution: 'Ubuntu', version: '24.04 LTS' },
-        components: ['Ubuntu 24.04 LTS', 'OpenSSH', 'Exora Guest Contract'], gpu: { required: false, vendor: 'none' },
+        components: ['Ubuntu 24.04 LTS', 'Exora Guest Contract'], gpu: { required: false, vendor: 'none' },
         artifact: { format: 'wsl', sizeBytes: 850 * 1024 * 1024 },
       },
     },
@@ -1973,7 +2127,7 @@ function bundledEnvironmentCatalog() {
       manifest: {
         schema: 'exora.environment_image.v3alpha1', name: 'Ubuntu 24.04 + CUDA 12.8', description: 'Official GPU environment with the CUDA 12.8 userspace toolkit, ready for NVIDIA WSL GPU validation.',
         architecture: 'amd64', runtimeBackends: ['wsl2'], os: { distribution: 'Ubuntu', version: '24.04 LTS' },
-        components: ['Ubuntu 24.04 LTS', 'CUDA Toolkit 12.8', 'OpenSSH', 'Exora Guest Contract'],
+        components: ['Ubuntu 24.04 LTS', 'CUDA Toolkit 12.8', 'Exora Guest Contract'],
         gpu: { required: true, vendor: 'nvidia', cudaVersion: '12.8' }, artifact: { format: 'wsl', sizeBytes: 5.2 * 1024 * 1024 * 1024 },
       },
     },
@@ -1995,6 +2149,8 @@ async function providerEnvironmentStorageDetails(settings = {}) {
       freeBytes = Number(stats.bavail) * Number(stats.bsize)
     } catch {}
   }
+  const minimumMinutes = Math.max(1, Math.round(Number(settings.pricing?.minimumMinutes || 10)))
+  const maximumMinutes = Math.max(minimumMinutes, Math.min(10080, Math.round(Number(settings.pricing?.maximumMinutes || 240))))
   return {
     rootPath,
     workspaceGiB: Math.max(20, Number(settings.workspaceGiB || 100)),
@@ -2004,11 +2160,13 @@ async function providerEnvironmentStorageDetails(settings = {}) {
       baseFee: Math.max(0, Number(settings.pricing?.baseFee || 0)),
       baseFeeEnabled: settings.pricing?.baseFeeEnabled ?? Number(settings.pricing?.baseFee || 0) > 0,
       pricePerMinute: Math.max(0, Number(settings.pricing?.pricePerMinute || 0)),
-      minimumMinutes: Math.max(1, Math.round(Number(settings.pricing?.minimumMinutes || 10))),
+      minimumMinutes,
+      maximumMinutes,
       longDiscountAfterMinutes: Math.max(1, Math.round(Number(settings.pricing?.longDiscountAfterMinutes || 60))),
       longDiscountPercent: Math.max(0, Math.min(90, Number(settings.pricing?.longDiscountPercent || 0))),
       longDiscountMinimumPricePercent: Math.max(1, Math.min(100, Number(settings.pricing?.longDiscountMinimumPricePercent || 50))),
       longDiscountEnabled: settings.pricing?.longDiscountEnabled ?? Number(settings.pricing?.longDiscountPercent || 0) > 0,
+      allowSustainedCompute: settings.pricing?.allowSustainedCompute ?? true,
     },
   }
 }
@@ -2022,6 +2180,8 @@ async function provider_environment_storage() {
 async function saveProviderEnvironmentStorage(input = {}) {
   const paths = await dockPaths()
   const current = objectOr(await readJsonOr(paths.providerEnvironmentSettingsPath, {}))
+  const minimumMinutes = Math.max(1, Math.round(Number(input.pricing?.minimumMinutes ?? current.pricing?.minimumMinutes ?? 10)))
+  const maximumMinutes = Math.max(minimumMinutes, Math.min(10080, Math.round(Number(input.pricing?.maximumMinutes ?? current.pricing?.maximumMinutes ?? 240))))
   const next = {
     version: 1,
     rootPath: String(input.rootPath ?? current.rootPath ?? '').trim(),
@@ -2030,11 +2190,13 @@ async function saveProviderEnvironmentStorage(input = {}) {
       baseFee: Math.max(0, Number(input.pricing?.baseFee ?? current.pricing?.baseFee ?? 0)),
       baseFeeEnabled: input.pricing?.baseFeeEnabled ?? current.pricing?.baseFeeEnabled ?? Number(input.pricing?.baseFee ?? current.pricing?.baseFee ?? 0) > 0,
       pricePerMinute: Math.max(0, Number(input.pricing?.pricePerMinute ?? current.pricing?.pricePerMinute ?? 0)),
-      minimumMinutes: Math.max(1, Math.round(Number(input.pricing?.minimumMinutes ?? current.pricing?.minimumMinutes ?? 10))),
+      minimumMinutes,
+      maximumMinutes,
       longDiscountAfterMinutes: Math.max(1, Math.round(Number(input.pricing?.longDiscountAfterMinutes ?? current.pricing?.longDiscountAfterMinutes ?? 60))),
       longDiscountPercent: Math.max(0, Math.min(90, Number(input.pricing?.longDiscountPercent ?? current.pricing?.longDiscountPercent ?? 0))),
       longDiscountMinimumPricePercent: Math.max(1, Math.min(100, Number(input.pricing?.longDiscountMinimumPricePercent ?? current.pricing?.longDiscountMinimumPricePercent ?? 50))),
       longDiscountEnabled: input.pricing?.longDiscountEnabled ?? current.pricing?.longDiscountEnabled ?? Number(input.pricing?.longDiscountPercent ?? current.pricing?.longDiscountPercent ?? 0) > 0,
+      allowSustainedCompute: input.pricing?.allowSustainedCompute ?? current.pricing?.allowSustainedCompute ?? true,
     },
     updatedAt: new Date().toISOString(),
   }
@@ -2156,6 +2318,9 @@ async function provider_environment_download(payload = {}) {
   const imageId = String(input.imageId || '')
   const version = String(input.version || '')
   if (!imageId || !version) throw new Error('imageId and version are required')
+  const catalog = await provider_environment_catalog()
+  const downloadable = (catalog.images || []).some((image) => image.imageId === imageId && image.version === version && image.cloudAvailable !== false)
+  if (!downloadable) throw new Error('The selected environment is not currently available to download from Exora Cloud.')
   const paths = await dockPaths()
   const imageDir = path.join(paths.rootDir, 'provider', 'images')
   await fsp.mkdir(imageDir, { recursive: true })
@@ -2227,7 +2392,7 @@ async function provider_environment_download(payload = {}) {
 
 async function showResourceFileDialog() {
   const options = {
-    title: currentAppSettings.language === 'zh' ? '选择要打包的资源文件' : 'Choose resource files to package',
+    title: currentAppSettings.language === 'zh' ? '选择要单独出售的资源文件' : 'Choose independently sold resource files',
     defaultPath: app.getPath('documents'),
     properties: ['openFile', 'multiSelections'],
   }
@@ -2251,28 +2416,11 @@ async function provider_asset_choose_files(payload = {}) {
     if (result.canceled || !result.filePaths.length) return { canceled: true }
     filePaths = result.filePaths
   }
-  const packaged = await createResourceArchive({
-    filePaths,
-    tempRoot: resourceArchiveTempRoot(),
-    maxBytes: MAX_RESOURCE_ARCHIVE_BYTES,
-    onProgress: (progress) => mainWindow?.webContents.send('exora:v3-progress', { kind: 'asset_packaging', ...progress }),
+  const selected = await inspectResourceFiles(filePaths, {
+    onProgress: (progress) => mainWindow?.webContents.send('exora:v3-progress', { kind: 'asset_hashing', ...progress }),
   })
-  const token = crypto.randomUUID()
-  const archive = { ...packaged, token, kind: 'generated_zip' }
-  await clearSelectedResourceArchives()
-  v3SelectedArchives.set(token, archive)
-  return {
-    archive: {
-      token,
-      name: archive.archiveName,
-      sizeBytes: archive.sizeBytes,
-      sourceBytes: archive.sourceBytes,
-      sourceCount: archive.sourceCount,
-      format: archive.format,
-      status: 'ready',
-    },
-    sources: archive.sources,
-  }
+  for (const file of selected) v3SelectedResourceFiles.set(file.token, file)
+  return { files: selected.map(({ localPath: _localPath, mtimeMs: _mtimeMs, ...file }) => file) }
 }
 
 async function provider_asset_clear_selection() {
@@ -2281,44 +2429,60 @@ async function provider_asset_clear_selection() {
 }
 
 async function provider_asset_create(payload = {}) {
-  return httpJson('POST', '/v3/provider/asset-bundles', payload.input || {}, await localOwnerToken(await dockPaths()))
+  return httpJson('POST', '/v3/provider/resource-sheets', payload.input || {}, await localOwnerToken(await dockPaths()))
 }
 
 async function provider_asset_upload(payload = {}) {
   const input = payload.input || {}
-  const fileToken = String(input.fileToken || '')
-  const selectedArchive = v3SelectedArchives.get(fileToken)
-  if (!selectedArchive) throw new Error('Generated ZIP token is unavailable. Choose the source files again.')
-  const filePath = selectedArchive.archivePath
-  const stat = await fsp.stat(filePath)
-  validateResourceArchiveForUpload(selectedArchive, stat.size)
-  const hash = crypto.createHash('sha256')
-  await new Promise((resolve, reject) => { const stream = fs.createReadStream(filePath); stream.on('data', chunk => hash.update(chunk)); stream.on('error', reject); stream.on('end', resolve) })
-  const sha256 = hash.digest('hex')
-  const started = await httpJson('POST', `/v3/provider/asset-bundles/${encodeURIComponent(String(input.bundleId))}/multipart`, { fileName: selectedArchive.archiveName, sizeBytes: stat.size, sha256, contentType: 'application/zip', archiveFormat: 'zip', sourceCount: selectedArchive.sourceCount }, await localOwnerToken(await dockPaths()))
-  const upload = started.upload
+  const requested = Array.isArray(input.items) ? input.items : []
+  if (!input.sheetId || !requested.length) throw new Error('A Resource sheet and at least one priced file are required.')
+  const owner = await localOwnerToken(await dockPaths())
+  const localRecords = requested.map((item) => {
+    const record = v3SelectedResourceFiles.get(String(item.fileToken || ''))
+    if (!record) throw new Error('A selected resource file is unavailable. Choose it again.')
+    return { item, record }
+  })
+  await Promise.all(localRecords.map(({ record }) => validateResourceFile(record)))
+  const created = await httpJson('POST', `/v3/provider/resource-sheets/${encodeURIComponent(String(input.sheetId))}/items`, {
+    idempotencyKey: String(input.idempotencyKey || crypto.randomUUID()),
+    items: localRecords.map(({ item, record }) => ({
+      clientId: record.token, title: item.title, description: item.description, fileName: record.name,
+      contentType: 'application/octet-stream', license: item.license, tags: item.tags, price: item.price,
+      grantHours: item.grantHours, sizeBytes: record.sizeBytes, sha256: record.sha256,
+    })),
+  }, owner)
+  const cloudItems = created.items || []
+  for (let index = 0; index < localRecords.length; index += 1) {
+    const { record } = localRecords[index]
+    const cloudItem = cloudItems[index]
+    if (!cloudItem?.resourceItemId) throw new Error('Cloud did not create the resource item.')
+    const started = await httpJson('POST', `/v3/provider/resource-items/${encodeURIComponent(cloudItem.resourceItemId)}/multipart`, {}, owner)
+    if (!started.zeroByte) await uploadResourceItemParts(record, started.upload, owner)
+    mainWindow?.webContents.send('exora:v3-progress', { kind: 'asset_upload', phase: 'uploading', completed: index + 1, total: localRecords.length, completedFiles: index + 1, totalFiles: localRecords.length, percent: Math.round((index + 1) / localRecords.length * 100), resourceItemId: cloudItem.resourceItemId })
+    v3SelectedResourceFiles.delete(record.token)
+  }
+  return { ...created, status: 'complete' }
+}
+
+async function uploadResourceItemParts(record, upload, owner) {
   const partSize = 16 * 1024 * 1024
-  const partCount = Math.max(1, Math.ceil(stat.size / partSize))
+  const partCount = Math.max(1, Math.ceil(record.sizeBytes / partSize))
   const partNumbers = Array.from({ length: partCount }, (_, i) => i + 1)
-  const presigned = await httpJson('POST', `/v3/provider/uploads/${encodeURIComponent(upload.uploadSessionId)}/parts/presign`, { partNumbers }, await localOwnerToken(await dockPaths()))
-  const handle = await fsp.open(filePath, 'r')
+  const presigned = await httpJson('POST', `/v3/provider/uploads/${encodeURIComponent(upload.uploadSessionId)}/parts/presign`, { partNumbers }, owner)
+  const handle = await fsp.open(record.localPath, 'r')
   const parts = []
   try {
     for (const partNumber of partNumbers) {
       const offset = (partNumber - 1) * partSize
-      const length = Math.min(partSize, stat.size - offset)
+      const length = Math.min(partSize, record.sizeBytes - offset)
       const buffer = Buffer.alloc(length)
       await handle.read(buffer, 0, length, offset)
       const result = await fetchTextWithTimeout(presigned.urls[String(partNumber)], { method: 'PUT', body: buffer }, 120000)
       if (!result.response.ok) throw new Error(`S3 part ${partNumber} failed with ${result.response.status}: ${result.text.slice(0, 300)}`)
       parts.push({ partNumber, etag: result.response.headers.get('etag') || '' })
-      mainWindow?.webContents.send('exora:v3-progress', { kind: 'asset_upload', uploadSessionId: upload.uploadSessionId, completed: partNumber, total: partCount })
     }
   } finally { await handle.close() }
-  const complete = await httpJson('POST', `/v3/provider/uploads/${encodeURIComponent(upload.uploadSessionId)}/complete`, { parts }, await localOwnerToken(await dockPaths()), { timeoutMs: 60000 })
-  v3SelectedArchives.delete(fileToken)
-  await cleanupResourceArchive(selectedArchive)
-  return complete
+  return httpJson('POST', `/v3/provider/uploads/${encodeURIComponent(upload.uploadSessionId)}/complete`, { parts }, owner, { timeoutMs: 180000 })
 }
 async function provider_asset_cancel(payload = {}) {
   const id = String(payload?.input?.uploadSessionId || '')
@@ -2326,12 +2490,14 @@ async function provider_asset_cancel(payload = {}) {
 }
 
 async function clearSelectedResourceArchives() {
-  const archives = Array.from(v3SelectedArchives.values())
-  v3SelectedArchives.clear()
-  await Promise.all(archives.map((archive) => cleanupResourceArchive(archive).catch(() => undefined)))
+  v3SelectedResourceFiles.clear()
 }
 
-const API_BRIDGE_MATERIAL_EXTENSIONS = new Set(['json', 'yaml', 'yml', 'md', 'markdown', 'txt', 'csv'])
+const API_BRIDGE_MATERIAL_EXTENSIONS = new Set([
+  'json', 'yaml', 'yml', 'md', 'markdown', 'txt', 'csv', 'http', 'rest', 'curl',
+  'js', 'jsx', 'ts', 'tsx', 'py', 'go', 'java', 'kt', 'kts', 'cs', 'rb', 'php',
+  'rs', 'swift', 'sh', 'ps1',
+])
 const API_BRIDGE_FILE_LIMIT = 5 * 1024 * 1024
 const API_BRIDGE_PACKAGE_LIMIT = 20 * 1024 * 1024
 const API_BRIDGE_FILE_COUNT_LIMIT = 20
@@ -2383,6 +2549,7 @@ async function storeAPIBridgeMaterials(draftId, sourcePaths) {
   await Promise.all(candidates.map(async (candidate) => {
     candidate.contents = await apiBridgeFileOperation(`Reading ${candidate.name}`, fsp.readFile(candidate.sourcePath))
     if (candidate.contents.length !== candidate.sizeBytes) throw new Error(`${candidate.name} changed while it was being imported`)
+    validateTextMaterial(candidate.contents, candidate.name)
   }))
   await fsp.mkdir(root, { recursive: true })
   const files = []
@@ -2394,25 +2561,7 @@ async function storeAPIBridgeMaterials(draftId, sourcePaths) {
       files.push({ id: storedName, name: file.name, extension: file.extension, sizeBytes: file.sizeBytes, sha256: crypto.createHash('sha256').update(file.contents).digest('hex'), localPath: storedPath })
     } else files.push(file)
   }
-  let discovery = current.discovery
-  for (const candidate of candidates) {
-    if (!['json', 'yaml', 'yml'].includes(candidate.extension)) continue
-    try {
-      const document = candidate.contents.toString('utf8'); let parsed
-      try { parsed = JSON.parse(document) } catch { parsed = YAML.parse(document) }
-      if (!parsed?.openapi || !parsed?.paths) continue
-      const operations = []; const methods = new Set(['get','post','put','patch','delete','head','options'])
-      for (const [routePath, pathItem] of Object.entries(parsed.paths)) for (const [method, operation] of Object.entries(pathItem || {})) {
-        if (!methods.has(method.toLowerCase()) || !operation || typeof operation !== 'object') continue
-        const operationId = String(operation.operationId || `${method}${String(routePath).replace(/[^a-zA-Z0-9]+(.)/g, (_, value) => String(value || '').toUpperCase())}`)
-        operations.push({ operationId, method: method.toUpperCase(), path: routePath, displayName: String(operation.summary || operationId) })
-        if (operations.length >= 200) break
-      }
-      discovery = { sourceFile: candidate.name, title: String(parsed.info?.title || ''), description: String(parsed.info?.description || ''), baseUrl: Array.isArray(parsed.servers) && typeof parsed.servers[0]?.url === 'string' && !parsed.servers[0].url.includes('{') ? parsed.servers[0].url : '', operations }
-      break
-    } catch { /* best-effort discovery; the material remains available to the Agent */ }
-  }
-  const manifest = { draftId, files, discovery, updatedAt: new Date().toISOString() }; await writeAPIBridgeMaterialManifest(draftId, manifest); return manifest
+  const manifest = { draftId, files, updatedAt: new Date().toISOString() }; await writeAPIBridgeMaterialManifest(draftId, manifest); return manifest
   })
 }
 async function provider_api_bridge_materials_choose(payload = {}) {
@@ -2432,44 +2581,49 @@ async function provider_api_bridge_material_remove(payload = {}) {
   return removeAPIBridgeMaterial({ root: apiBridgeMaterialRoot(draftId), draftId, id })
 }
 
-async function provider_api_bridge_draft_get(payload = {}) {
-  return httpJson('GET', `/v3/provider/api-bridge-drafts/${encodeURIComponent(String(payload?.input?.draftId || ''))}`, undefined, await localOwnerToken(await dockPaths()))
-}
-async function provider_api_bridge_draft_save(payload = {}) {
-  return httpJson('POST', '/v3/provider/api-bridge-drafts', payload.input || {}, await localOwnerToken(await dockPaths()), { timeoutMs: 30000 })
+async function provider_service_material_note_save(payload = {}) {
+  const draftId = String(payload?.input?.draftId || '')
+  const text = String(payload?.input?.text || '').trim()
+  if (!text) throw new Error('Service description or examples are required')
+  const contents = Buffer.from(text, 'utf8')
+  if (contents.length > API_BRIDGE_FILE_LIMIT) throw new Error('Service description exceeds the 5 MiB material limit')
+  const root = apiBridgeMaterialRoot(draftId)
+  return withAPIBridgeMaterialMutation(root, async () => {
+    const current = await readAPIBridgeMaterialManifest(draftId)
+    const id = 'seller-service-description.md'
+    const otherFiles = (current.files || []).filter((file) => file.id !== id)
+    if (otherFiles.length + 1 > API_BRIDGE_FILE_COUNT_LIMIT) throw new Error('An API material package can contain at most 20 files')
+    const totalBytes = otherFiles.reduce((sum, file) => sum + Number(file.sizeBytes || 0), 0) + contents.length
+    if (totalBytes > API_BRIDGE_PACKAGE_LIMIT) throw new Error('The API material package exceeds 20 MiB')
+    await fsp.mkdir(root, { recursive: true })
+    const storedPath = path.join(root, id)
+    await fsp.writeFile(storedPath, contents)
+    const note = { id, name: 'service-description.md', extension: 'md', sizeBytes: contents.length, sha256: crypto.createHash('sha256').update(contents).digest('hex'), localPath: storedPath }
+    const manifest = { draftId, files: [...otherFiles, note], updatedAt: new Date().toISOString() }
+    await writeAPIBridgeMaterialManifest(draftId, manifest)
+    return manifest
+  })
 }
 
-async function provider_api_bridge_finalize(payload = {}) {
+async function provider_service_draft_get(payload = {}) {
+  return httpJson('GET', `/v3/provider/service-drafts/${encodeURIComponent(String(payload?.input?.draftId || ''))}`, undefined, await localOwnerToken(await dockPaths()))
+}
+async function provider_service_draft_save(payload = {}) {
   const input = payload.input || {}
-  if (!String(input.idempotencyKey || '').trim()) throw new Error('API Bridge finalize idempotencyKey is required')
-  return httpJson('POST', '/v3/provider/api-bridge-imports', input, await localOwnerToken(await dockPaths()), { timeoutMs: 30000 })
+  const draftId = String(input.draftId || '').trim()
+  const route = draftId ? `/v3/provider/service-drafts/${encodeURIComponent(draftId)}` : '/v3/provider/service-drafts'
+  return httpJson(draftId ? 'PUT' : 'POST', route, input, await localOwnerToken(await dockPaths()), { timeoutMs: 30000 })
+}
+
+async function provider_service_draft_submit(payload = {}) {
+  const input = payload.input || {}
+  const draftId = String(input.draftId || '').trim()
+  if (!draftId || !String(input.idempotencyKey || '').trim()) throw new Error('Service draft and idempotencyKey are required')
+  return httpJson('POST', `/v3/provider/service-drafts/${encodeURIComponent(draftId)}/submit`, input, await localOwnerToken(await dockPaths()), { timeoutMs: 30000 })
 }
 
 function resourceArchiveTempRoot() {
   return path.join(app.getPath('temp'), 'exora-dock', 'resource-bundles')
-}
-
-async function provider_openapi_choose() {
-  const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile'], filters: [{ name: 'OpenAPI', extensions: ['json', 'yaml', 'yml'] }] })
-  if (result.canceled || !result.filePaths[0]) return { document: '' }
-  const document = await fsp.readFile(result.filePaths[0], 'utf8')
-  if (Buffer.byteLength(document) > 5 * 1024 * 1024) throw new Error('OpenAPI document exceeds 5 MiB')
-  let parsed
-  try { parsed = JSON.parse(document) } catch { parsed = YAML.parse(document) }
-  if (!parsed || typeof parsed !== 'object' || !parsed.openapi) throw new Error('The selected file is not an OpenAPI 3.x document')
-  const operations = []
-  const methods = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options'])
-  for (const [routePath, pathItem] of Object.entries(parsed.paths || {})) {
-    if (!pathItem || typeof pathItem !== 'object') continue
-    for (const [method, operation] of Object.entries(pathItem)) {
-      if (!methods.has(method.toLowerCase()) || !operation || typeof operation !== 'object') continue
-      const operationId = String(operation.operationId || `${method}${String(routePath).replace(/[^a-zA-Z0-9]+(.)/g, (_, character) => String(character || '').toUpperCase())}`)
-      operations.push({ id: `${method.toLowerCase()}:${routePath}`, operationId, method: method.toUpperCase(), path: routePath, title: String(operation.summary || operationId), selected: true, price: 0 })
-      if (operations.length > 200) throw new Error('OpenAPI operation limit exceeded')
-    }
-  }
-  const serverURL = Array.isArray(parsed.servers) && typeof parsed.servers[0]?.url === 'string' && !parsed.servers[0].url.includes('{') ? parsed.servers[0].url : ''
-  return { document, name: path.basename(result.filePaths[0]), title: String(parsed.info?.title || ''), description: String(parsed.info?.description || ''), baseUrl: serverURL, operations }
 }
 
 function publicHTTPSBridgeURL(baseUrl, routePath) {
@@ -2486,25 +2640,65 @@ async function provider_api_probe(payload = {}) {
   const target = publicHTTPSBridgeURL(input.baseUrl, input.healthPath)
   const headers = { Accept: 'application/json, text/event-stream;q=0.9, */*;q=0.5' }
   const secret = String(input.secret || '')
-  if (input.authType === 'bearer' && secret) headers.Authorization = `Bearer ${secret}`
-  if (input.authType === 'basic' && secret) headers.Authorization = `Basic ${Buffer.from(secret).toString('base64')}`
-  if (input.authType === 'api_key' && secret) {
-    const header = String(input.apiKeyHeader || 'X-API-Key').trim()
+  const authType = String(input.authType || 'none').trim().toLowerCase()
+  const authName = String(input.apiKeyHeader || '').trim()
+  let tlsOptions
+  if (authType === 'bearer' && secret) headers.Authorization = `Bearer ${secret}`
+  else if (authType === 'basic' && secret) headers.Authorization = `Basic ${Buffer.from(secret).toString('base64')}`
+  else if (authType === 'api_key' || authType === 'header_api_key') {
+    const header = authName || 'X-API-Key'
     if (!/^[A-Za-z0-9-]{1,64}$/.test(header)) throw new Error('API key header name is invalid')
     headers[header] = secret
-  }
+  } else if (authType === 'query_api_key') target.searchParams.set(authName || 'api_key', secret)
+  else if (authType === 'cookie_api_key') headers.Cookie = `${encodeURIComponent(authName || 'api_key')}=${encodeURIComponent(secret)}`
+  else if (authType === 'oauth2_client_credentials') headers.Authorization = `Bearer ${await desktopOAuthClientToken(secret)}`
+  else if (authType === 'mtls') tlsOptions = desktopMTLSOptions(secret)
+  else if (authType !== 'none') throw new Error('Unsupported Provider authentication type')
   const started = Date.now()
-  let response = await fetchWithTimeout(target, { method: 'HEAD', headers, redirect: 'error', cache: 'no-store' }, 12000)
-  if (response.status === 405 || response.status === 501) response = await fetchWithTimeout(target, { method: 'GET', headers, redirect: 'error', cache: 'no-store' }, 12000)
-  const out = { ok: response.status >= 200 && response.status < 400, status: response.status, latencyMs: Date.now() - started, contentType: response.headers.get('content-type') || '', checkedURL: target.origin + target.pathname }
+  let response = tlsOptions ? await desktopHTTPSProbe(target, 'HEAD', headers, tlsOptions) : await fetchWithTimeout(target, { method: 'HEAD', headers, redirect: 'error', cache: 'no-store' }, 12000)
+  if (response.status === 405 || response.status === 501) response = tlsOptions ? await desktopHTTPSProbe(target, 'GET', headers, tlsOptions) : await fetchWithTimeout(target, { method: 'GET', headers, redirect: 'error', cache: 'no-store' }, 12000)
+  const contentType = typeof response.headers?.get === 'function' ? response.headers.get('content-type') || '' : String(response.headers?.['content-type'] || '')
+  const out = { ok: response.status >= 200 && response.status < 400, status: response.status, latencyMs: Date.now() - started, contentType, checkedURL: target.origin + target.pathname }
   if (!out.ok) out.error = `Provider returned HTTP ${response.status}`
   try { await response.body?.cancel() } catch {}
   return out
 }
-async function provider_openapi_import(payload = {}) {
-  return httpJson('POST', '/v3/provider/api-imports', { ...(payload.input || {}) }, await localOwnerToken(await dockPaths()), { timeoutMs: 30000 })
+
+async function desktopOAuthClientToken(raw) {
+  let config
+  try { config = JSON.parse(raw) } catch { throw new Error('OAuth2 credential is invalid') }
+  let parsedTokenURL
+  try { parsedTokenURL = new URL(String(config.tokenUrl || '')) } catch { throw new Error('OAuth2 Token URL is invalid') }
+  const tokenURL = publicHTTPSBridgeURL(parsedTokenURL.origin, parsedTokenURL.pathname + parsedTokenURL.search)
+  if (!config.clientId || !config.clientSecret) throw new Error('OAuth2 Client ID and Client Secret are required')
+  const form = new URLSearchParams({ grant_type: 'client_credentials' })
+  if (config.scope) form.set('scope', String(config.scope))
+  if (config.audience) form.set('audience', String(config.audience))
+  const response = await fetchWithTimeout(tokenURL, { method: 'POST', redirect: 'error', headers: { Authorization: `Basic ${Buffer.from(`${config.clientId}:${config.clientSecret}`).toString('base64')}`, 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' }, body: form.toString() }, 12000)
+  if (!response.ok) throw new Error(`OAuth2 token endpoint returned HTTP ${response.status}`)
+  const body = await response.json()
+  if (!body?.access_token) throw new Error('OAuth2 token endpoint returned no access token')
+  return String(body.access_token)
 }
-async function provider_api_bridge_import(payload = {}) { return provider_openapi_import(payload) }
+
+function desktopMTLSOptions(raw) {
+  let config
+  try { config = JSON.parse(raw) } catch { throw new Error('mTLS credential is invalid') }
+  if (!config.certificatePem || !config.privateKeyPem) throw new Error('mTLS client certificate and private key are required')
+  return { cert: config.certificatePem, key: config.privateKeyPem, ca: config.caPem || undefined, servername: config.serverName || undefined, minVersion: 'TLSv1.2', rejectUnauthorized: true }
+}
+
+function desktopHTTPSProbe(target, method, headers, tlsOptions) {
+  return new Promise((resolve, reject) => {
+    const request = https.request(target, { method, headers, ...tlsOptions, timeout: 12000 }, (response) => {
+      response.resume()
+      resolve({ status: response.statusCode || 0, headers: response.headers, body: undefined })
+    })
+    request.on('timeout', () => request.destroy(new Error('Provider connection timed out')))
+    request.on('error', () => reject(new Error('Provider TLS connection failed')))
+    request.end()
+  })
+}
 async function provider_endpoint_local_save(payload = {}) {
   const input = payload.input || {}
   const endpointId = String(input.endpointId || '')
@@ -2519,9 +2713,6 @@ async function provider_endpoint_probe(payload = {}) {
 async function provider_endpoint_test_route(payload = {}) {
   return httpJson('POST', '/v3/local/endpoints/test-route', payload.input || {}, await localOwnerToken(await dockPaths()), { timeoutMs: 35000 })
 }
-async function provider_endpoint_import(payload = {}) {
-  return httpJson('POST', '/v3/provider/endpoint-imports', payload.input || {}, await localOwnerToken(await dockPaths()), { timeoutMs: 30000 })
-}
 async function provider_listings() {
   try { return await httpJson('GET', '/v3/provider/listings', undefined, await localOwnerToken(await dockPaths())) }
   catch (error) { return { listings: [], offline: true, error: errorMessage(error) } }
@@ -2535,13 +2726,34 @@ async function provider_listing_action(payload = {}) {
   const input = payload.input || {}
   return httpJson('POST', `/v3/provider/listings/${encodeURIComponent(String(input.listingId || ''))}/${encodeURIComponent(String(input.action || ''))}`, {}, await localOwnerToken(await dockPaths()))
 }
+async function provider_listing_delete(payload = {}) {
+  const input = payload.input || {}
+  return httpJson('DELETE', `/v3/provider/listings/${encodeURIComponent(String(input.listingId || ''))}`, undefined, await localOwnerToken(await dockPaths()))
+}
+
+async function provider_resource_item_update(payload = {}) {
+  const input = payload.input || {}
+  return httpJson('PATCH', `/v3/provider/resource-items/${encodeURIComponent(String(input.resourceItemId || ''))}`, input, await localOwnerToken(await dockPaths()))
+}
+
+async function provider_resource_item_action(payload = {}) {
+  const input = payload.input || {}
+  return httpJson('POST', `/v3/provider/resource-items/${encodeURIComponent(String(input.resourceItemId || ''))}/${encodeURIComponent(String(input.action || ''))}`, {}, await localOwnerToken(await dockPaths()))
+}
 
 async function seller_automation_policy_get() {
   return httpJson('GET', '/v3/local/seller-automation/policy', undefined, await localOwnerToken(await dockPaths()), { timeoutMs: 15000 })
 }
 
 async function seller_automation_policy_save(payload = {}) {
-  return httpJson('PUT', '/v3/local/seller-automation/policy', payload.input || {}, await localOwnerToken(await dockPaths()), { timeoutMs: 20000 })
+  const paths = await dockPaths()
+  const owner = await localOwnerToken(paths)
+  const result = await httpJson('PUT', '/v3/local/seller-automation/policy', payload.input || {}, owner, { timeoutMs: 20000 })
+  const currentSessionPolicy = await httpJson('GET', '/v3/local/agent-session-policy', undefined, owner, { timeoutMs: 15000 }).catch(() => ({ scopes: ['market.read', 'compute.use', 'resources.use', 'api.invoke', 'account.read'] }))
+  const scopes = Array.isArray(currentSessionPolicy.scopes) ? currentSessionPolicy.scopes.filter((scope) => scope !== 'seller.draft') : []
+  if (payload?.input?.enabled === true) scopes.push('seller.draft')
+  await httpJson('PUT', '/v3/local/agent-session-policy', { scopes }, owner, { timeoutMs: 15000 })
+  return result
 }
 
 async function seller_automation_credentials() {
@@ -2595,7 +2807,15 @@ async function httpJson(method, route, body, token, options = {}) {
     }
   }
   const { response, text } = result
-  if (!response.ok) throw new Error(`local dock returned ${response.status}: ${text}`)
+  if (!response.ok) {
+    let decoded
+    try { decoded = text.trim() ? JSON.parse(text) : undefined } catch {}
+    const error = new Error(String(decoded?.error || `Local Exora Dock returned HTTP ${response.status}`))
+    error.status = response.status
+    error.code = decoded?.code || `local_http_${response.status}`
+    error.upstreamStatus = decoded?.upstreamStatus
+    throw error
+  }
   if (!text.trim()) return {}
   try {
     return JSON.parse(text)

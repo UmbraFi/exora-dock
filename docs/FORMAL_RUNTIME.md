@@ -4,8 +4,8 @@ Exora exposes four authoritative marketplace applications. `applicationSource` o
 
 | Application | Delivery | Cloud responsibility | Dock responsibility |
 |---|---|---|---|
-| `vm` | Lease-scoped SSH, SFTP, or rsync | Purchase, Lease, ledger, SSH ingress metadata | Worker, capacity, guest lifecycle, SSH ingress |
-| `resources` | Immutable ZIP through an S3-compatible DownloadGrant | Object authorization, purchase, grant, ledger | Package, hash, and upload the fixed version |
+| `vm` | Lease-authenticated Exora terminal control and Dock-to-Dock WebRTC files under `/workspace` | Purchase, Lease, ledger, command records, and WebRTC signaling | Worker, capacity, guest lifecycle, control channel, and direct file-transfer peer |
+| `resources` | Resource sheet of independently purchasable files through per-item DownloadGrant | Object authorization, per-file purchase, grant, quota, ledger | Hash and upload each file; sellers compress folders themselves |
 | `endpoint` | Outbound Dock tunnel | Catalog, routing contract, metering | Local URL, credentials, health, tunnel |
 | `api_bridge` | Cloud proxy to public HTTPS | Encrypted credential, Gateway, metering | Private draft preparation only; not required at runtime |
 
@@ -13,7 +13,8 @@ Exora exposes four authoritative marketplace applications. `applicationSource` o
 Consumer Agent ── MCP ── Dock ── V3 Cloud ── Catalog / Orders / Ledger
                          │             ├── S3-compatible object storage (Resources)
                          │             └── Public HTTPS origin (API Bridge)
-                         ├── VM Worker ── SSH / SFTP / rsync (VM)
+                         ├── VM Worker ── Exora control ── isolated Guest (VM)
+                         │        └────── Dock-to-Dock WebRTC files (`/workspace`)
                          └── Endpoint tunnel ── private local service (Endpoint)
 ```
 

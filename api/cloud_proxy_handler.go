@@ -13,7 +13,13 @@ func writeCloudPayload(w http.ResponseWriter, status int, payload []byte) {
 		return
 	}
 	if err := json.Unmarshal(payload, &decoded); err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Cloud returned invalid JSON"})
+		code := "cloud_invalid_response"
+		message := "Exora Cloud returned an invalid response"
+		if status == http.StatusMethodNotAllowed {
+			code = "cloud_operation_not_supported"
+			message = "This Exora Cloud deployment does not support this operation yet. Deploy the matching Cloud API and database migration, then retry."
+		}
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": message, "code": code, "upstreamStatus": status})
 		return
 	}
 	writeJSON(w, status, redactCloudValue(decoded))

@@ -3420,7 +3420,7 @@ label span {
 :root[data-theme="dark"] #app[data-platform="windows"] .window-controls button:focus-visible,
 :root[data-theme="dark"] #app[data-platform="windows"] .window-controls button[data-window-action="close"]:hover,
 :root[data-theme="dark"] #app[data-platform="windows"] .window-controls button[data-window-action="close"]:focus-visible {
-  background: #202b26;
+  background: var(--color-surface-tint);
   color: #eaf2ee;
 }
 
@@ -3443,8 +3443,8 @@ label span {
 }
 
 :root[data-theme="dark"] .settings-view {
-  --settings-button-bg: #20211d;
-  --settings-button-bg-hover: #2a2c22;
+  --settings-button-bg: var(--color-surface-soft);
+  --settings-button-bg-hover: var(--color-surface-tint);
   --settings-button-color: #f7f7f3;
   --settings-button-color-hover: #fff;
   --settings-button-primary-bg: #ccff00;
@@ -3465,7 +3465,7 @@ label span {
 
 
 :root[data-theme="dark"] .view-switch {
-  background: #1b2521;
+  background: var(--color-surface-soft);
   border-color: #2c3b35;
 }
 
@@ -3496,7 +3496,7 @@ label span {
 :root[data-theme="dark"] .ledger-item:hover,
 :root[data-theme="dark"] .ledger-item.active,
 :root[data-theme="dark"] .profile-icon-button:hover {
-  background: #202b26;
+  background: var(--color-surface-tint);
   border-color: #34453f;
   box-shadow: none;
 }
@@ -3518,7 +3518,7 @@ label span {
 }
 
 :root[data-theme="dark"] .view-tab-cell:has(button:hover) {
-  background: #202925;
+  background: var(--color-surface-tint);
   border-color: transparent;
   box-shadow: none;
 }
@@ -3550,7 +3550,7 @@ label span {
 
 :root[data-theme="dark"] .profile-identity:hover,
 :root[data-theme="dark"] .profile-identity.active {
-  background: #202b26;
+  background: var(--color-surface-tint);
   border-color: #34453f;
   box-shadow: none;
   color: #eaf2ee;
@@ -3564,7 +3564,7 @@ label span {
 
 
 :root[data-theme="dark"] .ledger-item.active {
-  background: #202b26;
+  background: var(--color-surface-tint);
   border-color: #34453f;
   box-shadow: none;
 }
@@ -3582,7 +3582,7 @@ label span {
 :root[data-theme="dark"] .profile-submenu,
 :root[data-theme="dark"] .permission-menu,
 :root[data-theme="dark"] .settings-section {
-  background: #17211e;
+  background: var(--color-surface-soft);
   border-color: #2c3b35;
   color: #eaf2ee;
 }
@@ -3743,7 +3743,7 @@ label span {
 :root[data-theme="dark"] .permission-button[aria-expanded="true"],
 :root[data-theme="dark"] .permission-menu-item:hover,
 :root[data-theme="dark"] .permission-menu-item.active {
-  background: #202b26;
+  background: var(--color-surface-tint);
   border-color: transparent;
 }
 

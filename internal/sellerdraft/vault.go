@@ -45,10 +45,11 @@ func (v *CredentialVault) Put(meta CredentialMetadata, secret string) (Credentia
 		return CredentialMetadata{}, fmt.Errorf("credential secret is required")
 	}
 	meta.AuthType = strings.ToLower(strings.TrimSpace(meta.AuthType))
-	if meta.AuthType != "bearer" && meta.AuthType != "api_key" && meta.AuthType != "basic" {
-		return CredentialMetadata{}, fmt.Errorf("authType must be bearer, api_key, or basic")
+	allowed := map[string]bool{"none": true, "bearer": true, "basic": true, "api_key": true, "header_api_key": true, "query_api_key": true, "cookie_api_key": true, "oauth2_client_credentials": true, "mtls": true}
+	if !allowed[meta.AuthType] {
+		return CredentialMetadata{}, fmt.Errorf("unsupported authType")
 	}
-	if meta.AuthType == "api_key" && strings.TrimSpace(meta.APIKeyHeader) == "" {
+	if (meta.AuthType == "api_key" || strings.HasSuffix(meta.AuthType, "_api_key")) && strings.TrimSpace(meta.APIKeyHeader) == "" {
 		meta.APIKeyHeader = "X-API-Key"
 	}
 	file, err := v.load()

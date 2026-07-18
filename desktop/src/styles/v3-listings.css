@@ -332,7 +332,7 @@
 .v3-listing-search input { width: 100%; height: 34px; min-height: 34px; padding: 0 12px 0 33px; border-radius: 7px; font-size: 9px; box-shadow: none; }
 .v3-listing-results { align-self: center; justify-self: end; padding: 0 4px 1px 8px; color: var(--color-text-tertiary); font-size: 8px; white-space: nowrap; }
 .v3-listing-list { display: grid; gap: 8px; }
-.v3-listing-application { --listing-accent: var(--color-primary-rgb); --listing-interaction-bg: rgb(var(--listing-accent) / .035); overflow: hidden; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface); box-shadow: none; transition: border-color 160ms ease; }
+.v3-listing-application { --listing-accent: var(--color-primary-rgb); --listing-interaction-bg: rgb(var(--listing-accent) / .035); position: relative; overflow: hidden; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface); box-shadow: none; transition: border-color 160ms ease; }
 .v3-listing-application.filtered-out { display: none; }
 .v3-listing-application:hover { border-color: rgb(var(--listing-accent) / .3); box-shadow: none; transform: none; }
 .v3-listing-application.expanded,
@@ -368,6 +368,12 @@
 .v3-listing-state-pill.tone-attention { color: #a33b35; border-color: rgb(196 61 75 / .22); background: rgb(196 61 75 / .06); }
 .v3-listing-state-pill.tone-attention i { background: var(--color-danger); }
 .v3-listing-state-pill.tone-retired { opacity: .7; }
+.v3-listing-state-slot { width: 92px; min-width: 92px; }
+.v3-listing-lifecycle-switch { position: absolute; z-index: 2; top: 22px; right: 42px; min-width: 78px; min-height: 28px; cursor: pointer; transition: border-color 150ms ease, background-color 150ms ease, opacity 150ms ease; }
+.v3-listing-lifecycle-switch:hover:not(:disabled) { border-color: rgb(var(--listing-accent) / .55); transform: none; box-shadow: none; }
+.v3-listing-lifecycle-switch:focus-visible { outline: 2px solid rgb(var(--listing-accent) / .38); outline-offset: 2px; }
+.v3-listing-lifecycle-switch:disabled { cursor: not-allowed; opacity: .58; }
+.v3-listing-lifecycle-switch.is-listed i { box-shadow: 0 0 0 3px rgb(44 173 121 / .1); }
 .v3-listing-chevron { display: grid; color: var(--color-text-tertiary); transition: transform 180ms ease; }
 .v3-listing-chevron svg { width: 14px; height: 14px; }
 .v3-listing-application:hover .v3-listing-chevron { color: rgb(var(--listing-accent)); }
@@ -426,6 +432,7 @@
   .v3-listing-summary-metrics { grid-column: 2; grid-row: 2; }
   .v3-listing-source-icon { grid-row: 1 / 3; }
   .v3-listing-state-pill { grid-column: 3; grid-row: 1 / 3; }
+  .v3-listing-lifecycle-switch { top: 22px; right: 42px; }
   .v3-listing-chevron { grid-column: 4; grid-row: 1 / 3; }
 }
 
@@ -440,6 +447,8 @@
   .app-shell.seller-surface-mode .v3-listing-summary { grid-template-columns: 36px minmax(0, 1fr) 15px; gap: 9px; padding: 11px; }
   .v3-listing-source-icon { width: 36px; height: 36px; }
   .v3-listing-state-pill { grid-column: 2; grid-row: 2; justify-self: start; }
+  .v3-listing-state-slot { width: 76px; min-width: 76px; height: 28px; }
+  .v3-listing-lifecycle-switch { top: 50px; right: 38px; }
   .v3-listing-summary-metrics { grid-column: 2 / 4; grid-row: 3; }
   .v3-listing-chevron { grid-column: 3; grid-row: 1 / 3; }
   .v3-listing-detail-head { align-items: flex-start; flex-direction: column; }
@@ -459,3 +468,11 @@
 .v3-endpoint-review-list article.confirmed { border-color: #9ed8bf; background: color-mix(in srgb, #dff5eb 35%, transparent); }
 .v3-endpoint-review-list article > div { display: grid; gap: 3px; }
 .v3-endpoint-review-list article span { color: var(--muted-color, #73788a); font-size: 12px; }
+.v3-resource-owner-list { display: grid; gap: 12px; }
+.v3-resource-owner-item { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-surface-subtle); }
+.v3-resource-owner-item > header, .v3-resource-owner-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.v3-resource-owner-item > header small { display: block; margin-top: 3px; color: var(--color-text-tertiary); }
+.v3-resource-owner-fields { display: grid; grid-template-columns: 1fr 1.5fr .65fr .8fr .55fr; gap: 10px; }
+.v3-resource-owner-fields label { min-width: 0; }
+.v3-resource-owner-fields textarea { min-height: 42px; }
+.v3-resource-owner-actions { justify-content: flex-end; }

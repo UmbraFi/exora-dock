@@ -2,16 +2,13 @@ package sellerdraft
 
 import (
 	"archive/zip"
-	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -20,8 +17,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/exora-dock/exora-dock/internal/endpoint"
 )
 
 type cloudProduct struct {
@@ -32,47 +27,155 @@ type cloudListing struct {
 }
 
 func (s *Service) runResources(ctx context.Context, runID string, policy SellerAutomationPolicy, candidates []Candidate, normalized map[string]any) error {
-	if err := s.step(runID, StatusPackaging, 30, "Creating a deterministic ZIP inside the Dock daemon"); err != nil {
+	if len(candidates) == 0 || len(candidates) > 1000 {
+		return errors.New("a resource sheet must contain between 1 and 1000 files")
+	}
+	if err := s.step(runID, StatusPackaging, 30, "Revalidating each independent resource file"); err != nil {
 		return err
 	}
-	archivePath, size, checksum, err := s.packageResources(policy, runID, candidates)
-	if err != nil {
-		return err
+	type preparedResource struct {
+		candidate Candidate
+		size      int64
 	}
-	defer os.RemoveAll(filepath.Dir(archivePath))
-	manifest := provenanceManifest(runID, policy, combinedFingerprint(candidates), mapValue(normalized, "specification"))
-	manifest["archiveFormat"], manifest["sourceCount"], manifest["sha256"], manifest["sizeBytes"] = "zip", len(candidates), checksum, size
-	productPayload := map[string]any{
-		"idempotencyKey": runID + "-product", "productKind": "download", "applicationSource": ApplicationResources, "title": normalized["title"],
-		"description": normalized["description"], "manifest": manifest,
+	prepared := make([]preparedResource, 0, len(candidates))
+	items := make([]map[string]any, 0, len(candidates))
+	specification := mapValue(normalized, "specification")
+	license := textValue(specification, "license")
+	grantHours := intNumber(specification, "grantHours", 24)
+	for index, candidate := range candidates {
+		file, info, _, err := openCandidateFile(policy, candidate)
+		if err != nil {
+			return err
+		}
+		_ = file.Close()
+		if info.Size() > 1<<30 {
+			return fmt.Errorf("resource file %s exceeds 1 GiB", candidate.DisplayName)
+		}
+		fileName := filepath.Base(firstNonEmpty(candidate.DisplayName, candidate.LocalPath))
+		itemTerms := map[string]any{}
+		for _, candidateTerms := range anyMaps(specification["resourceItems"]) {
+			if textValue(candidateTerms, "candidateId") == candidate.CandidateID || (textValue(candidateTerms, "candidateId") == "" && strings.EqualFold(textValue(candidateTerms, "fileName"), filepath.Base(candidate.DisplayName))) {
+				itemTerms = candidateTerms
+				break
+			}
+		}
+		description := firstNonEmpty(textValue(itemTerms, "description"), candidate.Summary, textValue(normalized, "description"))
+		if strings.TrimSpace(description) == "" {
+			description = "Independent resource file " + candidate.DisplayName
+		}
+		itemPrice := mapValue(itemTerms, "price")
+		if itemPrice == nil {
+			itemPrice = mapValue(normalized, "price")
+		}
+		items = append(items, map[string]any{
+			"clientId": candidate.CandidateID, "title": firstNonEmpty(textValue(itemTerms, "title"), candidate.DisplayName, fmt.Sprintf("Resource %d", index+1)),
+			"description": description, "fileName": fileName, "contentType": "application/octet-stream",
+			"license": firstNonEmpty(textValue(itemTerms, "license"), license), "price": cloneMap(itemPrice), "grantHours": intNumber(itemTerms, "grantHours", grantHours),
+			"sizeBytes": info.Size(), "sha256": candidate.SourceFingerprint,
+		})
+		prepared = append(prepared, preparedResource{candidate: candidate, size: info.Size()})
 	}
-	var productResponse struct {
+	var sheet struct {
 		Product cloudProduct `json:"product"`
+		Listing cloudListing `json:"listing"`
 	}
-	if err := s.cloud.JSON(ctx, http.MethodPost, "/v3/provider/asset-bundles", productPayload, &productResponse); err != nil {
+	if err := s.cloud.JSON(ctx, http.MethodPost, "/v3/provider/resource-sheets", map[string]any{
+		"idempotencyKey": runID + "-sheet", "title": normalized["title"], "description": normalized["description"],
+		"category": firstNonEmpty(textValue(specification, "category"), "other"), "license": license, "grantHours": grantHours,
+	}, &sheet); err != nil {
 		return err
 	}
-	if productResponse.Product.ProductID == "" {
-		return errors.New("Cloud did not return an asset product id")
+	if sheet.Product.ProductID == "" || sheet.Listing.ListingID == "" {
+		return errors.New("Cloud did not return resource sheet ids")
 	}
-	if err := s.step(runID, StatusUploading, 50, "Uploading the verified ZIP with resumable multipart transfer"); err != nil {
+	var created struct {
+		Items []struct {
+			ResourceItemID string `json:"resourceItemId"`
+		} `json:"items"`
+	}
+	if err := s.cloud.JSON(ctx, http.MethodPost, "/v3/provider/resource-sheets/"+url.PathEscape(sheet.Listing.ListingID)+"/items", map[string]any{
+		"idempotencyKey": runID + "-items", "items": items,
+	}, &created); err != nil {
 		return err
 	}
-	uploadID, err := s.uploadArchive(ctx, runID, productResponse.Product.ProductID, archivePath, size, checksum, len(candidates))
+	if len(created.Items) != len(prepared) {
+		return errors.New("Cloud returned an incomplete resource item batch")
+	}
+	if err := s.step(runID, StatusUploading, 50, "Uploading and verifying each resource file independently"); err != nil {
+		return err
+	}
+	lastUploadID := ""
+	for index, resource := range prepared {
+		uploadID, err := s.uploadResourceCandidate(ctx, policy, created.Items[index].ResourceItemID, resource.candidate, resource.size)
+		if err != nil {
+			return err
+		}
+		lastUploadID = uploadID
+		_, _ = s.store.UpdateRun(runID, 0, func(run *Run) error {
+			run.Progress = 50 + int(float64(index+1)/float64(len(prepared))*40)
+			return nil
+		})
+	}
+	if err := s.step(runID, StatusCreatingDraft, 95, "Resource sheet and independently purchasable files are ready for review"); err != nil {
+		return err
+	}
+	return s.complete(runID, RunResult{ProductID: sheet.Product.ProductID, ListingID: sheet.Listing.ListingID, UploadSessionID: lastUploadID})
+}
+
+func (s *Service) uploadResourceCandidate(ctx context.Context, policy SellerAutomationPolicy, resourceItemID string, candidate Candidate, size int64) (string, error) {
+	var started struct {
+		Upload struct {
+			UploadSessionID string `json:"uploadSessionId"`
+		} `json:"upload"`
+		ZeroByte bool `json:"zeroByte"`
+	}
+	if err := s.cloud.JSON(ctx, http.MethodPost, "/v3/provider/resource-items/"+url.PathEscape(resourceItemID)+"/multipart", map[string]any{}, &started); err != nil {
+		return "", err
+	}
+	if started.ZeroByte {
+		return "", nil
+	}
+	uploadID := started.Upload.UploadSessionID
+	if uploadID == "" {
+		return "", errors.New("Cloud did not return a resource upload session id")
+	}
+	file, info, _, err := openCandidateFile(policy, candidate)
 	if err != nil {
-		return err
+		return uploadID, err
 	}
-	if err := s.step(runID, StatusCreatingDraft, 90, "Creating a private Resources Listing draft"); err != nil {
-		return err
+	defer file.Close()
+	if info.Size() != size {
+		return uploadID, errors.New("resource changed before upload; discover it again")
 	}
-	listingID, err := s.createGenericListing(ctx, runID, productResponse.Product.ProductID, normalized, map[string]any{
-		"valid": true, "uploadVerified": true, "creationActor": "agent", "draftRunId": runID,
-		"sourceFingerprint": combinedFingerprint(candidates), "sellerPolicyReceipt": Receipt(policy),
-	})
-	if err != nil {
-		return err
+	const partSize int64 = 16 << 20
+	count := int((size + partSize - 1) / partSize)
+	numbers := make([]int, count)
+	for i := range numbers {
+		numbers[i] = i + 1
 	}
-	return s.complete(runID, RunResult{ProductID: productResponse.Product.ProductID, ListingID: listingID, UploadSessionID: uploadID})
+	var presigned struct {
+		URLs map[string]string `json:"urls"`
+	}
+	if err := s.cloud.JSON(ctx, http.MethodPost, "/v3/provider/uploads/"+url.PathEscape(uploadID)+"/parts/presign", map[string]any{"partNumbers": numbers}, &presigned); err != nil {
+		return uploadID, err
+	}
+	parts := make([]map[string]any, 0, count)
+	for _, partNumber := range numbers {
+		offset := int64(partNumber-1) * partSize
+		length := partSize
+		if remaining := size - offset; remaining < length {
+			length = remaining
+		}
+		etag, err := s.cloud.PUTPart(ctx, presigned.URLs[strconv.Itoa(partNumber)], io.NewSectionReader(file, offset, length), length)
+		if err != nil {
+			return uploadID, err
+		}
+		parts = append(parts, map[string]any{"partNumber": partNumber, "etag": etag})
+	}
+	if err := s.cloud.JSON(ctx, http.MethodPost, "/v3/provider/uploads/"+url.PathEscape(uploadID)+"/complete", map[string]any{"parts": parts}, nil); err != nil {
+		return uploadID, err
+	}
+	return uploadID, nil
 }
 
 func (s *Service) packageResources(policy SellerAutomationPolicy, runID string, candidates []Candidate) (string, int64, string, error) {
@@ -302,6 +405,10 @@ func (s *Service) runVM(ctx context.Context, runID string, policy SellerAutomati
 	manifest["capacitySnapshot"], manifest["reservation"] = capacity, reservation
 	manifest["networkSnapshot"] = network
 	manifest["reservationExpiresAt"] = expiresAt.Format(time.RFC3339Nano)
+	manifest["price"] = cloneMap(mapValue(normalized, "price"))
+	manifest["limits"] = cloneMap(mapValue(normalized, "limits"))
+	manifest["workloadPolicy"] = cloneMap(mapValue(normalized, "workloadPolicy"))
+	manifest["performancePolicy"] = cloneMap(mapValue(normalized, "performancePolicy"))
 	productID, err := s.createGenericProduct(ctx, runID, ApplicationVM, "compute", normalized, manifest)
 	if err != nil {
 		return err
@@ -440,143 +547,6 @@ func anyMaps(value any) []map[string]any {
 	return out
 }
 
-func (s *Service) runEndpoint(ctx context.Context, runID string, policy SellerAutomationPolicy, candidate Candidate, normalized map[string]any) error {
-	service, err := authorizedService(policy, candidate)
-	if err != nil {
-		return err
-	}
-	specification := mapValue(normalized, "specification")
-	routes := endpointRoutes(specification["routes"])
-	authType, header, secret, err := s.resolveCredential(normalized, service)
-	if err != nil {
-		return err
-	}
-	if err := s.step(runID, StatusProbing, 40, "Probing the authorized local/private Endpoint"); err != nil {
-		return err
-	}
-	endpointID := stableLocalID("epd", runID)
-	probe := endpoint.Probe(ctx, endpoint.ProbeInput{Config: endpoint.Config{EndpointID: endpointID, LocalBaseURL: service.BaseURL, HealthPath: textValue(specification, "healthPath"), Routes: routes}, AuthType: authType, APIKeyHeader: header, Secret: secret})
-	if !probe.Healthy {
-		return fmt.Errorf("Endpoint health probe failed: %s", firstNonEmpty(probe.Error, strconv.Itoa(probe.Status)))
-	}
-	if s.endpoints == nil {
-		return errors.New("local Endpoint store is unavailable")
-	}
-	limits := mapValue(normalized, "limits")
-	timeout := intNumber(limits, "timeoutSeconds", 120)
-	concurrency := intNumber(limits, "concurrency", 1)
-	saved, err := s.endpoints.Save(ctx, endpoint.Config{EndpointID: endpointID, LocalBaseURL: service.BaseURL, HealthPath: textValue(specification, "healthPath"), Routes: routes, AuthType: authType, CredentialRef: textValue(normalized, "credentialRef"), LastProbeHealthy: true, LastProbeAt: probe.CheckedAt, TimeoutSeconds: timeout, Concurrency: concurrency})
-	if err != nil {
-		return err
-	}
-	if s.notifyEndpoint != nil {
-		s.notifyEndpoint()
-	}
-	_, _ = s.store.UpdateRun(runID, 0, func(run *Run) error {
-		run.Result.EndpointID = saved.EndpointID
-		return nil
-	})
-	if err := s.step(runID, StatusCreatingDraft, 75, "Creating a reviewed Endpoint draft and private Listing"); err != nil {
-		return err
-	}
-	result, err := s.createServiceApplication(ctx, runID, policy, candidate, normalized, saved.EndpointID, "dock_tunnel", authType, header, secret)
-	if err != nil {
-		return err
-	}
-	result.EndpointID = saved.EndpointID
-	return s.complete(runID, result)
-}
-
-func (s *Service) runAPIBridge(ctx context.Context, runID string, policy SellerAutomationPolicy, candidate Candidate, normalized map[string]any) error {
-	service, err := authorizedService(policy, candidate)
-	if err != nil {
-		return err
-	}
-	authType, header, secret, err := s.resolveCredential(normalized, service)
-	if err != nil {
-		return err
-	}
-	if err := s.step(runID, StatusProbing, 35, "Probing the public HTTPS API without redirects or private-network resolution"); err != nil {
-		return err
-	}
-	if err := probePublicService(ctx, service.BaseURL, textValue(mapValue(normalized, "specification"), "healthPath"), authType, header, secret); err != nil {
-		return err
-	}
-	if err := s.step(runID, StatusCreatingDraft, 70, "Creating a reviewed API Bridge draft for Cloud verification"); err != nil {
-		return err
-	}
-	result, err := s.createServiceApplication(ctx, runID, policy, candidate, normalized, "", "transparent", authType, header, secret)
-	if err != nil {
-		return err
-	}
-	return s.complete(runID, result)
-}
-
-func (s *Service) createServiceApplication(ctx context.Context, runID string, policy SellerAutomationPolicy, candidate Candidate, normalized map[string]any, endpointID, bridgeMode, authType, header, secret string) (RunResult, error) {
-	run, _ := s.store.GetRun(runID)
-	specification := mapValue(normalized, "specification")
-	draftPayload := map[string]any{
-		"title": normalized["title"], "description": normalized["description"], "bridgeMode": bridgeMode,
-		"protocol": specification["protocol"], "healthPath": specification["healthPath"], "routes": specification["routes"],
-		"agentNotes": "Created by Dock seller automation run " + runID, "unresolvedFields": []string{},
-	}
-	if bridgeMode == "transparent" {
-		draftPayload["baseUrl"] = textValue(mapValue(normalized, "service"), "baseUrl")
-	}
-	var draftResponse map[string]any
-	if run.Result.DraftID != "" {
-		if err := s.cloud.JSON(ctx, http.MethodGet, "/v3/provider/api-bridge-drafts/"+url.PathEscape(run.Result.DraftID), nil, &draftResponse); err != nil {
-			return RunResult{}, err
-		}
-	} else {
-		if err := s.cloud.JSON(ctx, http.MethodPost, "/v3/provider/api-bridge-drafts", draftPayload, &draftResponse); err != nil {
-			return RunResult{}, err
-		}
-	}
-	draft := mapValue(draftResponse, "draft")
-	draftID := textValue(draft, "draftId")
-	version := int64(intNumber(draft, "version", 0))
-	if draftID == "" || version <= 0 {
-		return RunResult{}, errors.New("Cloud did not return a versioned service draft")
-	}
-	if run.Result.DraftID == "" {
-		_, _ = s.store.UpdateRun(runID, 0, func(current *Run) error {
-			current.Result.DraftID = draftID
-			return nil
-		})
-	}
-	receipt, err := serviceReviewReceipt(draft, bridgeMode)
-	if err != nil {
-		return RunResult{}, err
-	}
-	payload := map[string]any{
-		"idempotencyKey": runID + "-import", "draftId": draftID, "draftVersion": version, "reviewReceipt": receipt,
-		"price": normalized["price"], "limits": normalized["limits"],
-		"sellerPolicyReceipt": Receipt(policy), "creationActor": "agent", "draftRunId": runID,
-		"sourceFingerprint": candidate.SourceFingerprint, "mcpConnection": run.Request.MCPConnectionID,
-	}
-	path := "/v3/provider/api-bridge-imports"
-	if bridgeMode == "dock_tunnel" {
-		path = "/v3/provider/endpoint-imports"
-		payload["endpointId"] = endpointID
-		payload["localConnectivityPassed"] = true
-		payload["credentialConfigured"] = authType == "none" || strings.TrimSpace(secret) != ""
-	} else {
-		payload["authType"] = authType
-		payload["apiKeyHeader"] = header
-		payload["secret"] = secret
-		payload["materialFingerprint"] = candidate.SourceFingerprint
-	}
-	var imported struct {
-		Product cloudProduct `json:"product"`
-		Listing cloudListing `json:"listing"`
-	}
-	if err := s.cloud.JSON(ctx, http.MethodPost, path, payload, &imported); err != nil {
-		return RunResult{}, err
-	}
-	return RunResult{ProductID: imported.Product.ProductID, ListingID: imported.Listing.ListingID, DraftID: draftID}, nil
-}
-
 func (s *Service) createGenericProduct(ctx context.Context, runID string, source ApplicationSource, kind string, normalized, manifest map[string]any) (string, error) {
 	var response struct {
 		Product cloudProduct `json:"product"`
@@ -599,7 +569,7 @@ func (s *Service) createGenericListing(ctx context.Context, runID, productID str
 	}
 	run, _ := s.store.GetRun(runID)
 	err := s.cloud.JSON(ctx, http.MethodPost, "/v3/provider/listings", map[string]any{
-		"idempotencyKey": runID + "-listing", "productId": productID, "price": normalized["price"], "limits": normalized["limits"],
+		"idempotencyKey": runID + "-listing", "productId": productID, "price": normalized["price"], "limits": normalized["limits"], "workloadPolicy": normalized["workloadPolicy"], "performancePolicy": normalized["performancePolicy"],
 		"availability": map[string]any{"availableNow": false, "reason": "Draft awaiting seller publication"}, "validation": validation,
 		"creationActor": "agent", "draftRunId": runID, "sourceFingerprint": run.SourceFingerprint,
 		"mcpConnection": run.Request.MCPConnectionID, "sellerPolicyReceipt": run.PolicyReceipt,
@@ -621,161 +591,6 @@ func provenanceManifest(runID string, policy SellerAutomationPolicy, fingerprint
 	manifest["sellerPolicyReceipt"] = Receipt(policy)
 	manifest["applicationSource"] = "resources"
 	return manifest
-}
-
-func (s *Service) resolveCredential(normalized map[string]any, service AllowedService) (string, string, string, error) {
-	ref := textValue(normalized, "credentialRef")
-	if ref == "" {
-		return "none", "", "", nil
-	}
-	metadata, secret, err := s.vault.Resolve(ref, service.ID)
-	if err != nil {
-		return "", "", "", err
-	}
-	return metadata.AuthType, metadata.APIKeyHeader, secret, nil
-}
-
-func endpointRoutes(value any) []endpoint.Route {
-	routes := []endpoint.Route{}
-	raw, _ := value.([]map[string]any)
-	if raw == nil {
-		items, _ := value.([]any)
-		for _, item := range items {
-			if route, ok := item.(map[string]any); ok {
-				raw = append(raw, route)
-			}
-		}
-	}
-	for _, route := range raw {
-		routes = append(routes, endpoint.Route{OperationID: textValue(route, "operationId"), Method: textValue(route, "method"), Path: textValue(route, "path")})
-	}
-	return routes
-}
-
-func probePublicService(ctx context.Context, baseURL, healthPath, authType, apiKeyHeader, secret string) error {
-	base, err := publicHTTPSURL(ctx, baseURL)
-	if err != nil {
-		return err
-	}
-	target := base.ResolveReference(&url.URL{Path: healthPath})
-	dialer := &net.Dialer{Timeout: 8 * time.Second}
-	transport := &http.Transport{TLSHandshakeTimeout: 8 * time.Second, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-		host, port, err := net.SplitHostPort(address)
-		if err != nil {
-			return nil, err
-		}
-		addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-		if err != nil || len(addresses) == 0 {
-			return nil, errors.New("API Bridge hostname could not be resolved")
-		}
-		for _, address := range addresses {
-			ip := address.IP
-			if !ip.IsGlobalUnicast() || ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-				return nil, errors.New("API Bridge DNS rebinding or non-public address rejected")
-			}
-		}
-		return dialer.DialContext(ctx, network, net.JoinHostPort(addresses[0].IP.String(), port))
-	}}
-	defer transport.CloseIdleConnections()
-	client := &http.Client{Transport: transport, Timeout: 12 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	request := func(method string) (*http.Response, error) {
-		req, err := http.NewRequestWithContext(ctx, method, target.String(), nil)
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Accept", "application/json, text/event-stream;q=0.9, */*;q=0.5")
-		applyAuth(req.Header, authType, apiKeyHeader, secret)
-		return client.Do(req)
-	}
-	response, err := request(http.MethodHead)
-	if err == nil && (response.StatusCode == http.StatusMethodNotAllowed || response.StatusCode == http.StatusNotImplemented) {
-		_ = response.Body.Close()
-		response, err = request(http.MethodGet)
-	}
-	if err != nil {
-		return fmt.Errorf("API Bridge health probe failed: %w", err)
-	}
-	defer response.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4<<10))
-	if response.StatusCode < 200 || response.StatusCode >= 400 {
-		return fmt.Errorf("API Bridge health probe returned HTTP %d", response.StatusCode)
-	}
-	if response.StatusCode >= 300 {
-		return errors.New("API Bridge redirects are not allowed")
-	}
-	return nil
-}
-
-func applyAuth(headers http.Header, authType, apiKeyHeader, secret string) {
-	switch authType {
-	case "bearer":
-		headers.Set("Authorization", "Bearer "+secret)
-	case "basic":
-		headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(secret)))
-	case "api_key":
-		headers.Set(firstNonEmpty(apiKeyHeader, "X-API-Key"), secret)
-	}
-}
-
-func serviceReviewReceipt(draft map[string]any, bridgeMode string) ([]map[string]any, error) {
-	var service any
-	if bridgeMode == "transparent" {
-		service = struct {
-			Title       string `json:"title"`
-			Description string `json:"description"`
-			Protocol    string `json:"protocol"`
-			BaseURL     string `json:"baseUrl"`
-			HealthPath  string `json:"healthPath"`
-		}{textValue(draft, "title"), textValue(draft, "description"), textValue(draft, "protocol"), textValue(draft, "baseUrl"), textValue(draft, "healthPath")}
-	} else {
-		service = struct {
-			Title       string `json:"title"`
-			Description string `json:"description"`
-			Protocol    string `json:"protocol"`
-			HealthPath  string `json:"healthPath"`
-		}{textValue(draft, "title"), textValue(draft, "description"), textValue(draft, "protocol"), textValue(draft, "healthPath")}
-	}
-	receipt := []map[string]any{{"id": "service", "fingerprint": reviewFingerprint(service)}}
-	routes, ok := draft["routes"].([]any)
-	if !ok || len(routes) == 0 {
-		return nil, errors.New("Cloud service draft returned no routes")
-	}
-	for _, item := range routes {
-		route, ok := item.(map[string]any)
-		if !ok {
-			return nil, errors.New("Cloud service draft returned an invalid route")
-		}
-		var fingerprint any
-		if bridgeMode == "transparent" {
-			fingerprint = struct {
-				OperationID                  string `json:"operationId"`
-				Method                       string `json:"method"`
-				Path                         string `json:"path"`
-				Title                        string `json:"title"`
-				Pricing                      any    `json:"pricing"`
-				MaxChargePerInvocationAtomic any    `json:"maxChargePerInvocationAtomic"`
-			}{textValue(route, "operationId"), textValue(route, "method"), textValue(route, "path"), textValue(route, "displayName"), route["pricing"], route["maxChargePerInvocationAtomic"]}
-		} else {
-			fingerprint = struct {
-				OperationID                  string `json:"operationId"`
-				Method                       string `json:"method"`
-				Path                         string `json:"path"`
-				DisplayName                  string `json:"displayName"`
-				Pricing                      any    `json:"pricing"`
-				MaxChargePerInvocationAtomic any    `json:"maxChargePerInvocationAtomic"`
-			}{textValue(route, "operationId"), textValue(route, "method"), textValue(route, "path"), textValue(route, "displayName"), route["pricing"], route["maxChargePerInvocationAtomic"]}
-		}
-		receipt = append(receipt, map[string]any{"id": "route:" + textValue(route, "routeId"), "fingerprint": reviewFingerprint(fingerprint)})
-	}
-	return receipt, nil
-}
-
-func reviewFingerprint(value any) string {
-	var buffer bytes.Buffer
-	encoder := json.NewEncoder(&buffer)
-	encoder.SetEscapeHTML(false)
-	_ = encoder.Encode(value)
-	return strings.TrimSuffix(buffer.String(), "\n")
 }
 
 func stableLocalID(prefix, seed string) string {

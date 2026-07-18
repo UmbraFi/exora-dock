@@ -245,7 +245,7 @@ func runMCPCommand(args []string) error {
 		start = []string{executable, cfgPath}
 	}
 	clientName := firstNonEmptyString(os.Getenv("EXORA_MCP_CLIENT_NAME"), "Local Agent")
-	return mcp.NewServer(mcp.Options{BaseURL: discovery.BaseURL(cfg.ListenAddr), StartCommand: start, AgentToken: store.AgentToken(), ProviderAgentToken: store.ProviderAgentToken(), ClientName: clientName}).Serve(context.Background(), os.Stdin, os.Stdout)
+	return mcp.NewServer(mcp.Options{BaseURL: discovery.BaseURL(cfg.ListenAddr), StartCommand: start, OwnerToken: store.OwnerToken(), ClientName: clientName}).Serve(context.Background(), os.Stdin, os.Stdout)
 }
 func runAuthCommand(args []string) error {
 	if len(args) == 0 || args[0] != "status" {
@@ -264,7 +264,7 @@ func runAuthCommand(args []string) error {
 		return err
 	}
 	tokens := store.Tokens()
-	return printJSON(map[string]any{"authTokenPath": store.Path(), "ownerTokenHint": tokenHint(tokens.OwnerToken), "agentTokenHint": tokenHint(tokens.AgentToken), "providerAgentTokenHint": tokenHint(tokens.ProviderAgentToken)})
+	return printJSON(map[string]any{"authTokenPath": store.Path(), "ownerTokenHint": tokenHint(tokens.OwnerToken), "agentSessions": "created in memory by each MCP initialize"})
 }
 func printJSON(value any) error {
 	encoder := json.NewEncoder(os.Stdout)

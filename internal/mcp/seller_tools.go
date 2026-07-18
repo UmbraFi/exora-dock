@@ -10,28 +10,27 @@ import (
 )
 
 var sellerDraftToolNames = map[string]bool{
-	"exora.get_seller_draft_capabilities":   true,
-	"exora.discover_sellable_resources":     true,
-	"exora.read_seller_material":            true,
-	"exora.create_vm_listing_draft":         true,
-	"exora.create_resource_listing_draft":   true,
-	"exora.create_endpoint_listing_draft":   true,
-	"exora.create_api_bridge_listing_draft": true,
-	"exora.get_seller_draft_run":            true,
-	"exora.resume_seller_draft_run":         true,
-	"exora.cancel_seller_draft_run":         true,
-	"exora.list_my_listing_drafts":          true,
+	"exora.get_seller_draft_capabilities": true,
+	"exora.discover_sellable_resources":   true,
+	"exora.read_seller_material":          true,
+	"exora.create_vm_listing_draft":       true,
+	"exora.create_resource_listing_draft": true,
+	"exora.get_seller_draft_run":          true,
+	"exora.resume_seller_draft_run":       true,
+	"exora.cancel_seller_draft_run":       true,
+	"exora.list_my_listing_drafts":        true,
 }
 
 func isSellerDraftTool(name string) bool { return sellerDraftToolNames[strings.TrimSpace(name)] }
 
 func (s *Server) sellerToolsEnabled(ctx context.Context) bool {
-	if strings.TrimSpace(s.opts.ProviderAgentToken) == "" {
+	token := s.currentSessionToken()
+	if strings.TrimSpace(token) == "" {
 		return false
 	}
 	checkCtx, cancel := context.WithTimeout(ctx, sellerCapabilityTimeout)
 	defer cancel()
-	payload, err := s.daemonJSONWithToken(checkCtx, http.MethodGet, "/v3/provider-agent/capabilities", nil, nil, s.opts.ProviderAgentToken)
+	payload, err := s.daemonJSONWithToken(checkCtx, http.MethodGet, "/v3/provider-agent/capabilities", nil, nil, token)
 	if err != nil {
 		return false
 	}
@@ -43,7 +42,8 @@ func (s *Server) sellerToolsEnabled(ctx context.Context) bool {
 const sellerCapabilityTimeout = time.Second
 
 func (s *Server) sellerProxy(ctx context.Context, method, path string, query url.Values, body any) (toolResult, error) {
-	payload, err := s.daemonJSONWithToken(ctx, method, path, query, body, s.opts.ProviderAgentToken)
+	token := s.currentSessionToken()
+	payload, err := s.daemonJSONWithToken(ctx, method, path, query, body, token)
 	if err != nil {
 		return errorResult(err.Error(), nil), nil
 	}
@@ -58,13 +58,11 @@ func (s *Server) callSellerDraftTool(ctx context.Context, name string, args map[
 		return s.sellerProxy(ctx, http.MethodPost, "/v3/provider-agent/candidates/discover", nil, args)
 	case "exora.read_seller_material":
 		return s.sellerProxy(ctx, http.MethodPost, "/v3/provider-agent/materials/read", nil, args)
-	case "exora.create_vm_listing_draft", "exora.create_resource_listing_draft", "exora.create_endpoint_listing_draft", "exora.create_api_bridge_listing_draft":
+	case "exora.create_vm_listing_draft", "exora.create_resource_listing_draft":
 		body := cloneArgs(args)
 		body["kind"] = map[string]string{
-			"exora.create_vm_listing_draft":         "vm",
-			"exora.create_resource_listing_draft":   "resources",
-			"exora.create_endpoint_listing_draft":   "endpoint",
-			"exora.create_api_bridge_listing_draft": "api_bridge",
+			"exora.create_vm_listing_draft":       "vm",
+			"exora.create_resource_listing_draft": "resources",
 		}[name]
 		// Connection provenance is assigned by the MCP server, never trusted from
 		// Agent-supplied tool arguments.
@@ -119,9 +117,7 @@ func sellerDraftToolDefinitions() []toolDefinition {
 		{Name: "exora.discover_sellable_resources", Title: "Discover Sellable Resources", Description: "Discover candidates only inside seller-authorized roots, registered services, and verified VM runtimes. Returns short-lived candidateIds, never arbitrary filesystem access.", InputSchema: strictObjectSchema(map[string]any{"kinds": arrayProp("Optional subset: vm, resources, endpoint, api_bridge."), "targetHints": arrayProp("Names or authorized relative paths mentioned by the seller."), "query": stringProp("Optional text filter."), "maxResults": integerProp("Bounded result count.")}, nil)},
 		{Name: "exora.read_seller_material", Title: "Read Seller Material", Description: "Read a bounded chunk of an authorized text-material candidate. This cannot read arbitrary paths.", InputSchema: strictObjectSchema(map[string]any{"candidateId": stringProp("Short-lived discovered candidate id."), "offset": integerProp("Byte offset."), "limit": integerProp("Chunk size up to 256 KiB.")}, []string{"candidateId"})},
 		{Name: "exora.create_vm_listing_draft", Title: "Create VM Listing Draft", Description: "Validate a verified WSL2/KVM environment, reserve capacity for 24 hours, and create a private compute Listing draft. Never publishes.", InputSchema: commonCreate("vm")},
-		{Name: "exora.create_resource_listing_draft", Title: "Create Resources Listing Draft", Description: "Revalidate authorized files, package ZIP, upload and verify SHA-256, then create a private download Listing draft. Never publishes.", InputSchema: commonCreate("resources")},
-		{Name: "exora.create_endpoint_listing_draft", Title: "Create Endpoint Listing Draft", Description: "Probe an authorized private/loopback service, bind a local credentialRef, persist tunnel config, and create a private Endpoint Listing draft. Never publishes.", InputSchema: commonCreate("endpoint")},
-		{Name: "exora.create_api_bridge_listing_draft", Title: "Create API Bridge Listing Draft", Description: "Probe an authorized public HTTPS service with DNS-rebinding and redirect protection, send credential directly from Dock to Cloud, and create a private API Listing draft. Never publishes.", InputSchema: commonCreate("api_bridge")},
+		{Name: "exora.create_resource_listing_draft", Title: "Create Resources Listing Draft", Description: "Revalidate and upload each authorized file as an independently described, priced, licensed, and purchasable ResourceItem in one private Resource sheet. Folders must be compressed by the seller first. Never publishes.", InputSchema: commonCreate("resources")},
 		{Name: "exora.get_seller_draft_run", Title: "Get Seller Draft Run", Description: "Read durable progress, stateVersion, missing fields, safe failure details, and private draft result.", InputSchema: strictObjectSchema(map[string]any{"runId": stringProp("SellerDraftRun id.")}, []string{"runId"})},
 		{Name: "exora.resume_seller_draft_run", Title: "Resume Seller Draft Run", Description: "Resume a needs_input or failed run with seller-provided values using optimistic concurrency and idempotency.", InputSchema: strictObjectSchema(map[string]any{"runId": stringProp("SellerDraftRun id."), "expectedStateVersion": integerProp("Exact current stateVersion."), "idempotencyKey": stringProp("Stable retry key."), "values": objectProp("Only the values explicitly supplied by the seller.")}, []string{"runId", "expectedStateVersion", "idempotencyKey", "values"})},
 		{Name: "exora.cancel_seller_draft_run", Title: "Cancel Seller Draft Run", Description: "Cooperatively cancel a private draft run and clean up in-flight upload state. This does not alter public Listings.", InputSchema: strictObjectSchema(map[string]any{"runId": stringProp("SellerDraftRun id."), "expectedStateVersion": integerProp("Exact current stateVersion."), "idempotencyKey": stringProp("Stable retry key.")}, []string{"runId", "expectedStateVersion", "idempotencyKey"})},

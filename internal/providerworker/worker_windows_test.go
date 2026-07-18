@@ -155,7 +155,7 @@ func TestWindowsLeaseUsesSingleManagedDistroAndResetReceipt(t *testing.T) {
 	input := map[string]any{
 		"leaseId":      "lease-1",
 		"leaseEpoch":   float64(1),
-		"sshPublicKey": "ssh-ed25519 AAAATEST desktop",
+		"securityMode": "isolated_control_p2p_v1",
 		"product": map[string]any{"manifest": map[string]any{
 			"runtimeBackend":     "wsl2",
 			"isolationClass":     "managed_wsl2_shared_host",
@@ -170,6 +170,19 @@ func TestWindowsLeaseUsesSingleManagedDistroAndResetReceipt(t *testing.T) {
 	}
 	if result["backend"] != "wsl2" || result["isolationClass"] != "managed_wsl2_shared_host" || result["guestVerified"] != true {
 		t.Fatalf("result=%v", result)
+	}
+	if result["guestProbePublicKey"] == "" {
+		t.Fatal("missing temporary Guest probe identity")
+	}
+	probeInput := map[string]any{"leaseId": "lease-1", "leaseEpoch": float64(1)}
+	if host, probeErr := server.leaseHostPerformanceProbe(context.Background(), probeInput); probeErr != nil || host["enforcementMode"] != "monitor_only_preview" {
+		t.Fatalf("host probe=%v err=%v", host, probeErr)
+	}
+	if guest, probeErr := server.leaseGuestPerformanceProbe(context.Background(), probeInput); probeErr != nil || guest["challengeExcludedFromLoad"] != true {
+		t.Fatalf("guest probe=%v err=%v", guest, probeErr)
+	}
+	if throttle, throttleErr := server.leaseLoadThrottlePreview(probeInput, true); throttleErr != nil || throttle["throttled"] != false || throttle["enforcementMode"] != "monitor_only_preview" {
+		t.Fatalf("Windows must remain monitoring-only: %v err=%v", throttle, throttleErr)
 	}
 	disclosure := result["resourceDisclosure"].(map[string]any)
 	if disclosure["singleLeasePerHost"] != true || disclosure["hardwarePassthroughExclusive"] != false {
@@ -190,7 +203,7 @@ func TestWindowsLeaseUsesSingleManagedDistroAndResetReceipt(t *testing.T) {
 		t.Fatalf("lease lock still exists: %v", err)
 	}
 	joined := strings.Join(runner.calls, "\n")
-	for _, expected := range []string{"--import Exora-Lease-lease-1", "portproxy add", "--unregister Exora-Lease-lease-1", "Remove-NetFirewallRule"} {
+	for _, expected := range []string{"--import Exora-Lease-lease-1", "Set-NetFirewallHyperVVMSetting", "--unregister Exora-Lease-lease-1"} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("missing %q in calls:\n%s", expected, joined)
 		}
@@ -211,7 +224,7 @@ func TestWindowsLeaseWithoutPublicHostUsesProviderHostDirectAccess(t *testing.T)
 	result, err := server.provisionLease(context.Background(), map[string]any{
 		"leaseId":      "lease-local",
 		"leaseEpoch":   float64(1),
-		"sshPublicKey": "ssh-ed25519 AAAATEST desktop",
+		"securityMode": "isolated_control_p2p_v1",
 		"product": map[string]any{"manifest": map[string]any{
 			"runtimeBackend":     "wsl2",
 			"isolationClass":     "managed_wsl2_shared_host",
@@ -223,11 +236,11 @@ func TestWindowsLeaseWithoutPublicHostUsesProviderHostDirectAccess(t *testing.T)
 		t.Fatal(err)
 	}
 	capability := result["capability"].(map[string]any)
-	if capability["host"] != "172.27.1.2" || capability["port"] != 22 || capability["accessMode"] != "provider_host_direct" {
+	if capability["protocol"] != "exora_control" || capability["networkAccess"] != "none" || capability["fileTransfer"] != "webrtc_p2p" {
 		t.Fatalf("capability=%v", capability)
 	}
 	joined := strings.Join(runner.calls, "\n")
-	if strings.Contains(joined, "portproxy add") || strings.Contains(joined, "New-NetFirewallRule") {
-		t.Fatalf("provider-host-only lease requested elevated networking:\n%s", joined)
+	if strings.Contains(joined, "portproxy add") || strings.Contains(joined, "New-NetFirewallRule") || strings.Contains(joined, "/usr/sbin/sshd") {
+		t.Fatalf("isolated lease exposed an SSH ingress:\n%s", joined)
 	}
 }

@@ -32,16 +32,18 @@ type RouteTestInput struct {
 }
 
 type RouteTestResult struct {
-	OK          bool      `json:"ok"`
-	Status      int       `json:"status,omitempty"`
-	LatencyMS   int64     `json:"latencyMs"`
-	ContentType string    `json:"contentType,omitempty"`
-	BytesRead   int64     `json:"bytesRead"`
-	Truncated   bool      `json:"truncated"`
-	Preview     string    `json:"preview,omitempty"`
-	SSEEvents   []string  `json:"sseEvents,omitempty"`
-	CheckedAt   time.Time `json:"checkedAt"`
-	Error       string    `json:"error,omitempty"`
+	OK                  bool      `json:"ok"`
+	Status              int       `json:"status,omitempty"`
+	LatencyMS           int64     `json:"latencyMs"`
+	FirstEventLatencyMS int64     `json:"firstEventLatencyMs,omitempty"`
+	StreamEndStatus     string    `json:"streamEndStatus,omitempty"`
+	ContentType         string    `json:"contentType,omitempty"`
+	BytesRead           int64     `json:"bytesRead"`
+	Truncated           bool      `json:"truncated"`
+	Preview             string    `json:"preview,omitempty"`
+	SSEEvents           []string  `json:"sseEvents,omitempty"`
+	CheckedAt           time.Time `json:"checkedAt"`
+	Error               string    `json:"error,omitempty"`
 }
 
 // TestRoute runs a bounded, transient request against one Agent-declared route.
@@ -53,6 +55,16 @@ func TestRoute(ctx context.Context, input RouteTestInput) RouteTestResult {
 		result.LatencyMS = time.Since(started).Milliseconds()
 		result.Error = err.Error()
 		return result
+	}
+	// Newly saved endpoints always carry the reviewed service manifest. Keep the
+	// route-only path for local smoke tests and pre-manifest endpoint records;
+	// Cloud publication still requires the full contract.
+	if len(input.ServiceManifest) > 0 {
+		_, operations, _, contractErr := ValidateServiceManifest(input.ServiceManifest)
+		if contractErr != nil {
+			return fail(contractErr)
+		}
+		input.Routes = operations
 	}
 
 	if len([]byte(input.Body)) > maxRouteTestBody {
@@ -94,10 +106,19 @@ func TestRoute(ctx context.Context, input RouteTestInput) RouteTestResult {
 	if contentType := strings.TrimSpace(input.ContentType); contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}
-	applyCredential(request.Header, input.AuthType, input.APIKeyHeader, input.Secret)
 	client, err := privateHTTPClient(requestCtx, base, timeout)
 	if err != nil {
 		return fail(err)
+	}
+	transport, authErr := applyRequestCredential(requestCtx, request, input.AuthType, input.APIKeyHeader, input.Secret)
+	if authErr != nil {
+		result.Error = authErr.Error()
+		return result
+	}
+	if transport != nil {
+		if secured, ok := client.Transport.(*http.Transport); ok {
+			secured.TLSClientConfig = transport.TLSClientConfig
+		}
 	}
 	response, err := client.Do(request)
 	if err != nil {
@@ -109,7 +130,7 @@ func TestRoute(ctx context.Context, input RouteTestInput) RouteTestResult {
 	result.OK = response.StatusCode >= 200 && response.StatusCode < 400
 
 	if strings.HasPrefix(strings.ToLower(result.ContentType), "text/event-stream") {
-		readSSEPreview(requestCtx, response.Body, &result)
+		readSSEPreview(requestCtx, response.Body, started, &result)
 	} else {
 		preview, readErr := io.ReadAll(io.LimitReader(response.Body, maxRouteTestPreview+1))
 		result.Truncated = len(preview) > maxRouteTestPreview
@@ -214,11 +235,23 @@ func privateHTTPClient(ctx context.Context, target *url.URL, timeout time.Durati
 	}, nil
 }
 
-func readSSEPreview(parent context.Context, body io.Reader, result *RouteTestResult) {
+func readSSEPreview(parent context.Context, body io.Reader, started time.Time, result *RouteTestResult) {
 	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 	defer cancel()
 	reader := bufio.NewReader(body)
 	var event bytes.Buffer
+	result.StreamEndStatus = "completed"
+	appendEvent := func(raw string) bool {
+		value := strings.ToValidUTF8(strings.TrimSpace(raw), "�")
+		if value == "" {
+			return false
+		}
+		if len(result.SSEEvents) == 0 {
+			result.FirstEventLatencyMS = time.Since(started).Milliseconds()
+		}
+		result.SSEEvents = append(result.SSEEvents, value)
+		return strings.Contains(value, "data: [DONE]")
+	}
 	for len(result.SSEEvents) < 10 && result.BytesRead < maxRouteTestPreview {
 		line, err := readLineWithContext(ctx, reader)
 		if len(line) > 0 {
@@ -230,24 +263,38 @@ func readSSEPreview(parent context.Context, body io.Reader, result *RouteTestRes
 			result.BytesRead += int64(len(line))
 			if strings.TrimSpace(string(line)) == "" {
 				if event.Len() > 0 {
-					result.SSEEvents = append(result.SSEEvents, strings.ToValidUTF8(strings.TrimSpace(event.String()), "�"))
+					done := appendEvent(event.String())
 					event.Reset()
+					if done {
+						result.StreamEndStatus = "done"
+						break
+					}
 				}
 			} else {
 				event.Write(line)
 			}
 		}
 		if err != nil {
-			if !errors.Is(err, io.EOF) && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+			if errors.Is(err, context.DeadlineExceeded) {
+				result.StreamEndStatus = "timeout"
+			} else if errors.Is(err, context.Canceled) {
+				result.StreamEndStatus = "canceled"
+			} else if !errors.Is(err, io.EOF) {
 				result.Error = err.Error()
+				result.StreamEndStatus = "error"
 			}
 			break
 		}
 	}
 	if event.Len() > 0 && len(result.SSEEvents) < 10 {
-		result.SSEEvents = append(result.SSEEvents, strings.ToValidUTF8(strings.TrimSpace(event.String()), "�"))
+		if appendEvent(event.String()) {
+			result.StreamEndStatus = "done"
+		}
 	}
 	result.Truncated = result.Truncated || len(result.SSEEvents) == 10 || result.BytesRead >= maxRouteTestPreview
+	if result.Truncated && result.StreamEndStatus != "done" {
+		result.StreamEndStatus = "preview_limit"
+	}
 	result.Preview = strings.Join(result.SSEEvents, "\n\n")
 }
 

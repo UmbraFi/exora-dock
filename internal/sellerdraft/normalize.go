@@ -4,8 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
-	"path"
+	"math"
 	"regexp"
 	"runtime"
 	"strings"
@@ -51,10 +50,14 @@ func normalizeRunInput(policy SellerAutomationPolicy, request CreateRequest, can
 	} else if err := validateNonNegativeNumbers(price, "commercial.price"); err != nil {
 		return nil, nil, err
 	} else {
-		if request.Kind == KindVM || request.Kind == KindResources {
+		if request.Kind == KindResources {
 			if _, ok := numberValue(price, "amount"); !ok {
 				missing = append(missing, "commercial.price.amount")
 			}
+			if textValue(price, "currency") == "" {
+				missing = append(missing, "commercial.price.currency")
+			}
+		} else if request.Kind == KindVM {
 			if textValue(price, "currency") == "" {
 				missing = append(missing, "commercial.price.currency")
 			}
@@ -72,9 +75,33 @@ func normalizeRunInput(policy SellerAutomationPolicy, request CreateRequest, can
 	if concurrency, ok := numberValue(limits, "concurrency"); ok && (concurrency < 1 || concurrency > 64) {
 		return nil, nil, errors.New("commercial.limits.concurrency must be between 1 and 64")
 	}
+	if request.Kind == KindVM && price != nil {
+		canonicalPrice, hasRate, err := normalizeVMPrice(price, commercial)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !hasRate {
+			missing = append(missing, "commercial.price.amount")
+		} else {
+			price = canonicalPrice
+			commercial["price"] = canonicalPrice
+		}
+		canonicalLimits, err := normalizeVMLimits(limits)
+		if err != nil {
+			return nil, nil, err
+		}
+		limits = canonicalLimits
+		commercial["limits"] = canonicalLimits
+		sustained := "allowed"
+		if allowed, explicit := commercial["allowSustainedCompute"].(bool); explicit && !allowed {
+			sustained = "burst_only"
+		}
+		commercial["workloadPolicy"] = map[string]any{"policyVersion": "compute_load_v1", "sustainedCompute": sustained, "cryptocurrencyMining": "prohibited"}
+		commercial["performancePolicy"] = map[string]any{"probeVersion": "dual_probe_v1", "minimumDeliveryBps": 8500}
+	}
 	normalized := map[string]any{
 		"title": title, "description": description, "commercial": commercial,
-		"price": price, "limits": limits, "specification": specification, "credentialRef": credentialRef,
+		"price": price, "limits": limits, "workloadPolicy": commercial["workloadPolicy"], "performancePolicy": commercial["performancePolicy"], "specification": specification, "credentialRef": credentialRef,
 	}
 	switch request.Kind {
 	case KindVM:
@@ -99,32 +126,134 @@ func normalizeRunInput(policy SellerAutomationPolicy, request CreateRequest, can
 		}
 		specification["delivery"] = "downloadable"
 	case KindEndpoint, KindAPIBridge:
-		service, err := authorizedService(policy, candidates[0])
-		if err != nil {
-			return nil, nil, err
-		}
-		normalized["service"] = map[string]any{"id": service.ID, "baseUrl": service.BaseURL, "mode": service.Mode}
-		routes, err := normalizeRoutes(specification["routes"])
-		if err != nil {
-			return nil, nil, err
-		}
-		if len(routes) == 0 {
-			missing = append(missing, "specification.routes")
-		} else {
-			specification["routes"] = routes
-		}
-		healthPath := firstNonEmpty(textValue(specification, "healthPath"), "/health")
-		if !safeRoutePath(healthPath) {
-			return nil, nil, errors.New("specification.healthPath must be an absolute normalized path")
-		}
-		specification["healthPath"] = healthPath
-		protocol := strings.ToLower(firstNonEmpty(textValue(specification, "protocol"), "generic_http"))
-		if !map[string]bool{"openapi": true, "openai": true, "generic_http": true, "sse": true}[protocol] {
-			return nil, nil, errors.New("specification.protocol is unsupported")
-		}
-		specification["protocol"] = protocol
+		return nil, nil, errors.New("Endpoint and API Bridge require an Agent-normalized ExoraServiceManifest v1 draft")
 	}
 	return normalized, uniqueStrings(missing), nil
+}
+
+func normalizeVMPrice(price, commercial map[string]any) (map[string]any, bool, error) {
+	currency := strings.ToUpper(textValue(price, "currency"))
+	if currency == "" {
+		currency = "USDC"
+	}
+	if currency != "USDC" {
+		return nil, false, errors.New("commercial.price.currency must be USDC for VM listings")
+	}
+	rateAtomic, hasAtomic := numberValue(price, "amountAtomicPerMinute")
+	if !hasAtomic {
+		amount, ok := numberValue(price, "amount")
+		if !ok {
+			amount, ok = numberValue(price, "amountPerMinute")
+		}
+		if !ok {
+			return nil, false, nil
+		}
+		rateAtomic = math.Round(amount * 1_000_000)
+	}
+	if rateAtomic < 1 || rateAtomic > math.MaxInt64 || rateAtomic != math.Trunc(rateAtomic) {
+		return nil, false, errors.New("commercial.price.amount must produce a positive atomic USDC minute rate")
+	}
+	baseAtomic, hasBaseAtomic := numberValue(price, "baseFeeAtomic")
+	if !hasBaseAtomic {
+		baseAmount, hasBase := numberValue(price, "baseFee")
+		if baseObject := mapValue(price, "baseFee"); baseObject != nil {
+			enabled, hasEnabled := baseObject["enabled"].(bool)
+			if hasEnabled && !enabled {
+				baseAmount, hasBase = 0, true
+			} else if amount, ok := numberValue(baseObject, "amount"); ok {
+				baseAmount, hasBase = amount, true
+			}
+		}
+		if enabled, explicit := commercial["baseFeeEnabled"].(bool); explicit && !enabled {
+			baseAmount, hasBase = 0, true
+		} else if !hasBase {
+			baseAmount, hasBase = numberValue(commercial, "baseFee")
+		}
+		if hasBase {
+			baseAtomic = math.Round(baseAmount * 1_000_000)
+		}
+	}
+	if baseAtomic < 0 || baseAtomic > math.MaxInt64 || baseAtomic != math.Trunc(baseAtomic) {
+		return nil, false, errors.New("commercial.price.baseFee must be a valid non-negative USDC amount")
+	}
+	out := map[string]any{
+		"model": "compute_time_v2", "currency": "USDC", "unit": "minute",
+		"amountAtomicPerMinute": int64(rateAtomic), "baseFeeAtomic": int64(baseAtomic),
+	}
+	discount := mapValue(price, "longDurationDiscount")
+	if discount == nil {
+		discount = mapValue(commercial, "longDurationDiscount")
+	}
+	discountExplicitlyDisabled := false
+	if enabled, explicit := commercial["longDiscountEnabled"].(bool); explicit && !enabled && discount == nil {
+		discountExplicitlyDisabled = true
+	}
+	if discount == nil {
+		discount = map[string]any{}
+	}
+	every, hasEvery := firstNumber(discount, "everyMinutes", "afterMinutes")
+	if !hasEvery {
+		every, hasEvery = firstNumber(commercial, "longDiscountAfterMinutes")
+	}
+	additionalBPS, hasAdditionalBPS := numberValue(discount, "additionalBpsOff")
+	if !hasAdditionalBPS {
+		percent, ok := firstNumber(discount, "additionalPercentOff", "percentEach")
+		if !ok {
+			percent, ok = firstNumber(commercial, "longDiscountPercent")
+		}
+		if ok {
+			additionalBPS, hasAdditionalBPS = math.Round(percent*100), true
+		}
+	}
+	minimumBPS, hasMinimumBPS := numberValue(discount, "minimumRateBps")
+	if !hasMinimumBPS {
+		percent, ok := firstNumber(discount, "minimumRatePercent", "minimumPricePercent")
+		if !ok {
+			percent, ok = firstNumber(commercial, "longDiscountMinimumPricePercent")
+		}
+		if ok {
+			minimumBPS, hasMinimumBPS = math.Round(percent*100), true
+		}
+	}
+	if !discountExplicitlyDisabled && (hasEvery || hasAdditionalBPS || hasMinimumBPS) {
+		if !hasEvery {
+			every = 60
+		}
+		if !hasMinimumBPS {
+			minimumBPS = 5000
+		}
+		if every < 1 || every > 10080 || every != math.Trunc(every) || additionalBPS < 1 || additionalBPS > 9000 || additionalBPS != math.Trunc(additionalBPS) || minimumBPS < 100 || minimumBPS > 10000 || minimumBPS != math.Trunc(minimumBPS) {
+			return nil, false, errors.New("commercial long-duration discount is invalid")
+		}
+		out["longDurationDiscount"] = map[string]any{
+			"everyMinutes": int64(every), "additionalBpsOff": int64(additionalBPS), "minimumRateBps": int64(minimumBPS),
+		}
+	}
+	return out, true, nil
+}
+
+func normalizeVMLimits(limits map[string]any) (map[string]any, error) {
+	minimum, ok := firstNumber(limits, "minMinutes", "minimumMinutes")
+	if !ok {
+		minimum = 10
+	}
+	maximum, ok := firstNumber(limits, "maxMinutes", "maximumMinutes")
+	if !ok {
+		maximum = 240
+	}
+	if minimum < 1 || maximum < minimum || maximum > 10080 || minimum != math.Trunc(minimum) || maximum != math.Trunc(maximum) {
+		return nil, errors.New("commercial.limits must use whole minutes with 1 <= minMinutes <= maxMinutes <= 10080")
+	}
+	return map[string]any{"minMinutes": int64(minimum), "maxMinutes": int64(maximum)}, nil
+}
+
+func firstNumber(value map[string]any, keys ...string) (float64, bool) {
+	for _, key := range keys {
+		if number, ok := numberValue(value, key); ok {
+			return number, true
+		}
+	}
+	return 0, false
 }
 
 func authorizedService(policy SellerAutomationPolicy, candidate Candidate) (AllowedService, error) {
@@ -134,103 +263,6 @@ func authorizedService(policy SellerAutomationPolicy, candidate Candidate) (Allo
 		}
 	}
 	return AllowedService{}, errors.New("candidate service is no longer authorized or changed")
-}
-
-func normalizeRoutes(value any) ([]map[string]any, error) {
-	raw, ok := value.([]any)
-	if !ok {
-		if typed, typedOK := value.([]map[string]any); typedOK {
-			raw = make([]any, len(typed))
-			for i := range typed {
-				raw[i] = typed[i]
-			}
-		}
-	}
-	if len(raw) == 0 {
-		return nil, nil
-	}
-	if len(raw) > 200 {
-		return nil, errors.New("one draft may expose at most 200 routes")
-	}
-	seen := map[string]bool{}
-	out := make([]map[string]any, 0, len(raw))
-	for index, item := range raw {
-		route, ok := item.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("route %d is not an object", index+1)
-		}
-		operationID := strings.TrimSpace(textValue(route, "operationId"))
-		method := strings.ToUpper(strings.TrimSpace(textValue(route, "method")))
-		routePath := strings.TrimSpace(textValue(route, "path"))
-		if !operationIDPattern.MatchString(operationID) || method == "" || !safeRoutePath(routePath) {
-			return nil, fmt.Errorf("route %d requires a valid operationId, method, and absolute path", index+1)
-		}
-		key := method + " " + routePath
-		if seen[key] {
-			return nil, errors.New("duplicate route " + key)
-		}
-		seen[key] = true
-		pricing, err := normalizeRoutePricing(route["pricing"])
-		if err != nil {
-			return nil, fmt.Errorf("route %s: %w", operationID, err)
-		}
-		if len(pricing) == 0 {
-			return nil, fmt.Errorf("route %s requires explicit pricing or a saved route pricing default", operationID)
-		}
-		normalized := cloneMap(route)
-		normalized["operationId"] = operationID
-		normalized["method"] = method
-		normalized["path"] = routePath
-		normalized["displayName"] = firstNonEmpty(textValue(route, "displayName"), textValue(route, "title"), operationID)
-		normalized["pricing"] = pricing
-		out = append(out, normalized)
-	}
-	return out, nil
-}
-
-func normalizeRoutePricing(value any) ([]map[string]any, error) {
-	raw, ok := value.([]any)
-	if !ok {
-		if typed, typedOK := value.([]map[string]any); typedOK {
-			raw = make([]any, len(typed))
-			for i := range typed {
-				raw[i] = typed[i]
-			}
-		}
-	}
-	out := make([]map[string]any, 0, len(raw))
-	for _, item := range raw {
-		component, ok := item.(map[string]any)
-		if !ok {
-			return nil, errors.New("pricing component must be an object")
-		}
-		rate, hasRate := numberValue(component, "rateAtomic")
-		per, hasPer := numberValue(component, "per")
-		if !hasRate || rate < 0 || !hasPer || per <= 0 {
-			return nil, errors.New("pricing rateAtomic must be non-negative and per must be positive")
-		}
-		dimension := firstNonEmpty(textValue(component, "dimension"), "request")
-		meterSource := firstNonEmpty(textValue(component, "meterSource"), "gateway")
-		chargeOn := firstNonEmpty(textValue(component, "chargeOn"), "started")
-		if !map[string]bool{"request": true, "successful_request": true, "input_tokens": true, "output_tokens": true, "input_bytes": true, "output_bytes": true, "execution_second": true, "image": true, "provider_reported": true}[dimension] {
-			return nil, errors.New("unsupported pricing dimension")
-		}
-		if !map[string]bool{"gateway": true, "protocol_adapter": true, "openai_usage": true, "provider_response": true}[meterSource] || !map[string]bool{"started": true, "succeeded": true, "completed": true}[chargeOn] {
-			return nil, errors.New("unsupported pricing meterSource or chargeOn")
-		}
-		normalized := cloneMap(component)
-		normalized["dimension"], normalized["meterSource"], normalized["chargeOn"] = dimension, meterSource, chargeOn
-		out = append(out, normalized)
-	}
-	return out, nil
-}
-
-func safeRoutePath(value string) bool {
-	if !strings.HasPrefix(value, "/") || strings.ContainsAny(value, "?#\\") {
-		return false
-	}
-	decoded, err := url.PathUnescape(value)
-	return err == nil && strings.HasPrefix(decoded, "/") && path.Clean(decoded) == decoded && !strings.Contains(decoded, "\\")
 }
 
 func validateNonNegativeNumbers(value any, field string) error {

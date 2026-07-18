@@ -29,6 +29,9 @@ export function invoke<T = unknown>(command: string, payload?: Record<string, un
       const running = command !== 'stop_dock'
       return Promise.resolve({ docker: 'native', container: running ? 'running' : 'stopped', daemon: running ? 'healthy' : 'offline', image: 'available', containerName: 'exora-dockd', imageTag: 'preview', baseUrl: 'http://127.0.0.1:8080', dataDir: '', configPath: '', discoveryPath: '', mcpCommand: '', agentPrompt: '', opencodeConfig: '', message: running ? 'Dock is ready for local Agent connections.' : 'Dock is stopped.' } as T)
     }
+    if (developmentPreview && command === 'mcp_connectivity_test') {
+      return Promise.resolve({ ok: true, protocolVersion: '2025-06-18', serverName: 'exora-dock', toolCount: 18, categories: ['vm', 'resources', 'endpoint', 'api_bridge'].map((applicationSource) => ({ applicationSource, ok: true, itemCount: 0 })) } as T)
+    }
     if (developmentPreview && ['copy_mcp_command', 'copy_opencode_config'].includes(command)) {
       return Promise.resolve((command === 'copy_opencode_config' ? '{"mcp":{"exora-dock":{"command":"exora-dockd"}}}' : 'exora-dockd --config ./config.yaml') as T)
     }

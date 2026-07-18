@@ -3,7 +3,10 @@ package providerworker
 import (
 	"bufio"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -67,7 +70,44 @@ var AllowedCommands = map[string]bool{
 	"probe_runtime": true, "list_environment_images": true, "import_environment_image": true,
 	"validate_environment_image": true, "delete_environment_image": true,
 	"lease_recheck": true, "provision_lease": true, "renew_lease_epoch": true, "reset_lease": true,
-	"lease_ssh_target": true,
+	"lease_terminal_exec": true, "lease_workspace_stat": true, "lease_workspace_partial_stat": true, "lease_workspace_read": true, "lease_workspace_write": true, "lease_transfer_review": true,
+	"lease_host_performance_probe": true, "lease_guest_performance_probe": true, "lease_apply_load_throttle": true, "lease_clear_load_throttle": true,
+}
+
+func ensureLeaseProbeIdentity(dataDir, leaseID string) (string, ed25519.PrivateKey, error) {
+	if _, err := workerLeaseEpochPath(dataDir, leaseID); err != nil {
+		return "", nil, err
+	}
+	directory := filepath.Join(dataDir, "lease-probe-identities")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		return "", nil, err
+	}
+	path := filepath.Join(directory, leaseID+".ed25519")
+	if raw, err := os.ReadFile(path); err == nil {
+		decoded, decodeErr := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
+		if decodeErr == nil && len(decoded) == ed25519.PrivateKeySize {
+			privateKey := ed25519.PrivateKey(decoded)
+			return base64.StdEncoding.EncodeToString(privateKey.Public().(ed25519.PublicKey)), privateKey, nil
+		}
+		return "", nil, fmt.Errorf("invalid Lease probe identity")
+	}
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return "", nil, err
+	}
+	if err := os.WriteFile(path, []byte(base64.StdEncoding.EncodeToString(privateKey)), 0600); err != nil {
+		return "", nil, err
+	}
+	return base64.StdEncoding.EncodeToString(publicKey), privateKey, nil
+}
+
+func signLeaseProbeResult(dataDir, leaseID string, result map[string]any) (string, string, error) {
+	publicKey, privateKey, err := ensureLeaseProbeIdentity(dataDir, leaseID)
+	if err != nil {
+		return "", "", err
+	}
+	raw, _ := json.Marshal(result)
+	return publicKey, base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, raw)), nil
 }
 
 type cachedWorkerCommand struct {

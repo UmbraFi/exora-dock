@@ -12,8 +12,9 @@
     <title>Button visual fixture</title>
     <style>
       body { min-width: 0; min-height: 0; padding: 24px; }
-      .fixture { width: 620px; }
+      .fixture { display: block; width: min(920px, 100%); }
       .fixture .v3-api-price-component { margin-top: 16px; grid-template-columns: minmax(150px, 1fr) auto; }
+      .fixture-listings { margin-top: 28px; }
     </style>
   </head>
   <body>
@@ -27,6 +28,31 @@
         <label>Meter<select><option>request</option></select></label>
         <button class="danger ghost" type="button" data-test-remove="price">Remove</button>
       </div>
+      <section class="fixture-listings v3-listing-applications">
+        <article class="v3-listing-application source-vm expanded">
+          <button class="v3-listing-summary" type="button">
+            <span class="v3-listing-source-icon">VM</span>
+            <span class="v3-listing-primary"><strong>E2E Windows WSL2 VM</strong><small><em class="v3-source-badge">VM</em><span>AMD Ryzen 5 7500F · 6 cores · 32 GiB</span></small></span>
+            <span class="v3-listing-summary-metrics"><span><small>Price</small><strong>$0.01 / minute</strong></span><span><small>Readiness</small><strong>2/2 checks</strong></span></span>
+            <span class="v3-listing-state-slot" aria-hidden="true"></span>
+            <span class="v3-listing-chevron">›</span>
+          </button>
+          <button type="button" class="v3-listing-state-pill v3-listing-lifecycle-switch tone-published is-listed" role="switch" aria-checked="true"><i></i>Live</button>
+          <div class="v3-listing-application-body">
+            <div class="v3-listing-actions"><span><strong>Owner controls</strong><small>Ready for purchase via Exora Terminal and WebRTC transfer.</small></span><button class="ghost" type="button">Edit terms</button><button class="danger ghost" type="button">Delete listing</button></div>
+          </div>
+        </article>
+        <article class="v3-listing-application source-vm">
+          <button class="v3-listing-summary" type="button">
+            <span class="v3-listing-source-icon">VM</span>
+            <span class="v3-listing-primary"><strong>Performance review required</strong><small><em class="v3-source-badge">VM</em><span>Current offer cannot be published</span></small></span>
+            <span class="v3-listing-summary-metrics"><span><small>Price</small><strong>$0.02 / minute</strong></span><span><small>Readiness</small><strong>1/2 checks</strong></span></span>
+            <span class="v3-listing-state-slot" aria-hidden="true"></span>
+            <span class="v3-listing-chevron">›</span>
+          </button>
+          <button type="button" class="v3-listing-state-pill v3-listing-lifecycle-switch tone-attention" role="switch" aria-checked="false" disabled><i></i>Performance degraded</button>
+        </article>
+      </section>
     </main>
   </body>
 </html>

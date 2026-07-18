@@ -1,11 +1,39 @@
-# api.exoradock.com deployment
+# Legacy standalone Dock deployment
 
-This deployment runs the Dock API on a loopback-only container port and exposes it through Nginx HTTPS. Runtime credentials and `data/` are server-local and must never be committed.
+> This directory is retained as an operator reference for running a Dock daemon
+> in a container. It is not the Exora V3.2 production topology and must not be
+> exposed as the public Exora Cloud API.
 
-1. Copy `config.example.yaml` to `config.yaml` and create an empty `data/` directory.
-2. Run `docker compose up -d --build` from this directory.
-3. Install `nginx.conf` as the `api.exoradock.com` virtual host and run Certbot with HTTPS redirect enabled.
-4. Read the generated `data/auth.json` only through an administrator channel. All `/v1` owner mutations require its owner token.
-5. Back up `data/`; Buyer/Seller flows, event logs, payment-PIN state, and delivered artifacts persist there.
+The current formal runtime separates responsibilities:
 
-Real remote matching uses `POST /v1/buyer-flows/{id}/matching/start?simulation=false`, followed by seller submissions to `POST /v1/buyer-flows/{id}/seller-quotes`. Payment confirmation remains simulated in the current deployment; planning, material review, quote exchange, questions, execution delivery, revisions, acceptance, disputes, and ratings are persisted by the remote Dock.
+- Exora Cloud owns identity, devices, the V3 catalog, purchases, Leases,
+  DownloadGrants, API Orders, billing, custody, settlement, and API Bridge
+  execution.
+- Exora Dock is account-linked software that owns local Agent authorization, VM
+  Worker control, Endpoint credentials and outbound tunnels, WebRTC VM file
+  transfer, and private Seller Draft preparation.
+- A provider Dock initiates outbound connections to Cloud. Cloud does not need
+  an inbound management port on the provider machine.
+
+The Compose and Nginx files in this directory predate that separation. In
+particular, the old `/v1/buyer-flows`, seller-quote, simulated-payment, chat,
+planning, revision, artifact-delivery, and rating workflows are retired and have
+no compatibility routes.
+
+For current local development, run the daemon from the repository root:
+
+```powershell
+go run ./cmd/exora-dock .\config.example.yaml
+```
+
+Run the MCP server separately when connecting a local Agent:
+
+```powershell
+go run ./cmd/exora-dock mcp .\config.example.yaml
+```
+
+Production operators should deploy Exora Cloud using the service, Nginx,
+backup, Vault/KMS, custody, and migration material under
+`../../../exora-cloud/deploy/production`, then link provider Docks through the current
+device-registration flow. Never publish a Dock owner token, local Agent session
+key, account API key, Endpoint credential, or `data/auth.json` through Nginx.
