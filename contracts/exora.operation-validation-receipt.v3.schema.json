@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://exora.dev/contracts/exora.operation-validation-receipt.v3.schema.json",
+  "title": "Exora Operation Validation Receipt v3",
+  "type": "object",
+  "required": ["schemaVersion", "receiptId", "apiId", "operationId", "operationSha256", "openapiSha256", "planSha256", "passed", "checks", "testedAt"],
+  "properties": {
+    "schemaVersion": { "const": "exora.operation-validation-receipt.v3" },
+    "receiptId": { "type": "string" },
+    "apiId": { "type": "string" },
+    "operationId": { "type": "string" },
+    "operationSha256": { "type": "string" },
+    "openapiSha256": { "type": "string" },
+    "planSha256": { "type": "string" },
+    "passed": { "type": "boolean" },
+    "checks": { "type": "array", "items": { "type": "object" } },
+    "evidence": { "type": "object" },
+    "verifiedMetering": { "type": "array" },
+    "sampleUsage": { "type": "object" },
+    "testedAt": { "type": "string", "format": "date-time" }
+  }
+}

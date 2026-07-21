@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://exora.dev/contracts/exora.operation.v3.schema.json",
+  "title": "Exora Operation v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "operationId", "title", "description", "usage", "api", "behavior", "interaction", "limits", "metering", "qualification"],
+  "properties": {
+    "schemaVersion": { "const": "exora.operation.v3" },
+    "operationId": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,127}$" },
+    "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "description": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "enabled": { "type": "boolean", "default": true },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["useCases", "instructions"],
+      "properties": {
+        "useCases": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "instructions": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "api": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "path", "openapiOperationRef", "errors"],
+      "properties": {
+        "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+        "path": { "type": "string", "pattern": "^/" },
+        "openapiOperationRef": { "type": "string", "pattern": "^#/paths/" },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "httpStatus", "description", "retryable"],
+            "properties": {
+              "code": { "type": "string", "minLength": 1 },
+              "httpStatus": { "type": "integer", "minimum": 400, "maximum": 599 },
+              "description": { "type": "string", "minLength": 1 },
+              "retryable": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "behavior": {
+      "type": "object",
+      "required": ["sideEffect", "idempotency"],
+      "properties": {
+        "sideEffect": {
+          "type": "object",
+          "required": ["present", "description", "reversible", "testMode"],
+          "properties": {
+            "present": { "type": "boolean" },
+            "description": { "type": "string" },
+            "reversible": { "type": "boolean" },
+            "testMode": { "enum": ["none", "dry_run", "sandbox", "test_account", "rollback"] }
+          }
+        },
+        "idempotency": {
+          "type": "object",
+          "required": ["supported", "retentionSeconds"],
+          "properties": {
+            "supported": { "type": "boolean" },
+            "retentionSeconds": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "interaction": {
+      "type": "object",
+      "required": ["mode"],
+      "properties": {
+        "mode": { "enum": ["request_response", "server_stream", "async_job"] },
+        "eventSchema": { "type": "object" },
+        "completionEvent": { "type": "string" },
+        "errorEvent": { "type": "string" },
+        "sequencePointer": { "type": "string" },
+        "jobIdPointer": { "type": "string" },
+        "statusPointer": { "type": "string" },
+        "pollPath": { "type": "string" },
+        "cancelPath": { "type": "string" },
+        "terminalStates": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+        "maximumWaitSeconds": { "type": "integer", "minimum": 1, "maximum": 86400 }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "properties": {
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "artifactField", "mimeTypes", "maximumBytes", "sha256Field"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "artifactField": { "type": "string", "minLength": 1 },
+              "mimeTypes": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+              "maximumBytes": { "type": "integer", "minimum": 1, "maximum": 1073741824 },
+              "sha256Field": { "type": "string", "minLength": 1 },
+              "expiresAtField": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "required": ["timeoutSeconds", "maximumRequestBytes", "maximumResponseBytes", "maximumConcurrency"],
+      "properties": {
+        "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 86400 },
+        "maximumRequestBytes": { "type": "integer", "minimum": 1 },
+        "maximumResponseBytes": { "type": "integer", "minimum": 1 },
+        "maximumConcurrency": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "metering": {
+      "type": "object",
+      "required": ["capabilities"],
+      "properties": {
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["dimension", "unit", "description", "source", "maximumPerInvocation"],
+            "properties": {
+              "dimension": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+              "unit": { "type": "string", "minLength": 1 },
+              "description": { "type": "string", "minLength": 1 },
+              "source": { "enum": ["cloud", "provider_attested"] },
+              "maximumPerInvocation": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+              "evidencePointer": { "type": "string", "minLength": 1 }
+            },
+            "allOf": [{ "if": { "properties": { "source": { "const": "provider_attested" } }, "required": ["source"] }, "then": { "required": ["evidencePointer"] } }]
+          }
+        }
+      }
+    },
+    "qualification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fixtures"],
+      "properties": {
+        "fixtures": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "kind", "request", "expectedProtocol", "safeToRepeat"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,127}$" },
+              "kind": { "enum": ["success", "business_error", "stream", "async_complete", "async_cancel", "artifact"] },
+              "request": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["body"],
+                "properties": {
+                  "body": {},
+                  "query": { "type": "object" },
+                  "headers": { "type": "object", "additionalProperties": { "type": "string" } }
+                }
+              },
+              "expectedProtocol": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["status", "mediaType", "openapiResponseRef"],
+                "properties": {
+                  "status": { "type": "integer", "minimum": 100, "maximum": 599 },
+                  "mediaType": { "type": "string", "minLength": 1 },
+                  "openapiResponseRef": { "type": "string", "pattern": "^#/paths/" }
+                }
+              },
+              "safeToRepeat": { "const": true },
+              "errorCode": { "type": "string", "minLength": 1 },
+              "description": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "dataPolicy": { "type": "object" },
+    "authorization": { "type": "object" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "interaction": { "properties": { "mode": { "const": "server_stream" } }, "required": ["mode"] } } },
+      "then": { "properties": { "interaction": { "required": ["eventSchema", "completionEvent", "errorEvent", "sequencePointer", "maximumWaitSeconds"] } } }
+    },
+    {
+      "if": { "properties": { "interaction": { "properties": { "mode": { "const": "async_job" } }, "required": ["mode"] } } },
+      "then": { "properties": { "interaction": { "required": ["jobIdPointer", "statusPointer", "pollPath", "terminalStates", "maximumWaitSeconds"] } } }
+    }
+  ]
+}

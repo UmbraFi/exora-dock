@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://exora.dev/contracts/exora.operation-billing-receipt.v4.schema.json",
+  "title": "Exora Operation Billing Receipt v4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "receiptId", "apiId", "operationId", "operationSha256", "validationReceiptSha256", "pricingSha256", "formulaAstSha256", "planSha256", "passed", "sandbox", "scenarios", "signature", "testedAt"],
+  "properties": {
+    "schemaVersion": { "const": "exora.operation-billing-receipt.v4" },
+    "receiptId": { "type": "string" },
+    "apiId": { "type": "string" },
+    "operationId": { "type": "string" },
+    "operationSha256": { "type": "string" },
+    "validationReceiptSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "pricingSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "formulaAstSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "planSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "passed": { "type": "boolean" },
+    "sandbox": { "const": true },
+    "scenarios": { "type": "array", "items": { "$ref": "exora.operation-settlement.v4.schema.json" } },
+    "signature": { "type": "object", "required": ["algorithm", "keyId", "publicKey", "value"], "properties": { "algorithm": { "const": "Ed25519" }, "keyId": { "type": "string" }, "publicKey": { "type": "string" }, "value": { "type": "string" } } },
+    "testedAt": { "type": "string", "format": "date-time" }
+  }
+}

@@ -179,7 +179,16 @@ textarea:focus-visible {
 }
 
 textarea {
-  resize: none;
+  resize: none !important;
+}
+
+textarea::-webkit-resizer,
+textarea::-webkit-scrollbar-button {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
 }
 
 :where(.scroll-area, .app-shell, .ledger-list, .action-view, .settings-view, textarea) {
@@ -1422,7 +1431,7 @@ h3 {
 }
 
 
-.app-shell.resource-console-mode .main-workspace {
+.app-shell.market-console-mode .main-workspace {
   padding-top: 10px;
 }
 
@@ -1734,7 +1743,7 @@ button.order-search-scrim:focus-visible {
 
 .order-search-head-copy .eyebrow {
   color: var(--color-primary);
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: .14em;
   margin: 0;
@@ -1743,7 +1752,7 @@ button.order-search-scrim:focus-visible {
 .order-search-head-copy > div > span {
   color: var(--color-text-tertiary);
   display: block;
-  font-size: 9px;
+  font-size: 10px;
   margin-top: 3px;
 }
 
@@ -1839,7 +1848,7 @@ button.order-search-scrim:focus-visible {
 
 .order-search-result-drawer > header span {
   color: var(--color-text-secondary);
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: .08em;
   text-transform: uppercase;
@@ -1851,7 +1860,7 @@ button.order-search-scrim:focus-visible {
   border-radius: 999px;
   color: var(--color-primary);
   background: var(--color-surface);
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 750;
 }
 
@@ -1891,7 +1900,7 @@ button.order-search-scrim:focus-visible {
   border-radius: 9px;
   color: var(--color-primary);
   display: flex;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 850;
   height: 38px;
   justify-content: center;
@@ -1915,7 +1924,9 @@ button.order-search-scrim:focus-visible {
 }
 
 .order-search-result-copy strong { font-size: 12px; }
-.order-search-result-copy small { color: var(--color-text-tertiary); font-size: 9px; }
+.order-search-result-copy small { display: flex; gap: 5px; align-items: center; min-width: 0; color: var(--color-text-tertiary); font-size: 10px; }
+.order-search-result-copy small code { flex: 0 0 auto; color: var(--color-primary); font: 8px/1.3 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.order-search-result-copy small span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .order-search-result-amount { color: var(--color-text-secondary); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .order-search-result-arrow { color: var(--color-text-tertiary); display: flex; }
 
@@ -1938,7 +1949,7 @@ button.order-search-scrim:focus-visible {
   border-top: 1px solid var(--color-border);
   color: var(--color-text-tertiary);
   display: flex;
-  font-size: 9px;
+  font-size: 10px;
   justify-content: space-between;
   min-height: 42px;
   padding: 7px 16px;
@@ -4073,67 +4084,4 @@ label span {
 
 
 }
-.seller-automation-form {
-  display: grid;
-  gap: 14px;
-  padding: 18px;
-}
-
-.seller-automation-form fieldset {
-  display: grid;
-  gap: 10px;
-  min-width: 0;
-  margin: 0;
-  padding: 14px;
-  border: 1px solid var(--line, rgba(127, 127, 127, .22));
-  border-radius: 12px;
-}
-
-.seller-automation-form legend { padding: 0 6px; font-weight: 700; }
-.seller-automation-form textarea,
-.seller-automation-form input[type="text"],
-.seller-automation-root input {
-  width: 100%;
-  box-sizing: border-box;
-  border: 1px solid var(--line, rgba(127, 127, 127, .25));
-  border-radius: 9px;
-  background: var(--input-bg, rgba(127, 127, 127, .06));
-  color: inherit;
-  padding: 9px 11px;
-  font: inherit;
-}
-
-.seller-automation-form textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; }
-.seller-automation-kinds,
-.seller-automation-limits,
-.seller-automation-attestations { display: flex; flex-wrap: wrap; gap: 10px 18px; }
-.seller-automation-attestations { flex-direction: column; }
-.seller-automation-kinds label,
-.seller-automation-attestations label,
-.seller-automation-actions label { display: inline-flex; align-items: center; gap: 7px; }
-#app[data-vm-provider='false'] .seller-automation-attestations label:has(> [data-seller-auto-install]) { display: none; }
-.seller-automation-limits label { display: grid; gap: 5px; font-size: 12px; }
-.seller-automation-limits input { width: 90px; }
-.seller-automation-roots,
-.seller-automation-credentials,
-.seller-automation-runs { display: grid; gap: 8px; }
-.seller-automation-root { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
-.seller-automation-chip,
-.seller-automation-run { display: grid; grid-template-columns: minmax(100px, auto) 1fr auto; gap: 8px; align-items: center; padding: 8px 10px; border-radius: 9px; background: rgba(127, 127, 127, .07); }
-.seller-automation-chip small,
-.seller-automation-run small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.seller-automation-chip button { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 18px; }
-.seller-automation-actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .v3-source-badge.agent-created { background: rgba(94, 234, 212, .12); color: #0f766e; border-color: rgba(20, 184, 166, .28); }
-.v3-agent-draft-runs { margin-bottom: 14px; border: 1px solid rgba(123, 97, 255, .22); border-radius: 14px; background: rgba(123, 97, 255, .055); overflow: hidden; }
-.v3-agent-draft-runs > header { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid rgba(123, 97, 255, .16); }
-.v3-agent-draft-runs > header > span { display: grid; place-items: center; width: 30px; height: 30px; color: #8067ff; }
-.v3-agent-draft-runs > header div { display: grid; gap: 2px; }
-.v3-agent-draft-runs > header small { color: var(--muted); }
-.v3-agent-draft-runs article { display: grid; grid-template-columns: 90px minmax(0, 1fr) 44px; gap: 12px; align-items: center; padding: 10px 14px; }
-.v3-agent-draft-runs article + article { border-top: 1px solid rgba(123, 97, 255, .12); }
-.v3-agent-draft-runs article > span { text-transform: uppercase; font-size: 11px; color: #8067ff; font-weight: 700; }
-.v3-agent-draft-runs article > div { display: grid; grid-template-columns: max-content minmax(90px, 1fr); align-items: center; gap: 6px 10px; }
-.v3-agent-draft-runs article progress { width: 100%; height: 5px; accent-color: #8067ff; }
-.v3-agent-draft-runs article small { grid-column: 1 / -1; color: var(--muted); overflow-wrap: anywhere; }
-.v3-agent-draft-runs article > em { font-style: normal; text-align: right; color: var(--muted); }

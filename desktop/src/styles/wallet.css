@@ -241,7 +241,7 @@
 
 .wallet-panel-header small {
   color: var(--color-text-tertiary);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .wallet-panel-icon {
@@ -262,8 +262,8 @@
 }
 
 .wallet-panel-icon-send {
-  background: var(--color-success-soft);
-  color: var(--color-success);
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
 }
 
 .wallet-status-pill {
@@ -272,7 +272,7 @@
   border-radius: 999px;
   color: var(--color-text-tertiary);
   flex: 0 0 auto;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 720;
   padding: 4px 7px;
   text-transform: capitalize;
@@ -316,13 +316,13 @@
 
 .wallet-receive-meta span {
   color: var(--color-primary);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 760;
 }
 
 .wallet-receive-meta p {
   color: var(--color-text-tertiary);
-  font-size: 8px;
+  font-size: 10px;
   line-height: 1.45;
   margin: 0;
 }
@@ -346,13 +346,13 @@
 
 .wallet-address-row span {
   color: var(--color-text-tertiary);
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .wallet-address-row code {
   color: var(--color-text-primary);
   font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
-  font-size: 9px;
+  font-size: 10px;
   overflow: hidden;
   text-overflow: ellipsis;
   user-select: text;
@@ -400,7 +400,7 @@
 
 .wallet-field > span {
   color: var(--color-text-secondary);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
 }
 
@@ -445,7 +445,7 @@
   background: transparent;
   border: 0;
   color: var(--color-primary);
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 760;
   height: 28px;
   min-height: 28px;
@@ -469,7 +469,7 @@
 
 .wallet-withdraw-footer small {
   color: var(--color-text-tertiary);
-  font-size: 8px;
+  font-size: 10px;
   line-height: 1.4;
   max-width: 190px;
 }
@@ -480,7 +480,7 @@
   border: 1px solid var(--color-primary);
   border-radius: 9px;
   color: var(--color-on-primary);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 680;
   height: 34px;
   min-height: 34px;
@@ -508,11 +508,11 @@
 }
 
 .wallet-withdraw-status strong {
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .wallet-withdraw-status span {
-  font-size: 8px;
+  font-size: 10px;
   line-height: 1.4;
 }
 
@@ -675,7 +675,7 @@ button.wallet-modal-scrim:focus-visible {
 
 .wallet-modal-head .eyebrow {
   color: var(--color-primary);
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: .14em;
   margin: 0;
@@ -692,7 +692,7 @@ button.wallet-modal-scrim:focus-visible {
 .wallet-modal-head-copy > div > span {
   color: var(--color-text-tertiary);
   display: block;
-  font-size: 9px;
+  font-size: 10px;
   margin-top: 3px;
 }
 
@@ -733,7 +733,7 @@ button.wallet-modal-scrim:focus-visible {
   border-top: 1px solid var(--color-border);
   color: var(--color-text-tertiary);
   display: flex;
-  font-size: 9px;
+  font-size: 10px;
   justify-content: space-between;
   min-height: 40px;
   padding: 7px 16px;
@@ -792,7 +792,7 @@ button.wallet-modal-scrim:focus-visible {
   align-items: center;
   color: var(--color-text-secondary);
   display: inline-flex;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 720;
   gap: 7px;
   letter-spacing: .01em;
@@ -874,7 +874,7 @@ button.wallet-modal-scrim:focus-visible {
 .wallet-modal .wallet-balance-main small,
 .wallet-modal .wallet-balance-footer div > span {
   color: var(--color-text-tertiary);
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .wallet-modal .wallet-balance-main strong {
@@ -995,7 +995,7 @@ button.wallet-modal-scrim:focus-visible {
 
 .wallet-modal .wallet-panel-tab small {
   color: var(--color-text-tertiary);
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .wallet-modal .wallet-panel-tab .wallet-panel-icon {
@@ -1025,7 +1025,7 @@ button.wallet-modal-scrim:focus-visible {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   color: var(--color-text-secondary);
-  font-size: 8px;
+  font-size: 10px;
   padding: 5px 8px;
 }
 
@@ -1074,7 +1074,7 @@ button.wallet-modal-scrim:focus-visible {
 }
 
 .wallet-modal .wallet-receive-details .wallet-receive-meta p {
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .wallet-modal .wallet-withdraw-panel,
@@ -1094,7 +1094,7 @@ button.wallet-modal-scrim:focus-visible {
 }
 
 .wallet-modal .wallet-panel-header small {
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .wallet-modal .wallet-panel-icon {
@@ -1104,7 +1104,7 @@ button.wallet-modal-scrim:focus-visible {
 }
 
 .wallet-modal .wallet-status-pill {
-  font-size: 7px;
+  font-size: 10px;
 }
 
 .wallet-modal .wallet-receive-body {
@@ -1185,7 +1185,7 @@ button.wallet-modal-scrim:focus-visible {
 
 .wallet-modal .wallet-code-field > small {
   color: var(--color-text-tertiary);
-  font-size: 7px;
+  font-size: 10px;
   line-height: 1.35;
   min-height: 10px;
 }
@@ -1269,7 +1269,7 @@ button.wallet-modal-scrim:focus-visible {
   background: transparent;
   border: 0;
   color: var(--color-primary);
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 760;
   height: 28px;
   min-height: 28px;
@@ -1287,7 +1287,7 @@ button.wallet-modal-scrim:focus-visible {
 .wallet-modal .wallet-withdraw-footer button,
 .wallet-modal .wallet-withdraw-footer button:hover {
   border-radius: 8px;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 680;
   height: 34px;
   min-height: 34px;
@@ -1306,7 +1306,7 @@ button.wallet-modal-scrim:focus-visible {
 }
 
 .wallet-modal .wallet-withdraw-footer small {
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.5;
 }
 
@@ -1447,8 +1447,8 @@ button.wallet-modal-scrim:focus-visible {
 }
 
 .wallet-panel-icon-history {
-  background: #eef3ff;
-  color: #4267c8;
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
 }
 
 .wallet-panel-heading {
@@ -1467,7 +1467,7 @@ button.wallet-modal-scrim:focus-visible {
 
 .wallet-panel-heading > div:first-child > span {
   color: var(--color-primary);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: .12em;
 }
@@ -1480,7 +1480,7 @@ button.wallet-modal-scrim:focus-visible {
 
 .wallet-panel-heading p {
   color: var(--color-text-tertiary);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.5;
   margin: 0;
   max-width: 560px;
@@ -1494,7 +1494,7 @@ button.wallet-modal-scrim:focus-visible {
   color: var(--color-text-secondary);
   display: inline-flex;
   flex: 0 0 auto;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 680;
   gap: 6px;
   min-height: 26px;
@@ -1550,7 +1550,7 @@ button.wallet-modal-scrim:focus-visible {
 .wallet-limit-toggle:hover input:not(:disabled) + span { box-shadow: inset 0 0 0 1px var(--color-primary); }
 .wallet-limit-toggle input:focus-visible + span { outline: 3px solid var(--color-switch-focus); outline-offset: 1px; }
 .wallet-limit-toggle input:disabled + span { cursor: wait; opacity: .55; }
-.wallet-limit-toggle strong { color: var(--color-text-secondary); font-size: 9px; }
+.wallet-limit-toggle strong { color: var(--color-text-secondary); font-size: 10px; }
 
 .wallet-limit-usage {
   background: var(--color-surface-soft);
@@ -1588,7 +1588,7 @@ button.wallet-modal-scrim:focus-visible {
 .wallet-limit-usage > div:nth-child(3)::after { background: var(--color-text-tertiary); }
 .wallet-limit-usage span {
   color: var(--color-text-tertiary);
-  font-size: 8px;
+  font-size: 10px;
   padding-left: 10px;
 }
 .wallet-limit-usage strong {
@@ -1621,12 +1621,12 @@ button.wallet-modal-scrim:focus-visible {
 
 .wallet-limit-config-heading strong {
   color: var(--color-text-primary);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .wallet-limit-config-heading > div > span {
   color: var(--color-text-tertiary);
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .wallet-limit-config-heading > span {
@@ -1634,7 +1634,7 @@ button.wallet-modal-scrim:focus-visible {
   border: 1px solid var(--color-border);
   border-radius: 999px;
   color: var(--color-text-secondary);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 720;
   letter-spacing: .08em;
   padding: 4px 7px;
@@ -1666,7 +1666,7 @@ button.wallet-modal-scrim:focus-visible {
 .wallet-money-input input { padding-right: 48px !important; }
 .wallet-money-input em {
   color: var(--color-text-tertiary);
-  font-size: 8px;
+  font-size: 10px;
   font-style: normal;
   pointer-events: none;
   position: absolute;
@@ -1687,7 +1687,7 @@ button.wallet-modal-scrim:focus-visible {
 
 .wallet-limit-actions > span {
   color: var(--color-danger);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.4;
   min-height: 13px;
   text-align: right;
@@ -1699,7 +1699,7 @@ button.wallet-modal-scrim:focus-visible {
   border: 1px solid var(--color-primary);
   border-radius: 8px;
   color: var(--color-on-primary);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   min-height: 36px;
   min-width: 112px;
@@ -1724,7 +1724,7 @@ button.wallet-modal-scrim:focus-visible {
   border: 0;
   border-radius: 6px;
   color: var(--color-text-tertiary);
-  font-size: 8px;
+  font-size: 10px;
   min-height: 27px;
   padding: 0 9px;
 }
@@ -1765,20 +1765,20 @@ button.wallet-modal-scrim:focus-visible {
 .wallet-history-kind svg { height: 14px; width: 14px; }
 .wallet-history-copy { display: grid; gap: 2px; min-width: 0; }
 .wallet-history-copy strong { color: var(--color-text-primary); font-size: 10px; }
-.wallet-history-copy small { color: var(--color-text-tertiary); font-size: 8px; }
-.wallet-history-copy code { color: var(--color-text-secondary); font-size: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wallet-history-copy small { color: var(--color-text-tertiary); font-size: 10px; }
+.wallet-history-copy code { color: var(--color-text-secondary); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wallet-history-amount { align-items: end; display: grid; gap: 2px; text-align: right; }
 .wallet-history-amount strong { color: var(--color-text-primary); font-size: 10px; }
 .wallet-history-row.deposit .wallet-history-amount strong { color: var(--color-success); }
-.wallet-history-amount small { color: var(--color-text-tertiary); font-size: 8px; }
-.wallet-history-amount a { color: var(--color-primary); font-size: 8px; text-decoration: none; }
+.wallet-history-amount small { color: var(--color-text-tertiary); font-size: 10px; }
+.wallet-history-amount a { color: var(--color-primary); font-size: 10px; text-decoration: none; }
 .wallet-history-empty { align-content: center; background: var(--color-surface-soft); border: 1px dashed var(--color-border); border-radius: 10px; display: grid; justify-items: center; min-height: 118px; text-align: center; }
 .wallet-history-empty > span { align-items: center; background: var(--color-primary-soft); border-radius: 9px; color: var(--color-primary); display: flex; height: 34px; justify-content: center; width: 34px; }
 .wallet-history-empty svg { height: 17px; width: 17px; }
 .wallet-history-empty strong { color: var(--color-text-primary); font-size: 10px; margin-top: 8px; }
-.wallet-history-empty p { color: var(--color-text-tertiary); font-size: 8px; margin: 3px 0 0; }
+.wallet-history-empty p { color: var(--color-text-tertiary); font-size: 10px; margin: 3px 0 0; }
 
-:root[data-theme="dark"] .wallet-panel-icon-history { background: rgb(66 103 200 / .18); color: #9ab4ff; }
+:root[data-theme="dark"] .wallet-panel-icon-history { background: var(--color-primary-soft); color: var(--color-primary); }
 :root[data-theme="dark"] .wallet-history-filters button.active { background: #26342f; }
 :root[data-theme="dark"] .wallet-limit-usage,
 :root[data-theme="dark"] .wallet-limit-config { background: var(--color-canvas); }

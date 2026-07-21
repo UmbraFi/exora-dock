@@ -1,0 +1,134 @@
+{
+  "schemaVersion": "exora.api-contract.v1",
+  "capability": {
+    "schemaVersion": "exora.api.v3",
+    "title": "Virtual Text Summary API",
+    "description": "Summarize submitted text through a local deterministic test API.",
+    "deliveryMode": "local_dock",
+    "runtime": {
+      "publicBaseUrl": "http://127.0.0.1:3000",
+      "healthPath": "/health"
+    },
+    "interface": {
+      "openapi": "3.1.0",
+      "info": {
+        "title": "Virtual Text Summary API",
+        "version": "1.0.0"
+      },
+      "paths": {
+        "/summarize": {
+          "post": {
+            "operationId": "summarize_text",
+            "requestBody": {
+              "required": true,
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["text"],
+                    "properties": {
+                      "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100000,
+                        "description": "UTF-8 source text to summarize."
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "responses": {
+              "200": {
+                "description": "Summary generated",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["summary"],
+                      "properties": {
+                        "summary": {
+                          "type": "string",
+                          "description": "Generated concise summary; its exact wording is not a validation oracle."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "operations": [
+      {
+        "schemaVersion": "exora.operation.v3",
+        "operationId": "summarize_text",
+        "title": "Summarize Text",
+        "description": "Accept non-empty text and return a summary whose format is validated.",
+        "enabled": true,
+        "usage": {
+          "useCases": ["Condense a paragraph for a preview."],
+          "instructions": ["Send source text in the JSON text field."]
+        },
+        "api": {
+          "method": "POST",
+          "path": "/summarize",
+          "openapiOperationRef": "#/paths/~1summarize/post",
+          "errors": []
+        },
+        "behavior": {
+          "sideEffect": {
+            "present": false,
+            "description": "The call does not modify external state.",
+            "reversible": false,
+            "testMode": "none"
+          },
+          "idempotency": {
+            "supported": true,
+            "retentionSeconds": 86400
+          }
+        },
+        "interaction": { "mode": "request_response" },
+        "limits": {
+          "timeoutSeconds": 30,
+          "maximumRequestBytes": 1048576,
+          "maximumResponseBytes": 1048576,
+          "maximumConcurrency": 4
+        },
+        "metering": { "capabilities": [] },
+        "qualification": {
+          "fixtures": [
+            {
+              "id": "summary_success",
+              "kind": "success",
+              "description": "Checks status, media type and response schema rather than summary wording.",
+              "request": { "body": { "text": "Exora validates API contracts and settlement." } },
+              "expectedProtocol": {
+                "status": 200,
+                "mediaType": "application/json",
+                "openapiResponseRef": "#/paths/~1summarize/post/responses/200"
+              },
+              "safeToRepeat": true
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "billing": [
+    {
+      "operationId": "summarize_text",
+      "currency": "USDC",
+      "chargeFormula": {
+        "language": "exora.price-formula.v4",
+        "expression": "delivered * 0.03"
+      },
+      "maximumChargePerInvocationAtomic": 50000,
+      "settlementPolicy": "exora.operation-settlement.v4"
+    }
+  ]
+}

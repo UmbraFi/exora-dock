@@ -7,7 +7,11 @@ const outputDir = path.join(root, 'desktop', 'binaries')
 const output = path.join(outputDir, process.platform === 'win32' ? 'exora-dockd.exe' : 'exora-dockd')
 fs.mkdirSync(outputDir, { recursive: true })
 
-const result = spawnSync('go', ['build', '-o', output, './cmd/exora-dock/'], {
+const buildArgs = ['build']
+if (process.platform === 'win32') buildArgs.push('-ldflags', '-H=windowsgui')
+buildArgs.push('-o', output, './cmd/exora-dock/')
+
+const result = spawnSync('go', buildArgs, {
   cwd: root,
   env: { ...process.env, CGO_ENABLED: '0' },
   stdio: 'inherit',

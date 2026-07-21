@@ -5,71 +5,19 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
-	"github.com/exora-dock/exora-dock/internal/cloudlink"
-	"github.com/exora-dock/exora-dock/internal/providerworker"
 	"github.com/go-chi/chi/v5"
 )
 
-func (h *Handler) V3Gateway(w http.ResponseWriter, r *http.Request) {
-	if h.localAuth == nil {
-		writeJSON(w, 503, map[string]string{"error": "Dock local authorization is unavailable"})
-		return
-	}
-	_, accountKey, configured := h.localAuth.AccountKey()
-	if !configured {
-		writeJSON(w, 503, map[string]string{"error": "Exora account API key is not configured on this Dock"})
-		return
-	}
-	token, err := cloudlink.LoadToken(h.cloudTokenPath)
-	if err != nil {
-		writeJSON(w, 503, map[string]string{"error": "Exora Cloud is not configured"})
-		return
-	}
-	cloudURL := firstNonEmpty(strings.TrimSpace(h.cloudURL), strings.TrimSpace(token.CloudURL))
-	path := "/v3/gateway/" + chi.URLParam(r, "listingId") + "/" + strings.TrimPrefix(chi.URLParam(r, "*"), "/")
-	if r.URL.RawQuery != "" {
-		path += "?" + r.URL.RawQuery
-	}
-	up, err := http.NewRequestWithContext(r.Context(), r.Method, strings.TrimRight(cloudURL, "/")+path, r.Body)
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
-	}
-	for k, values := range r.Header {
-		if protectedLocalForwardHeader(k) {
-			continue
-		}
-		for _, v := range values {
-			up.Header.Add(k, v)
-		}
-	}
-	up.Header.Set("Authorization", "Bearer "+accountKey)
-	resp, err := http.DefaultClient.Do(up)
-	if err != nil {
-		writeJSON(w, 502, map[string]string{"error": err.Error()})
-		return
-	}
-	defer resp.Body.Close()
-	for k, values := range resp.Header {
-		for _, v := range values {
-			w.Header().Add(k, v)
-		}
-	}
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
-}
-
 func (h *Handler) V3Catalog(w http.ResponseWriter, r *http.Request) {
-	path := "/v3/catalog/products"
+	path := "/v4/catalog/products"
 	if r.URL.RawQuery != "" {
 		path += "?" + r.URL.RawQuery
 	}
 	h.v3BuyerCloudProxy(w, r, http.MethodGet, path, nil)
 }
 func (h *Handler) V3CatalogProduct(w http.ResponseWriter, r *http.Request) {
-	h.v3BuyerCloudProxy(w, r, http.MethodGet, "/v3/catalog/products/"+r.PathValue("id"), nil)
+	h.v3BuyerCloudProxy(w, r, http.MethodGet, "/v4/catalog/products/"+r.PathValue("id"), nil)
 }
 
 func (h *Handler) V3ConsumerProxy(w http.ResponseWriter, r *http.Request) {
@@ -89,22 +37,11 @@ func (h *Handler) V3ConsumerProxy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if path == "/v3/compute-purchases" && h.endpointTunnel != nil {
-		if values, ok := body.(map[string]any); ok {
-			publicKey, err := h.endpointTunnel.DevicePublicKey()
-			if err != nil {
-				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Dock device identity is unavailable"})
-				return
-			}
-			values["buyerDevicePublicKey"] = publicKey
-			delete(values, "sshPublicKey")
-		}
-	}
 	h.v3BuyerCloudProxy(w, r, r.Method, path, body)
 }
 
 func (h *Handler) V3ActivitySessions(w http.ResponseWriter, r *http.Request) {
-	path := "/v3/activity-sessions"
+	path := "/v4/activity-sessions"
 	if r.URL.RawQuery != "" {
 		path += "?" + r.URL.RawQuery
 	}
@@ -112,25 +49,14 @@ func (h *Handler) V3ActivitySessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) V3ActivitySession(w http.ResponseWriter, r *http.Request) {
-	h.v3BuyerCloudProxy(w, r, http.MethodGet, "/v3/activity-sessions/"+r.PathValue("id"), nil)
-}
-
-func (h *Handler) V3EnvironmentImageCatalog(w http.ResponseWriter, r *http.Request) {
-	path := "/v3/catalog/environment-images"
+	path := "/v4/activity-sessions/" + r.PathValue("id")
 	if r.URL.RawQuery != "" {
 		path += "?" + r.URL.RawQuery
 	}
-	h.v3CloudProxy(w, r, http.MethodGet, path, nil)
-}
-func (h *Handler) V3EnvironmentImageCatalogItem(w http.ResponseWriter, r *http.Request) {
-	path := "/v3/catalog/environment-images/" + r.PathValue("id")
-	if r.URL.RawQuery != "" {
-		path += "?" + r.URL.RawQuery
-	}
-	h.v3CloudProxy(w, r, http.MethodGet, path, nil)
+	h.v3BuyerCloudProxy(w, r, http.MethodGet, path, nil)
 }
 func (h *Handler) V3ProviderProxy(w http.ResponseWriter, r *http.Request) {
-	path := "/v3/provider/" + strings.TrimPrefix(chi.URLParam(r, "*"), "/")
+	path := "/v4/provider/" + strings.TrimPrefix(chi.URLParam(r, "*"), "/")
 	if r.URL.RawQuery != "" {
 		path += "?" + r.URL.RawQuery
 	}
@@ -146,7 +72,12 @@ func (h *Handler) V3ProviderProxy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	h.v3CloudProxy(w, r, r.Method, path, body)
+	status, payload, err := h.cloudV2Request(r, r.Method, path, body)
+	if err != nil {
+		writeJSON(w, 502, map[string]string{"error": err.Error()})
+		return
+	}
+	writeCloudPayload(w, status, payload)
 }
 func (h *Handler) v3CloudProxy(w http.ResponseWriter, r *http.Request, method, path string, body any) {
 	status, payload, err := h.cloudV2Request(r, method, path, body)
@@ -164,25 +95,4 @@ func (h *Handler) v3BuyerCloudProxy(w http.ResponseWriter, r *http.Request, meth
 		return
 	}
 	writeCloudPayload(w, status, payload)
-}
-
-func (h *Handler) V3WorkerCommand(w http.ResponseWriter, r *http.Request) {
-	command := r.PathValue("command")
-	if !providerworker.AllowedCommands[command] {
-		writeJSON(w, 400, map[string]string{"error": "unsupported worker command"})
-		return
-	}
-	var input map[string]any
-	if err := decodeJSONBody(r, &input); err != nil {
-		writeJSON(w, 400, map[string]string{"error": "invalid JSON"})
-		return
-	}
-	ctx, cancel := contextWithTimeout(r, 3*time.Minute)
-	defer cancel()
-	out, err := (providerworker.Client{}).Call(ctx, command, input)
-	if err != nil {
-		writeJSON(w, 503, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, 200, map[string]any{"result": out})
 }

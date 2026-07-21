@@ -1,0 +1,10 @@
+./capability.go
+./cloud.go
+./discovery.go
+./model.go
+./operation_v3.go
+./policy.go
+./pricing_formula.go
+./service.go
+./store.go
+./vault.go

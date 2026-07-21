@@ -16,25 +16,27 @@ import (
 )
 
 type Options struct {
-	Auth           *localauth.Store
-	AllowedOrigins []string
-	Discovery      *discovery.Manifest
-	CloudURL       string
-	CloudTokenPath string
-	Endpoints      *endpoint.Store
-	EndpointTunnel *endpoint.TunnelClient
-	SellerDrafts   *sellerdraft.Service
+	Auth                *localauth.Store
+	AllowedOrigins      []string
+	Discovery           *discovery.Manifest
+	CloudURL            string
+	CloudTokenPath      string
+	ActiveAccountID     string
+	EnforceAccountScope bool
+	Endpoints           *endpoint.Store
+	EndpointTunnel      *endpoint.TunnelClient
+	SellerDrafts        *sellerdraft.Service
 }
 
 func New(opts Options) http.Handler {
-	h := api.NewHandler(api.Options{Discovery: opts.Discovery, CloudURL: opts.CloudURL, CloudTokenPath: opts.CloudTokenPath, Endpoints: opts.Endpoints, EndpointTunnel: opts.EndpointTunnel, SellerDrafts: opts.SellerDrafts, LocalAuth: opts.Auth})
+	h := api.NewHandler(api.Options{Discovery: opts.Discovery, CloudURL: opts.CloudURL, CloudTokenPath: opts.CloudTokenPath, ActiveAccountID: opts.ActiveAccountID, EnforceAccountScope: opts.EnforceAccountScope, Endpoints: opts.Endpoints, EndpointTunnel: opts.EndpointTunnel, SellerDrafts: opts.SellerDrafts, LocalAuth: opts.Auth})
 	r := chi.NewRouter()
 	r.Use(middleware.Logger, middleware.Recoverer)
-	r.Use(cors.Handler(cors.Options{AllowedOrigins: allowedOrigins(opts.AllowedOrigins), AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}, AllowedHeaders: []string{"Content-Type", "Authorization"}, AllowCredentials: false, MaxAge: 300}))
+	r.Use(cors.Handler(cors.Options{AllowedOrigins: allowedOrigins(opts.AllowedOrigins), AllowedMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}, AllowedHeaders: []string{"Content-Type", "Authorization"}, AllowCredentials: false, MaxAge: 300}))
 	r.Use(authMiddleware(opts.Auth))
 	r.Get("/health", h.Health)
 	r.Get("/.well-known/exora-dock.json", h.DiscoveryManifest)
-	r.Route("/v3", func(r chi.Router) {
+	r.Route("/v4", func(r chi.Router) {
 		r.Post("/local/agent-sessions", h.V3CreateAgentSession)
 		r.Get("/local/agent-sessions", h.V3AgentSessions)
 		r.Get("/local/agent-session-policy", h.V3AgentSessionPolicy)
@@ -44,57 +46,66 @@ func New(opts Options) http.Handler {
 		r.Put("/local/account-key", h.V3SetAccountKey)
 		r.Get("/local/account-key", h.V3AccountKeyStatus)
 		r.Delete("/local/account-key", h.V3LockLocalAccount)
-		r.Get("/local/seller-automation/policy", h.V3SellerAutomationPolicy)
-		r.Put("/local/seller-automation/policy", h.V3SaveSellerAutomationPolicy)
-		r.Get("/local/seller-automation/credentials", h.V3SellerCredentials)
-		r.Post("/local/seller-automation/credentials", h.V3SaveSellerCredential)
-		r.Delete("/local/seller-automation/credentials/{id}", h.V3DeleteSellerCredential)
-		r.Get("/provider-agent/capabilities", h.V3SellerDraftCapabilities)
-		r.Post("/provider-agent/candidates/discover", h.V3DiscoverSellerCandidates)
-		r.Post("/provider-agent/materials/read", h.V3ReadSellerMaterial)
-		r.Get("/provider-agent/draft-runs", h.V3ListSellerDraftRuns)
-		r.Post("/provider-agent/draft-runs", h.V3CreateSellerDraftRun)
-		r.Get("/provider-agent/draft-runs/{id}", h.V3GetSellerDraftRun)
-		r.Post("/provider-agent/draft-runs/{id}/resume", h.V3ResumeSellerDraftRun)
-		r.Post("/provider-agent/draft-runs/{id}/cancel", h.V3CancelSellerDraftRun)
-		r.Get("/local/endpoints", h.V3LocalEndpoints)
-		r.Put("/local/endpoints/{id}", h.V3SaveLocalEndpoint)
-		r.Post("/local/endpoints/probe", h.V3ProbeLocalEndpoint)
-		r.Post("/local/endpoints/test-route", h.V3TestLocalEndpointRoute)
-		r.HandleFunc("/gateway/{listingId}/*", h.V3Gateway)
-		r.Get("/catalog/products", h.V3Catalog)
-		r.Get("/catalog/products/{id}", h.V3CatalogProduct)
-		r.Get("/catalog/listings", h.V3ConsumerProxy)
-		r.Get("/catalog/listings/{id}", h.V3ConsumerProxy)
-		r.Post("/purchase-estimates", h.V3ConsumerProxy)
-		r.Post("/invocations", h.V3ConsumerProxy)
+		r.Get("/local/provider-integration/policy", h.V3SellerAutomationPolicy)
+		r.Put("/local/provider-integration/policy", h.V3SaveSellerAutomationPolicy)
+		r.Get("/local/provider-integration/credentials", h.V3SellerCredentials)
+		r.Post("/local/provider-integration/credentials", h.V3SaveSellerCredential)
+		r.Delete("/local/provider-integration/credentials/{id}", h.V3DeleteSellerCredential)
+		r.Post("/local/provider/offline-for-logout", h.V4OfflineProviderAPIsForLogout)
+		r.Get("/api-drafts", h.V4ListAPIDrafts)
+		r.Post("/api-drafts", h.V4SubmitAPICapability)
+		r.Get("/api-drafts/{apiId}", h.V4GetAPIDraft)
+		r.Get("/api-drafts/{apiId}/validation", h.V4GetAPIValidation)
+		// Review, qualification, runtime and publication remain owner-only human gates.
+		r.Post("/local/api-drafts", h.V4CreateLocalAPIDraft)
+		r.Put("/local/api-drafts/{apiId}/identity", h.V4UpdateAPIDraftIdentity)
+		r.Put("/local/api-drafts/{apiId}", h.V4UpdateAPICapability)
+		r.Put("/local/api-drafts/{apiId}/contract", h.V4SubmitAPIContract)
+		r.Delete("/local/api-drafts/{apiId}/contract", h.V4ClearAPIContract)
+		r.Delete("/local/api-drafts/{apiId}", h.V4DeleteAPIDraft)
+		r.Put("/local/api-drafts/{apiId}/operations/{operationId}", h.V4UpdateAPIOperation)
+		r.Get("/local/api-drafts/{apiId}/operations/{operationId}/validation-plan", h.V4GetOperationValidationPlan)
+		r.Post("/local/api-drafts/{apiId}/operations/{operationId}/validation-runs", h.V4StartOperationValidationRun)
+		r.Get("/local/api-drafts/{apiId}/operations/{operationId}/validation-runs/{runId}", h.V4GetOperationValidationRun)
+		r.Delete("/local/api-drafts/{apiId}/operations/{operationId}/validation-runs/{runId}", h.V4CancelOperationValidationRun)
+		r.Get("/local/api-drafts/{apiId}/operations/{operationId}/validation-runs/{runId}/events", h.V4OperationValidationRunEvents)
+		r.Post("/local/api-drafts/{apiId}/operations/{operationId}/lock-integration", h.V4LockOperationIntegration)
+		r.Post("/local/api-drafts/{apiId}/operations/{operationId}/unlock-integration", h.V4UnlockOperationIntegration)
+		r.Post("/local/api-drafts/{apiId}/operations/{operationId}/billing-runs", h.V4RunOperationBillingTest)
+		r.Post("/local/api-drafts/{apiId}/operations/{operationId}/contract-validation", h.V4RunOperationContractValidation)
+		r.Post("/local/api-drafts/{apiId}/operations/{operationId}/confirm-contract", h.V4ConfirmOperationContract)
+		r.Get("/local/api-drafts/{apiId}/operations/{operationId}/billing-runs/{runId}", h.V4GetOperationBillingRun)
+		r.Post("/local/api-drafts/{apiId}/operations/{operationId}/lock-pricing", h.V4LockOperationPricing)
+		r.Post("/local/api-drafts/{apiId}/operations/{operationId}/unlock-pricing", h.V4UnlockOperationPricing)
+		r.Post("/local/api-drafts/{apiId}/operations/{operationId}/lifecycle", h.V4UpdateOperationLifecycle)
+		r.Put("/local/api-drafts/{apiId}/operations/{operationId}/operational-settings", h.V4UpdateOperationSettings)
+		r.Get("/local/api-drafts/{apiId}/operations/{operationId}/events", h.V4OperationConsoleEvents)
+		r.Post("/local/api-drafts/{apiId}/publish", h.V4PublishAPIDraft)
+		r.Get("/catalog/operations", h.V3ConsumerProxy)
+		r.Get("/catalog/apis/{apiId}", h.V3ConsumerProxy)
+		r.Post("/operation-estimates", h.V3ConsumerProxy)
+		r.Post("/apis/{apiId}/operations/{operationId}/invocations", h.V3ConsumerProxy)
+		r.Get("/invocations/{id}", h.V3ConsumerProxy)
+		r.Get("/jobs/{id}", h.V3ConsumerProxy)
+		r.Get("/jobs/{id}/events", h.V3ConsumerProxy)
+		r.Post("/jobs/{id}/cancel", h.V3ConsumerProxy)
+		r.Post("/artifact-uploads", h.V3ConsumerProxy)
+		r.Post("/artifact-uploads/{id}/complete", h.V3ConsumerProxy)
+		r.Post("/artifacts/{id}/download-grants", h.V3ConsumerProxy)
 		r.Get("/api-orders", h.V3ConsumerProxy)
 		r.Get("/api-orders/{id}", h.V3ConsumerProxy)
+		r.Get("/api-orders/{id}/invocations", h.V3ConsumerProxy)
 		r.Post("/api-orders/{id}/deactivate", h.V3ConsumerProxy)
 		r.Post("/api-orders/{id}/reactivation-requests", h.V3ConsumerProxy)
-		r.Post("/download-grants", h.V3ConsumerProxy)
-		r.Post("/download-grants/{id}/transfers", h.V3ConsumerProxy)
-		r.Post("/compute-purchases", h.V3ConsumerProxy)
-		r.Get("/compute-purchases/{id}", h.V3ConsumerProxy)
-		r.Post("/compute-purchases/{id}/extend", h.V3ConsumerProxy)
-		r.Post("/compute-purchases/{id}/extension-estimates", h.V3ConsumerProxy)
-		r.Get("/leases/{id}", h.V3ConsumerProxy)
-		r.Post("/leases/{id}/release", h.V3ConsumerProxy)
-		r.Post("/leases/{id}/terminal-sessions", h.V3ConsumerProxy)
-		r.Delete("/terminal-sessions/{id}", h.V3ConsumerProxy)
-		r.Post("/leases/{id}/commands", h.V3ConsumerProxy)
-		r.Get("/compute-commands/{id}", h.V3ConsumerProxy)
-		r.Post("/local/compute-transfers", h.V3StartLocalComputeTransfer)
-		r.Get("/local/compute-transfers/{id}", h.V3LocalComputeTransfer)
-		r.Get("/local/device-identity", h.V3LocalDeviceIdentity)
+		r.Put("/api-orders/{id}/review", h.V3ConsumerProxy)
+		r.Post("/reviews/{id}/reply", h.V3ConsumerProxy)
+		r.Post("/reviews/{id}/reports", h.V3ConsumerProxy)
+		r.Get("/sellers/{id}/reputation", h.V3ConsumerProxy)
+		r.Get("/disputes", h.V3ConsumerProxy)
+		r.Get("/disputes/{id}", h.V3ConsumerProxy)
 		r.Get("/account/balance", h.V3ConsumerProxy)
 		r.Get("/account/spend-policy", h.V3ConsumerProxy)
 		r.Get("/ledger", h.V3ConsumerProxy)
-		r.Get("/activity-sessions", h.V3ActivitySessions)
-		r.Get("/activity-sessions/{id}", h.V3ActivitySession)
-		r.Get("/catalog/environment-images", h.V3EnvironmentImageCatalog)
-		r.Get("/catalog/environment-images/{id}", h.V3EnvironmentImageCatalogItem)
-		r.HandleFunc("/provider/worker/{command}", h.V3WorkerCommand)
 		r.HandleFunc("/provider/*", h.V3ProviderProxy)
 	})
 	return r
@@ -157,22 +168,22 @@ func requiredAgentPermission(r *http.Request) string {
 	if strings.HasSuffix(path, "/heartbeat") {
 		return "account.read"
 	}
-	if strings.HasPrefix(path, "/v3/provider-agent/") {
-		return "seller.draft"
+	if strings.HasPrefix(path, "/v4/api-drafts") {
+		return "provider.integrate"
 	}
-	if strings.HasPrefix(path, "/v3/catalog/") || path == "/v3/purchase-estimates" {
+	if providerIntegrationMutation(r) {
+		return "provider.integrate"
+	}
+	if strings.HasPrefix(path, "/v4/api-orders") && r.Method == http.MethodGet {
+		return "account.read"
+	}
+	if strings.HasPrefix(path, "/v4/catalog/") || path == "/v4/operation-estimates" {
 		return "market.read"
 	}
-	if strings.HasPrefix(path, "/v3/compute-purchases") || strings.HasPrefix(path, "/v3/leases/") || strings.HasPrefix(path, "/v3/local/compute-transfers") || strings.HasPrefix(path, "/v3/compute-commands/") || strings.HasPrefix(path, "/v3/terminal-sessions/") {
-		return "compute.use"
-	}
-	if strings.HasPrefix(path, "/v3/download-grants") {
-		return "resources.use"
-	}
-	if path == "/v3/invocations" || strings.HasPrefix(path, "/v3/gateway/") || strings.HasPrefix(path, "/v3/api-orders") {
+	if strings.HasPrefix(path, "/v4/apis/") || strings.HasPrefix(path, "/v4/invocations/") || strings.HasPrefix(path, "/v4/api-orders") || strings.HasPrefix(path, "/v4/jobs/") || strings.HasPrefix(path, "/v4/artifact") || strings.HasPrefix(path, "/v4/reviews/") || strings.HasPrefix(path, "/v4/disputes") {
 		return "api.invoke"
 	}
-	if strings.HasPrefix(path, "/v3/account/") || path == "/v3/ledger" || strings.HasPrefix(path, "/v3/activity-sessions") {
+	if strings.HasPrefix(path, "/v4/account/") || path == "/v4/ledger" || strings.HasPrefix(path, "/v4/sellers/") {
 		return "account.read"
 	}
 	return "owner"
@@ -189,13 +200,24 @@ func requiredScope(r *http.Request) localauth.Scope {
 	if path == "/health" || path == "/.well-known/exora-dock.json" {
 		return localauth.ScopeNone
 	}
-	if strings.HasPrefix(path, "/v3/provider-agent/") {
-		return localauth.ScopeProviderAgent
+	if strings.HasPrefix(path, "/v4/api-drafts") {
+		return localauth.ScopeIntegrationAgent
 	}
-	for _, prefix := range []string{"/v3/catalog/", "/v3/purchase-estimates", "/v3/invocations", "/v3/api-orders", "/v3/download-grants", "/v3/compute-purchases", "/v3/leases/", "/v3/local/compute-transfers", "/v3/compute-commands/", "/v3/terminal-sessions/", "/v3/account/", "/v3/ledger", "/v3/activity-sessions", "/v3/gateway/"} {
+	if providerIntegrationMutation(r) {
+		return localauth.ScopeIntegrationAgent
+	}
+	for _, prefix := range []string{"/v4/catalog/", "/v4/operation-estimates", "/v4/apis/", "/v4/invocations/", "/v4/api-orders", "/v4/jobs/", "/v4/artifact", "/v4/reviews/", "/v4/disputes", "/v4/sellers/", "/v4/account/", "/v4/ledger"} {
 		if path == strings.TrimSuffix(prefix, "/") || strings.HasPrefix(path, prefix) {
 			return localauth.ScopeAgent
 		}
 	}
 	return localauth.ScopeOwner
+}
+
+func providerIntegrationMutation(r *http.Request) bool {
+	path := r.URL.Path
+	if r.Method == http.MethodPost && path == "/v4/local/api-drafts" {
+		return true
+	}
+	return r.Method == http.MethodPut && strings.HasPrefix(path, "/v4/local/api-drafts/") && strings.HasSuffix(path, "/contract")
 }

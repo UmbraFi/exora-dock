@@ -1,2 +1,0 @@
-*.msi
-!wsl-runtime.lock.json

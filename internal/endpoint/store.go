@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/exora-dock/exora-dock/internal/accountscope"
 	"github.com/exora-dock/exora-dock/internal/cache"
 )
 
@@ -70,10 +71,21 @@ type Status struct {
 }
 
 type Store struct {
-	cache *cache.Cache
+	cache     *cache.Cache
+	namespace string
 }
 
-func NewStore(c *cache.Cache) *Store { return &Store{cache: c} }
+func NewStore(c *cache.Cache, accountID string) *Store {
+	accountID = strings.TrimSpace(accountID)
+	return &Store{cache: c, namespace: accountscope.Namespace(accountID)}
+}
+
+func (s *Store) key(value string) string {
+	if s.namespace == "" {
+		return "inactive:" + value
+	}
+	return "account:" + s.namespace + ":" + value
+}
 
 func endpointKey(id string) string { return "v3:endpoints:" + id }
 
@@ -130,7 +142,7 @@ func (s *Store) Save(ctx context.Context, cfg Config) (Config, error) {
 	}
 	cfg.UpdatedAt = time.Now().UTC()
 	raw, _ := json.Marshal(cfg)
-	s.cache.Set(endpointKey(cfg.EndpointID), raw, ttl)
+	s.cache.Set(s.key(endpointKey(cfg.EndpointID)), raw, ttl)
 	ids := s.loadIndex()
 	found := false
 	for _, id := range ids {
@@ -139,7 +151,7 @@ func (s *Store) Save(ctx context.Context, cfg Config) (Config, error) {
 	if !found {
 		ids = append([]string{cfg.EndpointID}, ids...)
 		indexRaw, _ := json.Marshal(ids)
-		s.cache.Set(indexKey, indexRaw, ttl)
+		s.cache.Set(s.key(indexKey), indexRaw, ttl)
 	}
 	return cfg, nil
 }
@@ -201,7 +213,7 @@ func (s *Store) Get(id string) (Config, bool) {
 	if s == nil || s.cache == nil {
 		return Config{}, false
 	}
-	raw, ok := s.cache.Get(endpointKey(strings.TrimSpace(id)))
+	raw, ok := s.cache.Get(s.key(endpointKey(strings.TrimSpace(id))))
 	if !ok {
 		return Config{}, false
 	}
@@ -232,7 +244,7 @@ func (s *Store) Delete(id string) {
 		return
 	}
 	id = strings.TrimSpace(id)
-	s.cache.Delete(endpointKey(id))
+	s.cache.Delete(s.key(endpointKey(id)))
 	ids := s.loadIndex()
 	next := ids[:0]
 	for _, candidate := range ids {
@@ -241,14 +253,14 @@ func (s *Store) Delete(id string) {
 		}
 	}
 	raw, _ := json.Marshal(next)
-	s.cache.Set(indexKey, raw, ttl)
+	s.cache.Set(s.key(indexKey), raw, ttl)
 }
 
 func (s *Store) loadIndex() []string {
 	if s == nil || s.cache == nil {
 		return nil
 	}
-	raw, ok := s.cache.Get(indexKey)
+	raw, ok := s.cache.Get(s.key(indexKey))
 	if !ok {
 		return nil
 	}
@@ -306,7 +318,10 @@ func Probe(ctx context.Context, input ProbeInput) Status {
 		client.Transport = transport
 	}
 	response, err := client.Do(request)
-	if err == nil && (response.StatusCode == http.StatusMethodNotAllowed || response.StatusCode == http.StatusNotImplemented) {
+	// A number of otherwise valid local runtimes only implement GET for their
+	// health route and answer HEAD with a generic 404. Confirm every unsuccessful
+	// HEAD probe with GET before declaring the endpoint unhealthy.
+	if err == nil && (response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusBadRequest) {
 		_ = response.Body.Close()
 		request, _ = http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
 		request.Header.Set("Accept", "application/json, text/event-stream;q=0.9, */*;q=0.5")

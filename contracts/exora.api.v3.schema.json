@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://exora.dev/contracts/exora.api.v3.schema.json",
+  "title": "Exora API v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "title", "description", "deliveryMode", "interface", "runtime", "operations"],
+  "properties": {
+    "schemaVersion": { "const": "exora.api.v3" },
+    "apiId": { "type": "string", "pattern": "^api_[A-Za-z0-9_-]+$" },
+    "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "description": { "type": "string", "minLength": 1, "maxLength": 8000 },
+    "deliveryMode": { "enum": ["local_dock", "cloud_direct"] },
+    "interface": {
+      "type": "object",
+      "required": ["openapi", "info", "paths"],
+      "properties": {
+        "openapi": { "type": "string", "pattern": "^3\\.1\\." },
+        "info": { "type": "object" },
+        "paths": { "type": "object", "minProperties": 1 }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["publicBaseUrl", "healthPath"],
+      "properties": {
+        "healthPath": { "type": "string", "pattern": "^/" },
+        "publicBaseUrl": { "type": "string", "format": "uri" },
+        "credentialAlias": { "type": "string" },
+        "launch": { "type": "object" }
+      }
+    },
+    "operations": { "type": "array", "minItems": 1, "items": { "$ref": "./exora.operation.v3.schema.json" } }
+  }
+}

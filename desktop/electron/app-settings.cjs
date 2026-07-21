@@ -1,15 +1,11 @@
-const SETTINGS_VERSION = 3
+const SETTINGS_VERSION = 6
 
 const DEFAULT_NOTIFICATIONS = Object.freeze({
   approvals: true,
-  purchases: true,
-  downloads: true,
-  leases: true,
-  wallet: true,
+  apiActivity: true,
+  billing: true,
+  providerApis: true,
   security: true,
-  sellerOrders: true,
-  sellerListings: true,
-  runtime: true,
 })
 
 const SETTINGS_KEYS = Object.freeze([
@@ -22,9 +18,8 @@ const SETTINGS_KEYS = Object.freeze([
   'launchAtLogin',
   'startMinimized',
   'closeBehavior',
-  'startDockOnLaunch',
-  'autoUpdate',
   'downloadDirectory',
+  'agentMcpOnboardingVersion',
   'notifications',
 ])
 
@@ -41,26 +36,34 @@ function normalizeAppSettingsV3(value) {
     launchAtLogin: input.launchAtLogin === true,
     startMinimized: input.startMinimized === true,
     closeBehavior: input.closeBehavior === 'quit' ? 'quit' : 'tray',
-    startDockOnLaunch: input.startDockOnLaunch !== false,
-    autoUpdate: input.autoUpdate !== false,
     downloadDirectory: typeof input.downloadDirectory === 'string' ? input.downloadDirectory.trim().slice(0, 4096) : '',
-    notifications: Object.fromEntries(Object.entries(DEFAULT_NOTIFICATIONS).map(([key, fallback]) => [
-      key,
-      typeof notifications[key] === 'boolean' ? notifications[key] : fallback,
-    ])),
+    agentMcpOnboardingVersion: clampInteger(input.agentMcpOnboardingVersion, 0, 0, 1000),
+    notifications: normalizeNotifications(notifications),
   }
+}
+
+function normalizeNotifications(notifications) {
+  const normalized = Object.fromEntries(Object.entries(DEFAULT_NOTIFICATIONS).map(([key, fallback]) => [
+    key,
+    typeof notifications[key] === 'boolean' ? notifications[key] : fallback,
+  ]))
+  if (typeof notifications.apiActivity !== 'boolean' && typeof notifications.purchases === 'boolean') {
+    normalized.apiActivity = notifications.purchases
+  }
+  if (typeof notifications.billing !== 'boolean') {
+    const legacyBilling = [notifications.purchases, notifications.wallet].filter((item) => typeof item === 'boolean')
+    if (legacyBilling.length) normalized.billing = legacyBilling.every(Boolean)
+  }
+  if (typeof notifications.providerApis !== 'boolean') {
+    const legacyProvider = [notifications.sellerOrders, notifications.sellerListings].filter((item) => typeof item === 'boolean')
+    if (legacyProvider.length) normalized.providerApis = legacyProvider.every(Boolean)
+  }
+  return normalized
 }
 
 function pickAppSettingsV3(value) {
   const input = objectOr(value)
   return Object.fromEntries(SETTINGS_KEYS.filter((key) => Object.hasOwn(input, key)).map((key) => [key, input[key]]))
-}
-
-function redactDiagnostics(value) {
-  if (Array.isArray(value)) return value.map(redactDiagnostics)
-  if (!value || typeof value !== 'object') return value
-  const secret = /(pin|token|secret|password|authorization|api.?key|access.?key|credential)/i
-  return Object.fromEntries(Object.entries(value).flatMap(([key, item]) => secret.test(key) ? [] : [[key, redactDiagnostics(item)]]))
 }
 
 function clampInteger(value, fallback, min, max) {
@@ -79,5 +82,4 @@ module.exports = {
   SETTINGS_VERSION,
   normalizeAppSettingsV3,
   pickAppSettingsV3,
-  redactDiagnostics,
 }

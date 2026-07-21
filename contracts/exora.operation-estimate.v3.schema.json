@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://exora.dev/contracts/exora.operation-estimate.v3.schema.json",
+  "title": "Exora Operation Estimate v3",
+  "type": "object",
+  "required": ["schemaVersion", "apiId", "operationId", "pricingSha256", "maximumChargeAtomic", "currency", "preview"],
+  "properties": {
+    "schemaVersion": { "const": "exora.operation-estimate.v3" },
+    "apiId": { "type": "string" },
+    "operationId": { "type": "string" },
+    "pricingSha256": { "type": "string" },
+    "maximumChargeAtomic": { "type": "integer", "minimum": 1 },
+    "currency": { "const": "USDC" },
+    "preview": { "const": true }
+  }
+}

@@ -13,8 +13,6 @@ const definitions = [
   { pattern: /Windows-x64-Unsigned-Technical-Preview\.exe$/i, platform: 'windows', architecture: 'x64', format: 'nsis', signing: { scheme: 'authenticode', status: 'unsigned' } },
   { pattern: /macOS-arm64\.dmg$/i, platform: 'macos', architecture: 'arm64', format: 'dmg', signing: { scheme: 'codesign', status: 'adhoc', notarized: false } },
   { pattern: /macOS-arm64\.zip$/i, platform: 'macos', architecture: 'arm64', format: 'zip', signing: { scheme: 'codesign', status: 'adhoc', notarized: false } },
-  { pattern: /Linux-x64\.AppImage$/i, platform: 'linux', architecture: 'x64', format: 'appimage', signing: { scheme: 'checksum', status: 'unsigned' } },
-  { pattern: /Linux-x64\.deb$/i, platform: 'linux', architecture: 'x64', format: 'deb', signing: { scheme: 'checksum', status: 'unsigned' } },
 ]
 
 const artifacts = fs.readdirSync(artifactDirectory, { withFileTypes: true })
@@ -35,7 +33,7 @@ const artifacts = fs.readdirSync(artifactDirectory, { withFileTypes: true })
   })
   .sort((left, right) => `${left.platform}:${left.format}`.localeCompare(`${right.platform}:${right.format}`))
 
-for (const platform of ['windows', 'macos', 'linux']) {
+for (const platform of ['windows', 'macos']) {
   if (!artifacts.some((artifact) => artifact.platform === platform)) throw new Error(`release artifact is missing for ${platform}`)
 }
 

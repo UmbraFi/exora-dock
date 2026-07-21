@@ -17,19 +17,20 @@ test('retires frontend references without deleting local user data', async (t) =
   await fs.access(fixture.paths.localAgentBindingPath)
   await fs.access(fixture.paths.localAgentScanPath)
   await fs.access(fixture.userProjectFile)
-  await fs.access(fixture.paths.providerEnvironmentSettingsPath)
+  await assert.rejects(fs.access(fixture.paths.providerEnvironmentSettingsPath))
+  await assert.rejects(fs.access(fixture.paths.providerHostSnapshotPath))
 
   const settings = await readJson(fixture.paths.appSettingsPath, {})
-  assert.equal(settings.version, 3)
+  assert.equal(settings.version, 6)
   assert.deepEqual(settings.settings, {
     language: 'zh', theme: 'dark', workOrderSide: 'seller', sidebarCollapsed: true, sidebarWidth: 312,
-    launchAtLogin: true, closeBehavior: 'quit', startDockOnLaunch: false,
+    launchAtLogin: true, closeBehavior: 'quit',
     notifications: { approvals: false, runtime: true },
   })
   const desktop = await readJson(fixture.paths.desktopStatePath, {})
   assert.equal(desktop.cloudAuth.account.email, 'user@example.com')
 	assert.equal(desktop.accountKey, undefined)
-  assert.equal(desktop.providerEnvironmentRoot, 'D:/ExoraVMs')
+  assert.equal(desktop.providerEnvironmentRoot, undefined)
   assert.ok(desktop.migrations[LEGACY_FRONTEND_CLEANUP_MARKER])
   for (const key of ['projectFolders', 'activeProjectFolderPath', 'workMcpUids', 'workMcpLeases']) {
     assert.equal(Object.hasOwn(desktop, key), false)
@@ -53,6 +54,7 @@ async function createFixture(t) {
     localAgentBindingPath: path.join(root, 'exora-data', 'settings', 'local-agent-binding.json'),
     localAgentScanPath: path.join(root, 'exora-data', 'settings', 'local-agent-scan.json'),
     providerEnvironmentSettingsPath: path.join(root, 'exora-data', 'settings', 'provider-environment.json'),
+    providerHostSnapshotPath: path.join(root, 'exora-data', 'settings', 'provider-host-snapshot.json'),
     legacyConversationsRoot: path.join(root, 'exora-data', 'conversations'),
     legacyTransactionsRoot: path.join(root, 'exora-data', 'transactions'),
   }
@@ -63,6 +65,7 @@ async function createFixture(t) {
     writeText(paths.localAgentBindingPath, '{}'),
     writeText(paths.localAgentScanPath, '{}'),
     writeText(paths.providerEnvironmentSettingsPath, '{"rootPath":"D:/ExoraVMs"}'),
+    writeText(paths.providerHostSnapshotPath, '{"cpu":"legacy"}'),
     writeText(userProjectFile, 'user work'),
   ])
   await writeJson(paths.appSettingsPath, {
@@ -85,7 +88,7 @@ async function createFixture(t) {
   return {
     paths,
     userProjectFile,
-    options: { paths, readJson, writeJson, now: () => new Date('2026-07-15T00:00:00.000Z') },
+    options: { paths, readJson, writeJson, removeFile: (target) => fs.rm(target, { force: true }), now: () => new Date('2026-07-15T00:00:00.000Z') },
   }
 }
 

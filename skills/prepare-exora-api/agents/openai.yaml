@@ -1,0 +1,4 @@
+interface:
+  display_name: "Prepare Exora API"
+  short_description: "Follow Exora's MCP seller preparation guide"
+  default_prompt: "Use $prepare-exora-api to follow Exora MCP's guided steps and submit this capability for seller review."

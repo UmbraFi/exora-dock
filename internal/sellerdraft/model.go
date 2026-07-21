@@ -1,51 +1,12 @@
 package sellerdraft
 
-import (
-	"strings"
-	"time"
-)
-
-type ApplicationSource string
+import "time"
 
 const (
-	ApplicationVM        ApplicationSource = "vm"
-	ApplicationResources ApplicationSource = "resources"
-	ApplicationEndpoint  ApplicationSource = "endpoint"
-	ApplicationAPIBridge ApplicationSource = "api_bridge"
-
-	SchemaVersion = "seller-draft-run.v1"
-
-	KindVM        = string(ApplicationVM)
-	KindResources = string(ApplicationResources)
-	KindEndpoint  = string(ApplicationEndpoint)
-	KindAPIBridge = string(ApplicationAPIBridge)
-
-	StatusQueued        = "queued"
-	StatusDiscovering   = "discovering"
-	StatusValidating    = "validating"
-	StatusPackaging     = "packaging"
-	StatusUploading     = "uploading"
-	StatusProbing       = "probing"
-	StatusReserving     = "reserving"
-	StatusCreatingDraft = "creating_draft"
-	StatusNeedsInput    = "needs_input"
-	StatusCompleted     = "completed"
-	StatusFailed        = "failed"
-	StatusCancelled     = "cancelled"
-
+	KindAPI      = "api"
 	CandidateTTL = 30 * time.Minute
 	RecordTTL    = 365 * 24 * time.Hour
 )
-
-func ParseApplicationSource(value string) (ApplicationSource, bool) {
-	source := ApplicationSource(strings.TrimSpace(value))
-	switch source {
-	case ApplicationVM, ApplicationResources, ApplicationEndpoint, ApplicationAPIBridge:
-		return source, true
-	default:
-		return "", false
-	}
-}
 
 type AllowedRoot struct {
 	ID          string   `json:"id"`
@@ -57,50 +18,24 @@ type AllowedRoot struct {
 type AllowedService struct {
 	ID            string   `json:"id"`
 	DisplayName   string   `json:"displayName,omitempty"`
-	Mode          string   `json:"mode"`
+	Mode          string   `json:"deliveryMode"`
 	BaseURL       string   `json:"baseUrl"`
 	AllowedPorts  []int    `json:"allowedPorts,omitempty"`
 	AllowedHosts  []string `json:"allowedHosts,omitempty"`
 	CredentialRef string   `json:"credentialRef,omitempty"`
 }
 
-type Attestations struct {
-	Pricing  bool `json:"pricing"`
-	Rights   bool `json:"rights"`
-	Runtime  bool `json:"runtime"`
-	APIUsage bool `json:"apiUsage"`
-}
-
-type PolicyLimits struct {
-	MaxBatch          int   `json:"maxBatch"`
-	MaxFiles          int   `json:"maxFiles"`
-	MaxBundleBytes    int64 `json:"maxBundleBytes"`
-	MaxConcurrentRuns int   `json:"maxConcurrentRuns"`
-}
-
 type SellerAutomationPolicy struct {
-	SchemaVersion     string                    `json:"schemaVersion"`
-	PolicyID          string                    `json:"policyId"`
-	Version           int64                     `json:"version"`
-	Enabled           bool                      `json:"enabled"`
-	EnabledKinds      []string                  `json:"enabledKinds"`
-	AllowedRoots      []AllowedRoot             `json:"allowedRoots"`
-	AllowedServices   []AllowedService          `json:"allowedServices"`
-	Defaults          map[string]map[string]any `json:"defaults"`
-	Attestations      Attestations              `json:"attestations"`
-	Limits            PolicyLimits              `json:"limits"`
-	AutoInstallImages bool                      `json:"autoInstallImages"`
-	ApprovedAt        string                    `json:"approvedAt,omitempty"`
-	UpdatedAt         string                    `json:"updatedAt"`
-	Hash              string                    `json:"hash"`
-}
-
-type PolicyReceipt struct {
-	PolicyID     string       `json:"policyId"`
-	Version      int64        `json:"version"`
-	Hash         string       `json:"hash"`
-	ApprovedAt   string       `json:"approvedAt"`
-	Attestations Attestations `json:"attestations"`
+	SchemaVersion   string           `json:"schemaVersion"`
+	PolicyID        string           `json:"policyId"`
+	Version         int64            `json:"version"`
+	Enabled         bool             `json:"enabled"`
+	EnabledKinds    []string         `json:"enabledKinds"`
+	AllowedRoots    []AllowedRoot    `json:"allowedRoots"`
+	AllowedServices []AllowedService `json:"allowedServices"`
+	ApprovedAt      string           `json:"approvedAt,omitempty"`
+	UpdatedAt       string           `json:"updatedAt"`
+	Hash            string           `json:"hash"`
 }
 
 type CredentialMetadata struct {
@@ -122,68 +57,9 @@ type Candidate struct {
 	ServiceID         string         `json:"serviceId,omitempty"`
 	SourceFingerprint string         `json:"sourceFingerprint"`
 	Metadata          map[string]any `json:"metadata,omitempty"`
-	MissingFields     []string       `json:"missingFields,omitempty"`
 	CreatedAt         string         `json:"createdAt"`
 	ExpiresAt         string         `json:"expiresAt"`
-	// LocalPath is persisted locally and deliberately hidden from JSON/MCP results.
-	LocalPath string `json:"-"`
-}
-
-type CreateRequest struct {
-	Kind            string         `json:"kind"`
-	CandidateIDs    []string       `json:"candidateIds"`
-	Title           string         `json:"title,omitempty"`
-	Description     string         `json:"description,omitempty"`
-	CredentialRef   string         `json:"credentialRef,omitempty"`
-	Commercial      map[string]any `json:"commercial,omitempty"`
-	Specification   map[string]any `json:"specification,omitempty"`
-	IdempotencyKey  string         `json:"idempotencyKey"`
-	MCPConnectionID string         `json:"mcpConnectionId,omitempty"`
-}
-
-type RunResult struct {
-	ProductID       string            `json:"productId,omitempty"`
-	ListingID       string            `json:"listingId,omitempty"`
-	DraftID         string            `json:"draftId,omitempty"`
-	EndpointID      string            `json:"endpointId,omitempty"`
-	UploadSessionID string            `json:"uploadSessionId,omitempty"`
-	UploadedParts   map[string]string `json:"uploadedParts,omitempty"`
-	ReadyToPublish  bool              `json:"readyToPublish"`
-}
-
-type Run struct {
-	SchemaVersion        string         `json:"schemaVersion"`
-	RunID                string         `json:"runId"`
-	Kind                 string         `json:"kind"`
-	Status               string         `json:"status"`
-	StateVersion         int64          `json:"stateVersion"`
-	Progress             int            `json:"progress"`
-	CurrentStep          string         `json:"currentStep,omitempty"`
-	NextAction           string         `json:"nextAction,omitempty"`
-	MissingFields        []string       `json:"missingFields,omitempty"`
-	Error                string         `json:"error,omitempty"`
-	Request              CreateRequest  `json:"request"`
-	NormalizedSpec       map[string]any `json:"normalizedSpec,omitempty"`
-	SourceFingerprint    string         `json:"sourceFingerprint,omitempty"`
-	PolicyReceipt        PolicyReceipt  `json:"sellerPolicyReceipt"`
-	Result               RunResult      `json:"result"`
-	ReservationExpiresAt string         `json:"reservationExpiresAt,omitempty"`
-	CreatedAt            string         `json:"createdAt"`
-	UpdatedAt            string         `json:"updatedAt"`
-	CompletedAt          string         `json:"completedAt,omitempty"`
-}
-
-type ResumeRequest struct {
-	RunID                string         `json:"runId"`
-	ExpectedStateVersion int64          `json:"expectedStateVersion"`
-	IdempotencyKey       string         `json:"idempotencyKey"`
-	Values               map[string]any `json:"values"`
-}
-
-type CancelRequest struct {
-	RunID                string `json:"runId"`
-	ExpectedStateVersion int64  `json:"expectedStateVersion"`
-	IdempotencyKey       string `json:"idempotencyKey"`
+	LocalPath         string         `json:"-"`
 }
 
 type DiscoverRequest struct {

@@ -1,7 +1,9 @@
 package cache
 
 import (
+	"bytes"
 	"container/list"
+	"strings"
 	"sync"
 	"time"
 
@@ -91,6 +93,36 @@ func (c *Cache) Delete(key string) {
 	}
 	c.mu.Unlock()
 	_ = c.db.Update(func(txn *badger.Txn) error { return txn.Delete([]byte(key)) })
+}
+
+// DeletePrefix removes only keys with the exact byte prefix. It is intended
+// for narrow, versioned migrations rather than general cache eviction.
+func (c *Cache) DeletePrefix(prefix string) error {
+	if c == nil || c.db == nil || prefix == "" {
+		return nil
+	}
+	c.mu.Lock()
+	for key, element := range c.items {
+		if strings.HasPrefix(key, prefix) {
+			c.removeElement(element)
+		}
+	}
+	c.mu.Unlock()
+	return c.db.Update(func(txn *badger.Txn) error {
+		iterator := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer iterator.Close()
+		needle := []byte(prefix)
+		for iterator.Seek(needle); iterator.ValidForPrefix(needle); iterator.Next() {
+			key := iterator.Item().KeyCopy(nil)
+			if !bytes.HasPrefix(key, needle) {
+				break
+			}
+			if err := txn.Delete(key); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (c *Cache) setMemory(key string, value []byte, ttl time.Duration) {

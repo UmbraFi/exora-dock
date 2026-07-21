@@ -1,0 +1,14 @@
+{
+  "name": "exora-random-puppy-card-api",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test server.test.mjs",
+    "prepare": "node prepare-contract.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

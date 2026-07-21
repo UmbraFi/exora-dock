@@ -46,7 +46,7 @@ func TestProbeAndStoreEndpointContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	store := NewStore(c)
+	store := NewStore(c, "account_a")
 	saved, err := store.Save(context.Background(), Config{EndpointID: "epd_test_12345678", LocalBaseURL: server.URL, HealthPath: "/health", ServiceManifest: endpointTestManifest(), LastProbeHealthy: true, TimeoutSeconds: 5, Concurrency: 2})
 	if err != nil {
 		t.Fatalf("save endpoint: %v", err)
@@ -58,13 +58,47 @@ func TestProbeAndStoreEndpointContract(t *testing.T) {
 	if saved.LocalBaseURL != server.URL || len(store.List()) != 1 || saved.ContractSHA256 != status.ContractSHA256 || len(saved.Routes) != 2 {
 		t.Fatalf("stored endpoint contract mismatch: %+v", saved)
 	}
+	otherAccount := NewStore(c, "account_b")
+	if _, ok := otherAccount.Get(saved.EndpointID); ok || len(otherAccount.List()) != 0 {
+		t.Fatal("endpoint from account A was visible to account B")
+	}
+	if _, ok := NewStore(c, "account_a").Get(saved.EndpointID); !ok {
+		t.Fatal("account A endpoint did not persist in its namespace")
+	}
+}
+
+func TestProbeFallsBackToGetWhenHeadIsNotImplementedAs404(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method == http.MethodHead {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	status := Probe(context.Background(), ProbeInput{Config: Config{
+		EndpointID:      "epd_test_head_fallback",
+		LocalBaseURL:    server.URL,
+		HealthPath:      "/health",
+		ServiceManifest: endpointTestManifest(),
+		AuthType:        "none",
+	}})
+	if !status.Healthy || status.Status != http.StatusOK {
+		t.Fatalf("GET fallback did not recover the health probe: %+v", status)
+	}
 }
 
 func endpointTestManifest() map[string]any {
 	limits := map[string]any{"timeoutSeconds": 30, "maxRequestBytes": 1048576, "maxResponseBytes": 1048576, "maxConcurrency": 4}
 	return map[string]any{
 		"interface": map[string]any{"openapi": "3.1.0", "info": map[string]any{"title": "Test", "version": "1"}, "paths": map[string]any{
-			"/run": map[string]any{"post": map[string]any{"operationId": "run", "responses": map[string]any{"200": map[string]any{"description": "ok", "content": map[string]any{"application/json": map[string]any{}}}}}},
+			"/run":    map[string]any{"post": map[string]any{"operationId": "run", "responses": map[string]any{"200": map[string]any{"description": "ok", "content": map[string]any{"application/json": map[string]any{}}}}}},
 			"/events": map[string]any{"get": map[string]any{"operationId": "events", "responses": map[string]any{"200": map[string]any{"description": "events", "content": map[string]any{"text/event-stream": map[string]any{}}}}}},
 		}},
 		"delivery": "dock_tunnel",
@@ -72,6 +106,5 @@ func endpointTestManifest() map[string]any {
 			map[string]any{"operationId": "run", "interaction": "request_response", "sideEffect": false, "idempotent": true, "limits": limits, "meteringCapabilities": []any{"request"}},
 			map[string]any{"operationId": "events", "interaction": "server_stream", "sideEffect": false, "idempotent": true, "limits": limits, "meteringCapabilities": []any{"request"}},
 		},
-		"pricingTemplate": map[string]any{"currency": "USDC", "defaults": []any{map[string]any{"dimension": "request", "rateAtomic": 1, "per": 1, "meterSource": "gateway", "chargeOn": "started"}}},
 	}
 }

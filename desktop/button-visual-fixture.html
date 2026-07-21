@@ -1,20 +1,33 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>if (new URLSearchParams(location.search).get('theme') === 'dark') document.documentElement.dataset.theme = 'dark'</script>
     <link rel="stylesheet" href="/src/styles.css" />
     <link rel="stylesheet" href="/src/styles/v3-shell.css" />
     <link rel="stylesheet" href="/src/styles/v3-api.css" />
+    <link rel="stylesheet" href="/src/styles/v4-api-operation.css" />
     <link rel="stylesheet" href="/src/styles/v3-environment.css" />
     <link rel="stylesheet" href="/src/styles/v3-listings.css" />
+    <link rel="stylesheet" href="/src/styles/settings.css" />
+    <link rel="stylesheet" href="/src/styles/modal.css" />
     <link rel="stylesheet" href="/src/styles/policy.css" />
     <title>Button visual fixture</title>
     <style>
-      body { min-width: 0; min-height: 0; padding: 24px; }
+      html, body { min-width: 0; min-height: 100%; height: auto; overflow: auto !important; }
+      body { padding: 24px; }
       .fixture { display: block; width: min(920px, 100%); }
       .fixture .v3-api-price-component { margin-top: 16px; grid-template-columns: minmax(150px, 1fr) auto; }
       .fixture-listings { margin-top: 28px; }
+      .fixture-progress { margin-top: 28px; }
+      .fixture-qualification { margin-top: 28px; }
+      .fixture-preparation { margin-top: 28px; }
+      .fixture-pricing { margin-top: 28px; }
+      .fixture-readiness { margin-top: 28px; }
+      .fixture-provider-rows { display: grid; gap: 10px; margin-top: 28px; }
+      html:not([data-fixture-modal="confirm"]) .fixture-confirm-layer { display: none; }
+      html:not([data-fixture-modal="identity"]) .fixture-identity-layer { display: none; }
     </style>
   </head>
   <body>
@@ -28,31 +41,134 @@
         <label>Meter<select><option>request</option></select></label>
         <button class="danger ghost" type="button" data-test-remove="price">Remove</button>
       </div>
+      <nav class="fixture-progress v4-operation-progress" role="tablist" aria-label="Operation progress" data-active-step="contract">
+        <button type="button" role="tab" class="active incomplete" data-progress-state="incomplete" data-api-operation-view="contract" aria-selected="true" aria-current="step"><span>1</span><div><strong>Contract validation</strong><small>Upload one contract, run both tests and confirm</small></div></button>
+        <button type="button" role="tab" class="incomplete locked" data-progress-state="incomplete" data-api-operation-view="operations" disabled><span>2</span><div><strong>Operations</strong><small>Publish, monitor and control fulfillment</small></div></button>
+      </nav>
+      <div class="fixture-progress v4-contract-guide-entry">
+        <button type="button" class="v4-contract-guide-trigger" data-open-contract-guide="fixture"><span class="v4-contract-guide-trigger-icon">DOC</span><span><small>SELLER &amp; SELLER AGENT DOCUMENTATION</small><strong>API Contract Guide</strong><em>Schema, naming, OpenAPI, Operations, test fixtures, metering, billing and validation.</em></span><span class="v4-contract-guide-trigger-action">Open guide &gt;</span></button>
+        <div class="v4-provider-detail-actions"><button type="button" class="v4-provider-uid-copy"><span class="v4-provider-uid-copy-text"><small>API UID</small><code>api_01j5n6a8stable000000000001</code></span><span>Copy</span></button></div>
+      </div>
+      <section class="fixture-qualification v4-contract-workspace">
+        <button type="button" class="v4-contract-dropzone" data-api-contract-drop="fixture"><span class="v4-contract-dropzone-icon">{ }</span><span><strong>Drop one API Contract JSON here</strong><small>or choose a local <code>exora.api-contract.v1</code> file · JSON only</small><i>Parsing, normalization and schema checks start immediately.</i></span><em aria-hidden="true">+</em></button>
+        <footer class="v4-operation-action-bar"><span class="v4-operation-action-copy"><strong>Contract ready to test</strong><small>One action runs integration validation first, then billing validation.</small></span><div class="v4-operation-action-buttons"><button type="button" class="danger ghost">Remove draft</button><button type="button">Test contract</button></div></footer>
+      </section>
+      <section class="fixture-qualification v4-operation-qualification is-pending" data-api-qualification-card data-qualification-state="pending" hidden>
+        <header class="v4-operation-qualification-head"><div><span>TEST &amp; CAPABILITY</span><strong>Qualify, then confirm this Operation</strong><small>Test evidence and owner confirmation bind to the current preparation draft.</small></div><em>Owner review</em></header>
+        <div class="v4-operation-qualification-summary"><strong>1/2</strong><span><b>checks ready</b><small>Complete both checks to unlock Pricing.</small></span></div>
+        <div class="v4-operation-qualification-checks"><div class="passed" data-workflow-step="1"><span>✓</span><div><strong>Qualification</strong><small>Runtime and smoke tests passed for the current hash.</small></div></div><div class="current" data-workflow-step="2"><span>2</span><div><strong>Capability</strong><small>Review the test evidence and confirm this capability.</small></div></div></div>
+        <footer class="v4-operation-action-bar" data-fixture-step="test"><span class="v4-operation-action-copy"><strong>Owner capability review</strong><small>Qualification passed. Confirm that the tested behavior matches this Operation.</small></span><div class="v4-operation-action-buttons"><button type="button" class="danger ghost"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" fill="none" stroke="currentColor"/></svg>Remove draft</button><button type="button">Confirm capability</button></div></footer>
+      </section>
+      <form class="fixture-preparation v4-integration-create v4-api-manual-editor" hidden>
+        <div class="v4-api-editor-grid">
+          <section class="v4-api-editor-section v4-api-editor-identity"><header><span>01</span><div><strong>API identity</strong><small>Buyer-facing name and purpose.</small></div></header><div><label>API title<textarea class="v4-api-title-field">Document intelligence</textarea></label><label>Description<textarea>Summarize and classify submitted documents.</textarea></label></div></section>
+          <section class="v4-api-editor-section"><header><span>02</span><div><strong>Shared runtime</strong><small>Shared by every Operation.</small></div></header><label>Runtime JSON<textarea class="v4-api-code-field">{"healthPath":"/health"}</textarea></label></section>
+          <section class="v4-api-editor-section"><header><span>03</span><div><strong>OpenAPI contract</strong><small>The authoritative OpenAPI 3.1 interface.</small></div></header><label>OpenAPI 3.1 JSON<textarea class="v4-api-code-field">{"openapi":"3.1.0","paths":{"/summarize":{}}}</textarea></label></section>
+          <section class="v4-api-editor-section v4-api-editor-operations"><header><span>04</span><div><strong>Operations</strong><small>Independently reviewable call units.</small></div></header><label>Operations JSON array<textarea class="v4-api-code-field">[{"operationId":"summarizeText"}]</textarea></label></section>
+        </div>
+        <footer class="v4-operation-action-bar" data-fixture-step="preparation"><span class="v4-operation-action-copy"><strong>Preparation draft</strong><small>All fields stay editable before and after submission.</small></span><div class="v4-operation-action-buttons"><button type="button" class="danger ghost"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" fill="none" stroke="currentColor"/></svg>Remove draft</button><button type="submit">Save preparation draft</button></div></footer>
+      </form>
+      <form class="fixture-pricing v4-operation-pricing-form" hidden>
+        <header><div><span>OPERATION PRICING</span><strong>Build one bounded formula for this tested Operation</strong></div><em>Owner confirmation required</em></header>
+        <section class="v4-price-template-section"><header><div><strong>Start from a template</strong><small>Every template produces the same safe formula contract.</small></div></header><div class="v4-price-template-grid"><button type="button"><strong>Fixed call</strong><small>One price for a completed call.</small></button><button type="button" class="active"><strong>LLM tokens</strong><small>Base plus input and output tokens.</small></button><button type="button"><strong>Time based</strong><small>Base plus execution time.</small></button><button type="button"><strong>Streaming</strong><small>Output usage and stream duration.</small></button><button type="button"><strong>Async job</strong><small>Startup, runtime and output.</small></button><button type="button"><strong>Document &amp; media</strong><small>Pages, images, audio or bytes.</small></button><button type="button"><strong>Batch &amp; records</strong><small>Records, items or batches.</small></button><button type="button"><strong>Custom formula</strong><small>Use the safe pricing DSL.</small></button></div></section>
+        <section class="v4-price-rule is-valid"><header><div><strong>Pricing formula</strong><small>USDC · verified inputs only · capped per invocation</small></div><button type="button">Open Exora Pricing Book</button></header><div class="v4-price-rule-grid"><label>Maximum per invocation (USDC)<input value="1.00" /></label><div class="v4-price-formula-tools"><button type="button">Format formula</button><span>Preview valid</span></div></div><div class="v4-price-variable-chips"><button type="button">input_tokens</button><button type="button">output_tokens</button><button type="button">delivered</button></div><textarea>input_tokens * 1.50 / 1000000 + output_tokens * 3.00 / 1000000 + delivered * 0.02</textarea><p class="v4-price-formula-help">The formula returns USDC. delivered is 1 only for successful delivery.</p></section>
+        <section class="v4-price-preview"><header><div><strong>Preview</strong><small>Local estimate only; the Sandbox Ledger creates evidence.</small></div><em>PREVIEW</em></header><div class="v4-price-sample-grid"><label>input tokens<input type="number" value="1000" /></label><label>output tokens<input type="number" value="2000" /></label></div><div class="v4-price-preview-results"><span><small>Successful delivery</small><strong>0.0375 USDC</strong></span><span><small>Cancel after execution</small><strong>0.0175 USDC</strong></span><span><small>Invocation maximum</small><strong>1 USDC</strong></span></div></section>
+        <footer class="v4-operation-action-bar" data-fixture-step="pricing"><span class="v4-operation-action-copy"><strong>Formula pricing</strong><small>The confirmed formula, cap and current Operation hash are synchronized to Cloud.</small></span><div class="v4-operation-action-buttons"><button type="button" class="danger ghost"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" fill="none" stroke="currentColor"/></svg>Remove draft</button><button type="submit">Confirm formula</button></div></footer>
+      </form>
+      <section class="fixture-provider-rows v3-listing-list v4-api-draft-list" aria-label="Provider API row states">
+        <article class="v3-listing-application v4-provider-api-row expanded">
+          <button class="v3-listing-summary" type="button">
+            <span class="v3-listing-source-icon source-api">&lt;/&gt;</span>
+            <span class="v3-listing-primary"><strong>Untitled API</strong><small><em class="v3-source-badge source-api">API Draft</em><span>Local API</span></small></span>
+            <span class="v3-listing-summary-metrics v4-provider-summary-metrics"><span><small>UID</small><strong><code title="api_01j5n6a8stable000000000001">api_01j5n6a8stabl…00000001</code></strong></span><span><small>Progress</small><strong>0/2 complete</strong></span></span>
+            <span class="v3-listing-state-pill tone-pending"><i></i>Contract required</span><span class="v3-listing-chevron">›</span>
+          </button>
+          <div class="v3-listing-application-body v4-api-editor-body">
+            <div class="v3-listing-detail-head v4-api-editor-head v4-provider-detail-head">
+              <div><small>LOCAL PREPARATION DRAFT</small><strong>Edit the complete API definition</strong></div>
+              <div class="v4-provider-detail-actions">
+                <button type="button" class="v4-provider-uid-copy"><code>api_01j5n6a8stable000000000001</code><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor"/><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3" fill="none" stroke="currentColor"/></svg></button>
+              </div>
+            </div>
+            <footer class="v4-operation-action-bar"><span class="v4-operation-action-copy"><strong>Preparation draft</strong><small>All fields stay editable. Saving changes resets later steps.</small></span><div class="v4-operation-action-buttons"><button type="button" class="danger ghost"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" fill="none" stroke="currentColor"/></svg>Remove draft</button><button type="button">Save preparation draft</button></div></footer>
+          </div>
+        </article>
+        <article class="v3-listing-application expanded">
+          <button class="v3-listing-summary" type="button">
+            <span class="v3-listing-source-icon source-api">&lt;/&gt;</span>
+            <span class="v3-listing-primary"><strong>Summarize Text</strong><small><em class="v3-source-badge source-api">Operation</em><span>Text Summary API</span><span>request response</span></small></span>
+            <span class="v3-listing-summary-metrics v4-provider-summary-metrics"><span><small>UID</small><strong><code title="api_01j5n6a8stable000000000001">api_01j5n6a8stabl…00000001</code></strong></span><span><small>Progress</small><strong>1/2 complete</strong></span></span>
+            <span class="v3-listing-state-pill tone-pending"><i></i>Ready to publish</span><span class="v3-listing-chevron">›</span>
+          </button>
+          <div class="v3-listing-application-body v4-api-editor-body">
+            <div class="v3-listing-detail-head v4-api-editor-head v4-provider-detail-head">
+              <div><small>API DRAFT · PER-OPERATION WORKFLOW</small><strong>Generate a concise summary from submitted text.</strong></div>
+              <div class="v4-provider-detail-actions">
+                <button type="button" class="v4-provider-uid-copy"><code>api_84f8c7398a58581f5118c0ee</code><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor"/><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3" fill="none" stroke="currentColor"/></svg></button>
+              </div>
+            </div>
+            <footer class="v4-operation-action-bar"><span class="v4-operation-action-copy"><strong>Owner capability review</strong><small>Review the passing test evidence and confirm this Operation capability.</small></span><div class="v4-operation-action-buttons"><button type="button" class="danger ghost"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" fill="none" stroke="currentColor"/></svg>Remove draft</button><button type="button">Confirm capability</button></div></footer>
+          </div>
+        </article>
+        <article class="v3-listing-application">
+          <button class="v3-listing-summary" type="button">
+            <span class="v3-listing-source-icon source-api">&lt;/&gt;</span>
+            <span class="v3-listing-primary"><strong>Classify Document</strong><small><em class="v3-source-badge source-api">Operation</em><span>Document Intelligence API</span><span>request response</span></small></span>
+            <span class="v3-listing-summary-metrics v4-provider-summary-metrics"><span><small>UID</small><strong><code title="api_01j5n6a8stable000000000002">api_01j5n6a8stabl…00000002</code></strong></span><span><small>Progress</small><strong>2/2 complete</strong></span></span>
+            <span class="v3-listing-state-pill tone-ready"><i></i>Live</span><span class="v3-listing-chevron">›</span>
+          </button>
+        </article>
+      </section>
       <section class="fixture-listings v3-listing-applications">
         <article class="v3-listing-application source-vm expanded">
           <button class="v3-listing-summary" type="button">
-            <span class="v3-listing-source-icon">VM</span>
+            <span class="v3-listing-source-icon source-api">&lt;/&gt;</span>
             <span class="v3-listing-primary"><strong>E2E Windows WSL2 VM</strong><small><em class="v3-source-badge">VM</em><span>AMD Ryzen 5 7500F · 6 cores · 32 GiB</span></small></span>
             <span class="v3-listing-summary-metrics"><span><small>Price</small><strong>$0.01 / minute</strong></span><span><small>Readiness</small><strong>2/2 checks</strong></span></span>
             <span class="v3-listing-state-slot" aria-hidden="true"></span>
             <span class="v3-listing-chevron">›</span>
           </button>
-          <button type="button" class="v3-listing-state-pill v3-listing-lifecycle-switch tone-published is-listed" role="switch" aria-checked="true"><i></i>Live</button>
+          <button type="button" class="v3-listing-state-pill v3-listing-lifecycle-switch tone-published is-listed" role="switch" aria-checked="true"><i></i><span>Live</span></button>
           <div class="v3-listing-application-body">
             <div class="v3-listing-actions"><span><strong>Owner controls</strong><small>Ready for purchase via Exora Terminal and WebRTC transfer.</small></span><button class="ghost" type="button">Edit terms</button><button class="danger ghost" type="button">Delete listing</button></div>
           </div>
         </article>
         <article class="v3-listing-application source-vm">
           <button class="v3-listing-summary" type="button">
-            <span class="v3-listing-source-icon">VM</span>
+            <span class="v3-listing-source-icon source-api">&lt;/&gt;</span>
             <span class="v3-listing-primary"><strong>Performance review required</strong><small><em class="v3-source-badge">VM</em><span>Current offer cannot be published</span></small></span>
             <span class="v3-listing-summary-metrics"><span><small>Price</small><strong>$0.02 / minute</strong></span><span><small>Readiness</small><strong>1/2 checks</strong></span></span>
             <span class="v3-listing-state-slot" aria-hidden="true"></span>
             <span class="v3-listing-chevron">›</span>
           </button>
-          <button type="button" class="v3-listing-state-pill v3-listing-lifecycle-switch tone-attention" role="switch" aria-checked="false" disabled><i></i>Performance degraded</button>
+          <button type="button" class="v3-listing-state-pill v3-listing-lifecycle-switch tone-attention" role="switch" aria-checked="false" disabled><i></i><span>Performance degraded</span></button>
         </article>
       </section>
     </main>
+    <div class="global-modal-layer fixture-confirm-layer">
+      <div class="app-modal app-confirm-modal" aria-hidden="false">
+        <button class="app-modal-scrim" type="button" aria-label="Cancel confirmation"></button>
+        <section class="app-modal-panel app-confirm-panel" role="alertdialog" aria-modal="true" aria-labelledby="fixture-confirm-title" aria-describedby="fixture-confirm-message">
+          <header class="app-modal-head"><div class="app-modal-head-copy"><span class="app-modal-head-mark app-confirm-mark" aria-hidden="true">!</span><div><p class="eyebrow">Provider API</p><h2 id="fixture-confirm-title">Remove API draft?</h2><span>Untitled API</span></div></div><button class="app-modal-close" type="button" aria-label="Close confirmation">×</button></header>
+          <div class="app-confirm-body"><p id="fixture-confirm-message">The synchronized draft api_84f8c7398a58581f5118c0ee will be removed from this device and Exora Cloud.</p><div class="app-confirm-impact"><span aria-hidden="true">!</span><span>Test evidence, capability confirmation, and pricing attached to this draft will also be deleted. This action cannot be undone.</span></div></div>
+          <footer class="app-confirm-actions"><button class="app-setting-button outline" type="button">Cancel</button><button class="app-setting-button danger" type="button">Remove draft</button></footer>
+        </section>
+      </div>
+    </div>
+    <div class="global-modal-layer fixture-identity-layer">
+      <div class="app-modal v4-api-identity-modal" aria-hidden="false">
+        <button class="app-modal-scrim" type="button" aria-label="Close API identity editor"></button>
+        <section class="app-modal-panel v4-api-identity-panel" role="dialog" aria-modal="true" aria-labelledby="fixture-identity-title" aria-describedby="fixture-identity-description">
+          <header class="app-modal-head"><div class="app-modal-head-copy"><span class="app-modal-head-mark" aria-hidden="true">&lt;/&gt;</span><div><p class="eyebrow">API DRAFT IDENTITY</p><h2 id="fixture-identity-title">Edit API name and icon</h2><span id="fixture-identity-description">Customize how this Draft appears throughout your Provider workspace.</span></div></div><button type="button" class="app-modal-close" aria-label="Close API identity editor">×</button></header>
+          <form class="v4-api-identity-editor">
+            <div class="v4-api-identity-preview" aria-hidden="true">&lt;/&gt;</div>
+            <label class="v4-api-identity-name"><span>API name</span><input type="text" name="displayName" value="Untitled API" maxlength="160" required/><small>Shown on this Draft and its Operation rows.</small></label>
+            <fieldset class="v4-api-icon-picker"><legend>Choose an icon</legend><button type="button" class="v4-api-icon-choice selected" aria-pressed="true">&lt;/&gt;<span>Code</span></button><button type="button" class="v4-api-icon-choice" aria-pressed="false">›_<span>Terminal</span></button><button type="button" class="v4-api-icon-choice" aria-pressed="false">◇<span>Agent</span></button><button type="button" class="v4-api-icon-choice" aria-pressed="false">▤<span>Data</span></button><button type="button" class="v4-api-icon-choice" aria-pressed="false">◎<span>Web</span></button><button type="button" class="v4-api-icon-choice" aria-pressed="false">☁<span>Cloud</span></button><button type="button" class="v4-api-icon-choice" aria-pressed="false">✦<span>AI</span></button></fieldset>
+            <footer class="v4-api-identity-actions"><button type="button" class="app-setting-button outline">Cancel</button><button type="submit" class="app-setting-button primary v4-api-identity-save">Save changes</button></footer>
+          </form>
+        </section>
+      </div>
+    </div>
+    <script>{ const modal = new URLSearchParams(location.search).get('modal'); if (modal === 'confirm' || modal === 'identity') document.documentElement.dataset.fixtureModal = modal }</script>
   </body>
 </html>

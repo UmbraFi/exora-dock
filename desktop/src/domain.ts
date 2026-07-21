@@ -15,6 +15,32 @@ export type AppStatus = {
   message: string
 }
 
+export type CapabilityValidationIssue = {
+  operationId?: string
+  fieldPath: string
+  errorCode: string
+  message: string
+}
+
+export function capabilityValidationIssues(error: unknown): CapabilityValidationIssue[] {
+  const text = String(error)
+  const jsonStart = text.indexOf('{')
+  if (jsonStart < 0) return []
+  try {
+    const parsed = JSON.parse(text.slice(jsonStart))
+    if (!Array.isArray(parsed?.issues)) return []
+    return parsed.issues.filter((value: unknown): value is CapabilityValidationIssue => {
+      if (!value || typeof value !== 'object') return false
+      const issue = value as Record<string, unknown>
+      return typeof issue.fieldPath === 'string'
+        && typeof issue.errorCode === 'string'
+        && typeof issue.message === 'string'
+    })
+  } catch {
+    return []
+  }
+}
+
 export function humanizeError(error: unknown) {
   let text = String(error)
   for (let i = 0; i < 4; i += 1) {
@@ -30,6 +56,7 @@ export function humanizeError(error: unknown) {
   if (jsonStart >= 0) {
     try {
       const parsed = JSON.parse(text.slice(jsonStart))
+      if (parsed?.statusReason) return String(parsed.statusReason)
       if (parsed?.error) return String(parsed.error)
     } catch {
       // Fall through to plain text.

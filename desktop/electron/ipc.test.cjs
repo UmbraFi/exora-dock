@@ -9,17 +9,17 @@ test('IPC authorization runs before a supported command handler', async () => {
 
   registerIpcHandlers(ipcMain, {
     provider: {
-      provider_vm_probe: async () => { handled = true },
+      provider_api_probe: async () => { handled = true },
     },
   }, {
     authorizeCommand: (command) => {
-      assert.equal(command, 'provider_vm_probe')
+      assert.equal(command, 'provider_api_probe')
       throw new Error('unsupported platform command')
     },
   })
 
   await assert.rejects(
-    invokeHandler({}, 'provider_vm_probe', {}),
+    invokeHandler({}, 'provider_api_probe', {}),
     /unsupported platform command/,
   )
   assert.equal(handled, false)

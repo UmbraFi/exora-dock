@@ -1,0 +1,198 @@
+{
+  "schemaVersion": "exora.api.v3",
+  "title": "Virtual Text Summary API",
+  "description": "Summarize submitted text through a local deterministic test API. This virtual API is intended to exercise Exora integration validation, billing validation, and publication.",
+  "deliveryMode": "local_dock",
+  "runtime": {
+    "publicBaseUrl": "http://127.0.0.1:3000",
+    "healthPath": "/health"
+  },
+  "interface": {
+    "openapi": "3.1.0",
+    "info": {
+      "title": "Virtual Text Summary API",
+      "version": "1.0.0",
+      "description": "Local deterministic test service for the Exora provider publishing workflow."
+    },
+    "paths": {
+      "/summarize": {
+        "post": {
+          "operationId": "summarize_text",
+          "summary": "Summarize submitted text",
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["text"],
+                  "properties": {
+                    "text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 100000
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "Summary generated",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["summary", "usage"],
+                    "properties": {
+                      "summary": {
+                        "type": "string"
+                      },
+                      "usage": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["inputCharacters"],
+                        "properties": {
+                          "inputCharacters": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 100000
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "400": {
+              "description": "Invalid text input",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["error", "message"],
+                    "properties": {
+                      "error": {
+                        "const": "invalid_text"
+                      },
+                      "message": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "operations": [
+    {
+      "schemaVersion": "exora.operation.v3",
+      "operationId": "summarize_text",
+      "title": "Summarize Text",
+      "description": "Accept non-empty text and return a concise summary. The summary value may vary; validation checks the declared response protocol and format.",
+      "enabled": true,
+      "usage": {
+        "useCases": [
+          "Condense a paragraph for a preview.",
+          "Exercise a complete local Provider publishing workflow."
+        ],
+        "instructions": [
+          "Send UTF-8 source text in the JSON text field.",
+          "The text field must contain at least one non-whitespace character.",
+          "Read the generated summary from response.summary."
+        ]
+      },
+      "api": {
+        "method": "POST",
+        "path": "/summarize",
+        "openapiOperationRef": "#/paths/~1summarize/post",
+        "errors": [
+          {
+            "code": "invalid_text",
+            "httpStatus": 400,
+            "description": "The text field is missing, empty, or whitespace-only.",
+            "retryable": false
+          }
+        ]
+      },
+      "behavior": {
+        "sideEffect": {
+          "present": false,
+          "description": "The call does not modify external state.",
+          "reversible": false,
+          "testMode": "none"
+        },
+        "idempotency": {
+          "supported": true,
+          "retentionSeconds": 86400
+        }
+      },
+      "interaction": {
+        "mode": "request_response"
+      },
+      "limits": {
+        "timeoutSeconds": 30,
+        "maximumRequestBytes": 1048576,
+        "maximumResponseBytes": 1048576,
+        "maximumConcurrency": 4
+      },
+      "metering": {
+        "capabilities": [
+          {
+            "dimension": "input_bytes",
+            "unit": "byte",
+            "description": "Request body bytes measured by Exora Cloud.",
+            "source": "cloud",
+            "maximumPerInvocation": 1048576
+          }
+        ]
+      },
+      "qualification": {
+        "fixtures": [
+          {
+            "id": "summary_success",
+            "kind": "success",
+            "description": "A valid request whose summary text may vary while its response shape remains stable.",
+            "request": {
+              "body": {
+                "text": "Exora connects agents to paid API operations while validating contracts and settlement behavior."
+              }
+            },
+            "expectedProtocol": {
+              "status": 200,
+              "mediaType": "application/json",
+              "openapiResponseRef": "#/paths/~1summarize/post/responses/200"
+            },
+            "safeToRepeat": true
+          },
+          {
+            "id": "summary_invalid_text",
+            "kind": "business_error",
+            "errorCode": "invalid_text",
+            "description": "Whitespace passes the input type and length schema but is rejected as a declared business error.",
+            "request": {
+              "body": {
+                "text": "   "
+              }
+            },
+            "expectedProtocol": {
+              "status": 400,
+              "mediaType": "application/json",
+              "openapiResponseRef": "#/paths/~1summarize/post/responses/400"
+            },
+            "safeToRepeat": true
+          }
+        ]
+      }
+    }
+  ]
+}

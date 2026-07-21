@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/exora-dock/exora-dock/internal/accountscope"
 )
 
 type credentialRecord struct {
@@ -32,8 +34,9 @@ type CredentialVault struct {
 	mu      sync.Mutex
 }
 
-func NewCredentialVault(dataDir string) *CredentialVault {
-	root := filepath.Join(dataDir, "seller-automation")
+func NewCredentialVault(dataDir, accountID string) *CredentialVault {
+	accountID = strings.TrimSpace(accountID)
+	root := filepath.Join(dataDir, "seller-automation", "accounts", accountscope.Namespace(accountID))
 	return &CredentialVault{path: filepath.Join(root, "credentials.json"), keyPath: filepath.Join(root, "credentials.key")}
 }
 
@@ -45,7 +48,7 @@ func (v *CredentialVault) Put(meta CredentialMetadata, secret string) (Credentia
 		return CredentialMetadata{}, fmt.Errorf("credential secret is required")
 	}
 	meta.AuthType = strings.ToLower(strings.TrimSpace(meta.AuthType))
-	allowed := map[string]bool{"none": true, "bearer": true, "basic": true, "api_key": true, "header_api_key": true, "query_api_key": true, "cookie_api_key": true, "oauth2_client_credentials": true, "mtls": true}
+	allowed := map[string]bool{"none": true, "bearer": true, "basic": true, "api_key": true, "header_api_key": true, "oauth2_client_credentials": true}
 	if !allowed[meta.AuthType] {
 		return CredentialMetadata{}, fmt.Errorf("unsupported authType")
 	}
