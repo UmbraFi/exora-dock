@@ -31,7 +31,6 @@ function registerIpcHandlers(ipcMain, groups, options = {}) {
         error.code = 'IPC_COMMAND_TIMEOUT'
         reject(error)
       }, timeoutMs)
-      timer.unref?.()
     })
     try { return await Promise.race([operation, deadline]) }
     finally { clearTimeout(timer) }

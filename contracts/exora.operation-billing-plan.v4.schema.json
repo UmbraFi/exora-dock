@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://exora.dev/contracts/exora.operation-billing-plan.v4.schema.json",
+  "title": "Exora Operation Billing Plan v4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "apiId", "operationId", "operationSha256", "validationReceiptSha256", "pricingSha256", "formulaAstSha256", "planSha256", "scenarios"],
+  "properties": {
+    "schemaVersion": { "const": "exora.operation-billing-plan.v4" },
+    "apiId": { "type": "string" },
+    "operationId": { "type": "string" },
+    "operationSha256": { "type": "string" },
+    "validationReceiptSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "pricingSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "formulaAstSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "planSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "scenarios": { "type": "array", "minItems": 1, "items": { "type": "object" } }
+  }
+}

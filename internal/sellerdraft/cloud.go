@@ -21,6 +21,36 @@ type cloudClient struct {
 	client    *http.Client
 }
 
+type cloudHTTPError struct {
+	Method     string
+	Path       string
+	StatusCode int
+	ErrorCode  string
+	Message    string
+}
+
+func (e *cloudHTTPError) Error() string {
+	return fmt.Sprintf("Cloud %s %s failed: %s", e.Method, e.Path, e.Message)
+}
+
+func isUnregisteredCloudRoute(err error) bool {
+	var cloudErr *cloudHTTPError
+	if !errors.As(err, &cloudErr) || cloudErr.StatusCode != http.StatusNotFound || cloudErr.ErrorCode != "" {
+		return false
+	}
+	message := strings.ToLower(strings.TrimSpace(cloudErr.Message))
+	return message == strings.ToLower(http.StatusText(http.StatusNotFound)) || strings.Contains(message, "page not found")
+}
+
+func isExistingCloudAPIConflict(err error) bool {
+	var cloudErr *cloudHTTPError
+	if !errors.As(err, &cloudErr) || cloudErr.StatusCode != http.StatusConflict {
+		return false
+	}
+	message := strings.ToLower(strings.TrimSpace(cloudErr.Message))
+	return cloudErr.ErrorCode == "api_id_conflict" || strings.Contains(message, "apiid conflicts with an existing api")
+}
+
 func newCloudClient(baseURL, tokenPath string, client *http.Client) cloudClient {
 	if client == nil {
 		client = &http.Client{Timeout: 45 * time.Second}
@@ -69,7 +99,7 @@ func (c cloudClient) JSON(ctx context.Context, method, path string, body any, ou
 		var payload map[string]any
 		_ = json.Unmarshal(raw, &payload)
 		message := firstNonEmpty(stringValue(payload, "error"), strings.TrimSpace(string(raw)), response.Status)
-		return fmt.Errorf("Cloud %s %s failed: %s", method, path, message)
+		return &cloudHTTPError{Method: method, Path: path, StatusCode: response.StatusCode, ErrorCode: stringValue(payload, "errorCode"), Message: message}
 	}
 	if out != nil && len(bytes.TrimSpace(raw)) != 0 {
 		if err := json.Unmarshal(raw, out); err != nil {

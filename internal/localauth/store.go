@@ -19,7 +19,7 @@ type Scope int
 const (
 	ScopeNone Scope = iota
 	ScopeAgent
-	ScopeProviderAgent
+	ScopeIntegrationAgent
 	ScopeOwner
 )
 
@@ -47,7 +47,14 @@ const (
 	DefaultSessionTTL  = 24 * time.Hour
 )
 
-var DefaultAgentScopes = []string{"market.read", "compute.use", "resources.use", "api.invoke", "account.read"}
+var DefaultAgentScopes = []string{"market.read", "api.invoke", "account.read", "provider.integrate"}
+
+var allowedAgentScopes = map[string]bool{
+	"market.read":        true,
+	"api.invoke":         true,
+	"account.read":       true,
+	"provider.integrate": true,
+}
 
 type Session struct {
 	SessionID     string    `json:"sessionId"`
@@ -114,7 +121,12 @@ func LoadOrCreate(path string) (*Store, error) {
 func newStore(path string, tokens Tokens) *Store {
 	scopes := append([]string(nil), DefaultAgentScopes...)
 	if tokens.SessionPolicyConfigured {
-		scopes = append([]string(nil), tokens.DefaultSessionScopes...)
+		scopes = make([]string, 0, len(tokens.DefaultSessionScopes))
+		for _, scope := range tokens.DefaultSessionScopes {
+			if allowedAgentScopes[scope] {
+				scopes = append(scopes, scope)
+			}
+		}
 	}
 	return &Store{path: path, tokens: tokens, sessions: map[string]Session{}, now: time.Now, defaultScopes: scopes}
 }
@@ -163,12 +175,11 @@ func (s *Store) CreateSession(clientName string, scopes []string) (Session, stri
 		scopes = append([]string(nil), s.defaultScopes...)
 		s.mu.Unlock()
 	}
-	allowed := map[string]bool{"market.read": true, "compute.use": true, "resources.use": true, "api.invoke": true, "account.read": true, "seller.draft": true}
 	seen := map[string]bool{}
 	normalized := make([]string, 0, len(scopes))
 	for _, scope := range scopes {
 		scope = strings.TrimSpace(scope)
-		if !allowed[scope] {
+		if !allowedAgentScopes[scope] {
 			return Session{}, "", fmt.Errorf("unsupported Agent scope %q", scope)
 		}
 		if !seen[scope] {
@@ -202,12 +213,11 @@ func (s *Store) SessionPolicy() []string {
 }
 
 func (s *Store) SetSessionPolicy(scopes []string) error {
-	allowed := map[string]bool{"market.read": true, "compute.use": true, "resources.use": true, "api.invoke": true, "account.read": true, "seller.draft": true}
 	seen := map[string]bool{}
 	normalized := []string{}
 	for _, scope := range scopes {
 		scope = strings.TrimSpace(scope)
-		if !allowed[scope] {
+		if !allowedAgentScopes[scope] {
 			return fmt.Errorf("unsupported Agent scope %q", scope)
 		}
 		if !seen[scope] {

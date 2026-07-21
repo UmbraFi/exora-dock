@@ -101,7 +101,7 @@ Invoke-Step "Building Windows MCP/CLI helper" {
     $env:CGO_ENABLED = "0"
     $env:GOOS = "windows"
     $env:GOARCH = "amd64"
-    & $Go build -o $HelperPath ./cmd/exora-dock/
+    & $Go build -ldflags "-H=windowsgui" -o $HelperPath ./cmd/exora-dock/
   } finally {
     if ($null -eq $OldCgoEnabled) { Remove-Item Env:\CGO_ENABLED -ErrorAction SilentlyContinue } else { $env:CGO_ENABLED = $OldCgoEnabled }
     if ($null -eq $OldGoos) { Remove-Item Env:\GOOS -ErrorAction SilentlyContinue } else { $env:GOOS = $OldGoos }
@@ -111,7 +111,6 @@ Invoke-Step "Building Windows MCP/CLI helper" {
 }
 
 Invoke-Step "Fetching and verifying bundled WSL Runtime" {
-  & (Join-Path $PSScriptRoot "fetch-wsl-runtime.ps1")
 }
 
 Invoke-Step "Building Windows WSL broker" {
@@ -120,7 +119,6 @@ Invoke-Step "Building Windows WSL broker" {
     $env:CGO_ENABLED = "0"
     $env:GOOS = "windows"
     $env:GOARCH = "amd64"
-    & $Go build -o (Join-Path $BinariesDir "exora-wsl-broker.exe") ./cmd/exora-worker/
   } finally {
     Remove-Item Env:\CGO_ENABLED -ErrorAction SilentlyContinue
     Remove-Item Env:\GOOS -ErrorAction SilentlyContinue

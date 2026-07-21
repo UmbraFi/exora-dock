@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://exora.dev/contracts/exora.api-contract.v1.schema.json",
+  "title": "Exora Seller API Contract v1",
+  "description": "The single seller-authored source for API capability, safe test fixtures and automated billing rules.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "capability", "billing"],
+  "properties": {
+    "schemaVersion": { "const": "exora.api-contract.v1" },
+    "apiId": { "type": "string", "pattern": "^api_[A-Za-z0-9_-]+$" },
+    "capability": { "$ref": "./exora.api.v3.schema.json" },
+    "billing": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operationId", "currency", "chargeFormula", "maximumChargePerInvocationAtomic", "settlementPolicy"],
+        "properties": {
+          "operationId": { "type": "string", "minLength": 1 },
+          "currency": { "const": "USDC" },
+          "chargeFormula": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["language", "expression"],
+            "properties": {
+              "language": { "const": "exora.price-formula.v4" },
+              "expression": { "type": "string", "minLength": 1, "maxLength": 1024 }
+            }
+          },
+          "maximumChargePerInvocationAtomic": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+          "settlementPolicy": { "const": "exora.operation-settlement.v4" }
+        }
+      }
+    }
+  }
+}

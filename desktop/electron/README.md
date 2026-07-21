@@ -27,7 +27,7 @@ The renderer calls one channel, `exora:invoke`, and passes a command string.
 - `cloudIdentity`: Cloud session, registration, recovery, PIN, and logout.
 - `dockRuntime`: daemon lifecycle, health, logs, MCP prompt/config strings.
 - `persistence`: v2 application preferences and locale only.
-- `v3Market`: Listings, VM, Resources, Endpoint, API Bridge, and activity history.
+- `apiMarket`: API Listings, staged Integration Sessions, invocations, and activity history.
 - `walletAndSecurity`: platform wallet, withdrawal, and security status.
 
 When adding a command, place the handler near its domain logic in `main.cjs`, add

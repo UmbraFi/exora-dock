@@ -1,6 +1,6 @@
 {
   "name": "exora-dock-desktop",
-  "version": "0.1.0-preview.2",
+  "version": "0.1.0-preview.3",
   "description": "Desktop agent workstation for Exora Dock",
   "author": "Exora",
   "homepage": "https://exoradock.com/",
@@ -11,11 +11,12 @@
   "scripts": {
     "predev": "npm run build:daemon",
     "build:daemon": "node ../scripts/build-desktop-daemon.cjs",
-    "dev": "concurrently --restart-tries -1 --restart-after 1000 --names frontend,electron \"npm run dev:frontend\" \"wait-on http://127.0.0.1:1420 && electron .\"",
+    "dev": "concurrently --restart-tries -1 --restart-after 1000 --names frontend,electron \"npm run dev:frontend\" \"npm run dev:electron\"",
     "preview:desktop": "npm run dev",
     "dev:frontend": "vite --host 127.0.0.1 --port 1420",
+    "dev:electron": "wait-on http://127.0.0.1:1420 && electron . --dev-keep-visible",
     "build:frontend": "tsc && vite build",
-    "build:electron": "node --test electron/api-materials.test.cjs electron/button-audit.test.cjs electron/app-settings.test.cjs electron/cloud-auth.test.cjs electron/resource-files.test.cjs electron/legacy-frontend-cleanup.test.cjs electron/platform-capabilities.test.cjs electron/release-manifest.test.cjs electron/ipc.test.cjs electron/network-timeout.test.cjs electron/mcp-connectivity.test.cjs && node electron/check.cjs",
+    "build:electron": "node --test electron/account-activity-scope.test.cjs electron/agent-mcp-registry.test.cjs electron/button-audit.test.cjs electron/app-settings.test.cjs electron/cloud-auth.test.cjs electron/legacy-frontend-cleanup.test.cjs electron/release-manifest.test.cjs electron/ipc.test.cjs electron/network-timeout.test.cjs electron/mcp-connectivity.test.cjs electron/pricing-formula.test.cjs electron/ui-system.test.cjs && node electron/check.cjs",
     "build": "npm run build:frontend && npm run build:electron && electron-builder",
     "build:dmg": "npm run build:frontend && npm run build:electron && electron-builder --mac dmg",
     "build:mac": "npm run build:frontend && npm run build:electron && electron-builder --mac dmg zip --arm64 --publish never -c.mac.identity=- -c.mac.hardenedRuntime=false",
@@ -25,8 +26,7 @@
     "build:win-docker": "powershell -ExecutionPolicy Bypass -File ../scripts/build-win-docker.ps1 -BuildDockerImage"
   },
   "dependencies": {
-    "archiver": "^7.0.1",
-    "electron-updater": "^6.8.9",
+    "jsonc-parser": "^3.3.1",
     "lucide": "^1.23.0",
     "qrcode": "^1.5.4",
     "yaml": "^2.8.1"
@@ -37,7 +37,6 @@
     "electron": "^39.8.5",
     "electron-builder": "^26.0.12",
     "typescript": "^5.9.0",
-    "unzipper": "^0.12.5",
     "vite": "^7.3.0",
     "wait-on": "^9.0.3"
   },
@@ -67,20 +66,9 @@
         "from": "binaries",
         "to": "binaries",
         "filter": [
-          "**/*"
+          "exora-dockd.exe",
+          "exora-dockd"
         ]
-      },
-      {
-        "from": "resources/wsl",
-        "to": "wsl",
-        "filter": [
-          "*.msi",
-          "wsl-runtime.lock.json"
-        ]
-      },
-      {
-        "from": "resources/image-signing-public-key.txt",
-        "to": "image-signing-public-key.txt"
       },
       {
         "from": "resources/release-signing-public-key.txt",
@@ -97,6 +85,14 @@
       {
         "from": "../docs/WHITEPAPER.en.md",
         "to": "legal/WHITEPAPER.en.md"
+      },
+      {
+        "from": "../skills/prepare-exora-api",
+        "to": "skills/prepare-exora-api"
+      },
+      {
+        "from": "../contracts",
+        "to": "contracts"
       }
     ],
     "mac": {

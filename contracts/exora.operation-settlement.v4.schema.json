@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://exora.dev/contracts/exora.operation-settlement.v4.schema.json",
+  "title": "Exora Operation Settlement v4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "outcome", "delivered", "actualUsage", "reservedAtomic", "formulaChargeAtomic", "chargedAtomic", "refundedAtomic"],
+  "properties": {
+    "schemaVersion": { "const": "exora.operation-settlement.v4" },
+    "outcome": { "enum": ["success", "business_error", "cancel_before_execution", "cancel_after_execution", "provider_fault", "cloud_fault", "timeout_fault", "schema_fault", "artifact_fault", "forced_stop"] },
+    "delivered": { "type": "integer", "enum": [0, 1] },
+    "actualUsage": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+    "reservedAtomic": { "type": "integer", "minimum": 0 },
+    "formulaChargeAtomic": { "type": "integer", "minimum": 0 },
+    "chargedAtomic": { "type": "integer", "minimum": 0 },
+    "refundedAtomic": { "type": "integer", "minimum": 0 }
+  }
+}

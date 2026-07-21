@@ -8,6 +8,7 @@ function argValue(name) {
 
 const exoraBridge = Object.freeze({
   isPackaged: !process.defaultApp,
+  initialTheme: argValue('exora-theme') || 'system',
   initialLocale: Object.freeze({
     language: argValue('exora-language') || 'en',
     chromiumLocale: argValue('exora-chromium-locale') || 'en-US',

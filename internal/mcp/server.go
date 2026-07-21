@@ -5,10 +5,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +20,19 @@ import (
 )
 
 const protocolVersion = "2025-06-18"
+
+var mcpSecretPattern = regexp.MustCompile(`(?i)(?:sk-exora(?:-session)?|exora_owner_)-?[a-z0-9._-]+`)
+
+type daemonHTTPError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *daemonHTTPError) Error() string { return e.Message }
+
+func sanitizeMCPText(value string) string {
+	return mcpSecretPattern.ReplaceAllString(strings.TrimSpace(value), "[REDACTED]")
+}
 
 type Options struct {
 	BaseURL      string
@@ -33,34 +49,124 @@ type Server struct {
 	sessionID    string
 	sessionToken string
 	sessionMeta  map[string]any
+	lifecycleMu  sync.RWMutex
+	initialized  bool
+	ready        bool
+	requestsMu   sync.Mutex
+	requests     map[string]context.CancelFunc
+	cancelled    map[string]bool
+	toolSem      chan struct{}
 }
 
 func NewServer(opts Options) *Server {
 	client := opts.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: 15 * time.Second}
+		client = &http.Client{}
 	}
-	return &Server{opts: opts, client: client}
+	return &Server{opts: opts, client: client, requests: map[string]context.CancelFunc{}, cancelled: map[string]bool{}, toolSem: make(chan struct{}, 8)}
 }
 
 func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
+	serveCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	defer s.revokeSession(context.Background())
 	scanner := bufio.NewScanner(in)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	encoder := json.NewEncoder(out)
+	var encoderMu sync.Mutex
+	var requests sync.WaitGroup
 	for scanner.Scan() {
-		line := bytes.TrimSpace(scanner.Bytes())
+		line := append([]byte(nil), bytes.TrimSpace(scanner.Bytes())...)
 		if len(line) == 0 {
 			continue
 		}
-		response := s.HandleJSON(ctx, line)
-		if response != nil {
-			if err := encoder.Encode(response); err != nil {
+		var envelope rpcRequest
+		_ = json.Unmarshal(line, &envelope)
+		handle := func() error {
+			response := s.handleJSONTracked(serveCtx, line)
+			if response == nil {
+				return nil
+			}
+			encoderMu.Lock()
+			defer encoderMu.Unlock()
+			return encoder.Encode(response)
+		}
+		if envelope.Method == "initialize" || envelope.Method == "notifications/initialized" || envelope.Method == "notifications/cancelled" {
+			if err := handle(); err != nil {
 				return err
 			}
+			continue
 		}
+		requests.Add(1)
+		go func() {
+			defer requests.Done()
+			_ = handle()
+		}()
 	}
-	return scanner.Err()
+	requests.Wait()
+	cancel()
+	if err := scanner.Err(); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "token too long") {
+			encoderMu.Lock()
+			encodeErr := encoder.Encode(rpcError(nil, -32600, "MCP message exceeds the 8 MiB limit", nil))
+			encoderMu.Unlock()
+			return encodeErr
+		}
+		return err
+	}
+	return nil
+}
+
+func requestKey(id *json.RawMessage) string {
+	if id == nil {
+		return ""
+	}
+	return string(*id)
+}
+
+func (s *Server) handleJSONTracked(ctx context.Context, data []byte) any {
+	var req rpcRequest
+	if json.Unmarshal(data, &req) != nil || req.ID == nil {
+		return s.HandleJSON(ctx, data)
+	}
+	requestCtx, cancel := context.WithCancel(ctx)
+	key := requestKey(req.ID)
+	s.requestsMu.Lock()
+	s.requests[key] = cancel
+	wasCancelled := s.cancelled[key]
+	delete(s.cancelled, key)
+	s.requestsMu.Unlock()
+	if wasCancelled {
+		cancel()
+	}
+	defer func() {
+		cancel()
+		s.requestsMu.Lock()
+		delete(s.requests, key)
+		s.requestsMu.Unlock()
+	}()
+	return s.HandleJSON(requestCtx, data)
+}
+
+func (s *Server) cancelRequest(id any) {
+	raw, _ := json.Marshal(id)
+	s.requestsMu.Lock()
+	cancel := s.requests[string(raw)]
+	if cancel == nil {
+		s.cancelled[string(raw)] = true
+	}
+	s.requestsMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (s *Server) cancelAllRequests() {
+	s.requestsMu.Lock()
+	for _, cancel := range s.requests {
+		cancel()
+	}
+	s.requestsMu.Unlock()
 }
 
 func (s *Server) HandleJSON(ctx context.Context, data []byte) any {
@@ -76,24 +182,64 @@ func (s *Server) HandleJSON(ctx context.Context, data []byte) any {
 
 func (s *Server) handle(ctx context.Context, req rpcRequest) any {
 	notification := req.ID == nil
+	if req.Method != "initialize" && req.Method != "ping" && req.Method != "notifications/initialized" && req.Method != "notifications/cancelled" {
+		s.lifecycleMu.RLock()
+		ready := s.ready
+		s.lifecycleMu.RUnlock()
+		if !ready {
+			if notification {
+				return nil
+			}
+			return rpcError(req.ID, -32002, "Server is not initialized", nil)
+		}
+	}
 	switch req.Method {
 	case "initialize":
 		if notification {
 			return nil
 		}
+		var params initializeParams
+		if err := json.Unmarshal(req.Params, &params); err != nil || strings.TrimSpace(params.ProtocolVersion) == "" || strings.TrimSpace(params.ClientInfo.Name) == "" {
+			return rpcError(req.ID, -32602, "Invalid initialize params", nil)
+		}
+		if params.ProtocolVersion != protocolVersion {
+			return rpcError(req.ID, -32602, "Unsupported protocol version", map[string]any{"supported": []string{protocolVersion}, "requested": params.ProtocolVersion})
+		}
+		s.lifecycleMu.Lock()
+		if s.initialized {
+			s.lifecycleMu.Unlock()
+			return rpcError(req.ID, -32600, "Server is already initialized", nil)
+		}
+		s.initialized = true
+		s.lifecycleMu.Unlock()
 		connection, err := s.ensureSession(ctx)
 		if err != nil {
+			s.lifecycleMu.Lock()
+			s.initialized = false
+			s.lifecycleMu.Unlock()
 			return rpcError(req.ID, -32001, "Unable to create a local Exora session", err.Error())
 		}
-		connectionJSON, _ := json.Marshal(connection)
 		return rpcResult(req.ID, map[string]any{
 			"protocolVersion": protocolVersion,
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
 			"serverInfo":      map[string]any{"name": "exora-dock", "title": "Exora Dock", "version": "0.1.0"},
-			"instructions":    "Use the four authoritative Exora marketplace categories: vm, resources, endpoint, and api_bridge. For direct local HTTP calls, use this initialize-time connection object only for this MCP process: " + string(connectionJSON) + ". The session key works only on this Dock and expires on idle, process exit, logout, or revocation. Seller tools create private drafts only and never publish or reveal credentials.",
-			"_meta":           map[string]any{"exoraConnection": connection},
+			"instructions":    "Use Exora's API to Operation to Invocation marketplace. Buyer tools use apiId + operationId, recover calls with exora.get_invocation, and request short-lived output downloads with exora.create_artifact_download_grant. Use exora.get_ledger for account ledger entries; exora.get_usage is a deprecated compatibility alias. Provider Agents must begin with exora.get_api_preparation_guide, author one exora.api-contract.v1 file from the seller's explicit API and billing intent, and submit it with exora.submit_api_contract. Never submit credential values, choose prices, run validation, confirm the contract, publish, or change lifecycle on the owner's behalf. API Order reactivation always requires human PIN approval.",
+			"_meta":           map[string]any{"exoraConnection": connection, "apiPreparationGuideVersion": "exora.api-preparation-guide.v3", "apiContractSchemaVersion": "exora.api-contract.v1", "capabilitySchemaVersion": "exora.api.v3", "operationSchemaVersion": "exora.operation.v3", "pricingSchemaVersion": "exora.operation-pricing.v4", "bundledSkill": "skills/prepare-exora-api/SKILL.md"},
 		})
 	case "notifications/initialized":
+		s.lifecycleMu.Lock()
+		if s.initialized {
+			s.ready = true
+		}
+		s.lifecycleMu.Unlock()
+		return nil
+	case "notifications/cancelled":
+		var params struct {
+			RequestID any `json:"requestId"`
+		}
+		if json.Unmarshal(req.Params, &params) == nil {
+			s.cancelRequest(params.RequestID)
+		}
 		return nil
 	case "ping":
 		if notification {
@@ -105,10 +251,7 @@ func (s *Server) handle(ctx context.Context, req rpcRequest) any {
 		if notification {
 			return nil
 		}
-		definitions := marketplaceToolDefinitions()
-		if s.sellerToolsEnabled(ctx) {
-			definitions = append(definitions, sellerDraftToolDefinitions()...)
-		}
+		definitions := s.availableToolDefinitions()
 		return rpcResult(req.ID, map[string]any{"tools": definitions})
 	case "tools/call":
 		if notification {
@@ -121,21 +264,24 @@ func (s *Server) handle(ctx context.Context, req rpcRequest) any {
 		if params.Arguments == nil {
 			params.Arguments = map[string]any{}
 		}
+		definition, found := s.availableToolDefinition(params.Name)
+		if !found {
+			return rpcError(req.ID, -32602, "Unknown or unavailable tool: "+params.Name, nil)
+		}
+		if err := validateSchemaValue(params.Arguments, definition.InputSchema, "arguments"); err != nil {
+			return rpcError(req.ID, -32602, "Invalid tool arguments", err.Error())
+		}
+		select {
+		case s.toolSem <- struct{}{}:
+			defer func() { <-s.toolSem }()
+		case <-ctx.Done():
+			return rpcResult(req.ID, errorResult("tool call cancelled", map[string]any{"error": "cancelled", "retryable": true}))
+		}
 		result, err := s.callTool(ctx, params.Name, params.Arguments)
 		if err != nil {
 			return rpcError(req.ID, -32602, err.Error(), nil)
 		}
 		return rpcResult(req.ID, result)
-	case "resources/list":
-		if notification {
-			return nil
-		}
-		return rpcResult(req.ID, map[string]any{"resources": []any{}})
-	case "prompts/list":
-		if notification {
-			return nil
-		}
-		return rpcResult(req.ID, map[string]any{"prompts": []any{}})
 	default:
 		if notification {
 			return nil
@@ -145,102 +291,84 @@ func (s *Server) handle(ctx context.Context, req rpcRequest) any {
 }
 
 func (s *Server) callTool(ctx context.Context, name string, args map[string]any) (toolResult, error) {
-	if isSellerDraftTool(name) {
-		if strings.TrimSpace(s.currentSessionToken()) == "" {
-			return errorResult("seller draft tools are unavailable", nil), nil
+	if isIntegrationTool(name) {
+		if !s.integrationToolsEnabled(ctx) {
+			return errorResult("provider integration tools are unavailable", nil), nil
 		}
-		return s.callSellerDraftTool(ctx, name, args)
+		return s.callIntegrationTool(ctx, name, args)
 	}
 	switch name {
-	case "exora.search_products":
+	case "exora.search_operations":
 		query := url.Values{}
 		copyStringArg(query, args, "q")
-		copyStringArg(query, args, "applicationSource")
-		return s.proxy(ctx, http.MethodGet, "/v3/catalog/listings", query, nil)
-	case "exora.get_product_manifest":
-		return s.proxyRequiredID(ctx, http.MethodGet, "/v3/catalog/listings/", args, "listingId", "listingId")
-	case "exora.estimate_purchase":
-		if firstString(args, "listingId") == "" {
-			return errorResult("listingId required", nil), nil
+		return s.proxy(ctx, http.MethodGet, "/v4/catalog/operations", query, nil)
+	case "exora.get_api":
+		return s.proxyRequiredID(ctx, http.MethodGet, "/v4/catalog/apis/", args, "apiId", "apiId")
+	case "exora.estimate_operation":
+		if firstString(args, "apiId") == "" || firstString(args, "operationId") == "" {
+			return errorResult("apiId and operationId required", nil), nil
 		}
-		return s.proxy(ctx, http.MethodPost, "/v3/purchase-estimates", nil, args)
-	case "exora.purchase_compute_minutes":
-		if firstString(args, "listingId") == "" || firstString(args, "idempotencyKey") == "" {
-			return errorResult("listingId and idempotencyKey required", nil), nil
-		}
-		return s.proxy(ctx, http.MethodPost, "/v3/compute-purchases", nil, args)
-	case "exora.estimate_compute_extension":
-		id := firstString(args, "purchaseId")
-		if id == "" {
-			return errorResult("purchaseId required", nil), nil
-		}
-		body := cloneArgs(args)
-		delete(body, "purchaseId")
-		return s.proxy(ctx, http.MethodPost, "/v3/compute-purchases/"+url.PathEscape(id)+"/extension-estimates", nil, body)
-	case "exora.extend_compute_minutes":
-		id := firstString(args, "purchaseId")
-		if id == "" || firstString(args, "idempotencyKey") == "" {
-			return errorResult("purchaseId and idempotencyKey required", nil), nil
-		}
-		body := cloneArgs(args)
-		delete(body, "purchaseId")
-		return s.proxy(ctx, http.MethodPost, "/v3/compute-purchases/"+url.PathEscape(id)+"/extend", nil, body)
-	case "exora.run_compute_command":
-		id := firstString(args, "leaseId")
-		if id == "" || firstString(args, "command") == "" {
-			return errorResult("leaseId and command required", nil), nil
-		}
-		body := cloneArgs(args)
-		delete(body, "leaseId")
-		return s.proxy(ctx, http.MethodPost, "/v3/leases/"+url.PathEscape(id)+"/commands", nil, body)
-	case "exora.read_compute_command_output":
-		return s.proxyRequiredID(ctx, http.MethodGet, "/v3/compute-commands/", args, "commandId", "commandId")
-	case "exora.transfer_compute_file":
-		if firstString(args, "leaseId") == "" || firstString(args, "direction") == "" || firstString(args, "localPath") == "" || firstString(args, "authorizedLocalRoot") == "" || firstString(args, "workspaceRelativePath") == "" {
-			return errorResult("leaseId, direction, localPath, authorizedLocalRoot, and workspaceRelativePath required", nil), nil
-		}
-		return s.proxy(ctx, http.MethodPost, "/v3/local/compute-transfers", nil, args)
-	case "exora.get_compute_transfer":
-		return s.proxyRequiredID(ctx, http.MethodGet, "/v3/local/compute-transfers/", args, "transferId", "transferId")
-	case "exora.purchase_download":
-		if firstString(args, "listingId") == "" || firstString(args, "idempotencyKey") == "" {
-			return errorResult("listingId and idempotencyKey required", nil), nil
-		}
-		return s.proxy(ctx, http.MethodPost, "/v3/download-grants", nil, args)
-	case "exora.create_download_transfer":
-		id := firstString(args, "grantId")
-		if id == "" {
-			return errorResult("grantId required", nil), nil
-		}
-		return s.proxy(ctx, http.MethodPost, "/v3/download-grants/"+url.PathEscape(id)+"/transfers", nil, map[string]any{})
+		return s.proxy(ctx, http.MethodPost, "/v4/operation-estimates", nil, args)
 	case "exora.invoke_operation":
-		if firstString(args, "listingId") == "" || firstString(args, "operationId") == "" || firstString(args, "idempotencyKey") == "" {
-			return errorResult("listingId, operationId, and idempotencyKey required", nil), nil
+		if firstString(args, "apiId") == "" || firstString(args, "operationId") == "" || firstString(args, "idempotencyKey") == "" {
+			return errorResult("apiId, operationId, and idempotencyKey required", nil), nil
 		}
-		return s.proxy(ctx, http.MethodPost, "/v3/invocations", nil, args)
-	case "exora.get_lease":
-		return s.proxyRequiredID(ctx, http.MethodGet, "/v3/leases/", args, "leaseId", "leaseId")
-	case "exora.release_lease":
-		id := firstString(args, "leaseId")
+		apiID, operationID := firstString(args, "apiId"), firstString(args, "operationId")
+		return s.proxy(ctx, http.MethodPost, "/v4/apis/"+url.PathEscape(apiID)+"/operations/"+url.PathEscape(operationID)+"/invocations", nil, args)
+	case "exora.get_invocation":
+		return s.proxyRequiredID(ctx, http.MethodGet, "/v4/invocations/", args, "invocationId", "invocationId")
+	case "exora.get_job":
+		return s.proxyRequiredID(ctx, http.MethodGet, "/v4/jobs/", args, "jobId", "jobId")
+	case "exora.cancel_job":
+		id := firstString(args, "jobId")
 		if id == "" {
-			return errorResult("leaseId required", nil), nil
+			return errorResult("jobId required", nil), nil
 		}
-		return s.proxy(ctx, http.MethodPost, "/v3/leases/"+url.PathEscape(id)+"/release", nil, map[string]any{})
-	case "exora.get_usage":
-		if id := firstString(args, "leaseId"); id != "" {
-			return s.proxy(ctx, http.MethodGet, "/v3/leases/"+url.PathEscape(id), nil, nil)
+		return s.proxy(ctx, http.MethodPost, "/v4/jobs/"+url.PathEscape(id)+"/cancel", nil, map[string]any{})
+	case "exora.create_artifact_upload":
+		return s.proxy(ctx, http.MethodPost, "/v4/artifact-uploads", nil, args)
+	case "exora.complete_artifact_upload":
+		id := firstString(args, "artifactId")
+		if id == "" {
+			return errorResult("artifactId required", nil), nil
 		}
-		return s.proxy(ctx, http.MethodGet, "/v3/ledger", nil, nil)
-	case "exora.save_endpoint_draft":
-		return s.saveServiceDraft(ctx, args, "endpoint", "dock_tunnel")
-	case "exora.save_api_bridge_draft":
-		return s.saveServiceDraft(ctx, args, "api_bridge", "cloud_direct")
+		body := cloneArgs(args)
+		delete(body, "artifactId")
+		return s.proxy(ctx, http.MethodPost, "/v4/artifact-uploads/"+url.PathEscape(id)+"/complete", nil, body)
+	case "exora.create_artifact_download_grant":
+		id := firstString(args, "artifactId")
+		if id == "" {
+			return errorResult("artifactId required", nil), nil
+		}
+		return s.proxy(ctx, http.MethodPost, "/v4/artifacts/"+url.PathEscape(id)+"/download-grants", nil, map[string]any{})
+	case "exora.get_ledger", "exora.get_usage":
+		return s.proxy(ctx, http.MethodGet, "/v4/ledger", nil, nil)
+	case "exora.list_api_orders":
+		query := url.Values{}
+		status := firstString(args, "status")
+		if status == "" {
+			status = "active"
+		}
+		query.Set("status", status)
+		if value, ok := args["limit"].(float64); ok {
+			query.Set("limit", fmt.Sprintf("%d", int(value)))
+		}
+		copyStringArg(query, args, "cursor")
+		return s.proxy(ctx, http.MethodGet, "/v4/api-orders", query, nil)
+	case "exora.get_api_order":
+		return s.proxyRequiredID(ctx, http.MethodGet, "/v4/api-orders/", args, "apiOrderId", "apiOrderId")
+	case "exora.deactivate_api_order":
+		id := firstString(args, "apiOrderId")
+		return s.proxy(ctx, http.MethodPost, "/v4/api-orders/"+url.PathEscape(id)+"/deactivate", nil, map[string]any{})
+	case "exora.request_api_order_reactivation":
+		id := firstString(args, "apiOrderId")
+		return s.proxy(ctx, http.MethodPost, "/v4/api-orders/"+url.PathEscape(id)+"/reactivation-requests", nil, map[string]any{})
 	default:
 		return toolResult{}, fmt.Errorf("Unknown tool: %s", name)
 	}
 }
 
-func (s *Server) saveServiceDraft(ctx context.Context, args map[string]any, applicationSource, delivery string) (toolResult, error) {
+func (s *Server) saveServiceDraft(ctx context.Context, args map[string]any) (toolResult, error) {
 	body := cloneArgs(args)
 	for _, forbidden := range []string{"secret", "providerSecret", "credentialRef", "baseUrl", "localBaseUrl", "endpointId", "healthPath", "authType", "sellerAttestationConfirmed", "publish", "status"} {
 		if _, supplied := body[forbidden]; supplied {
@@ -251,13 +379,15 @@ func (s *Server) saveServiceDraft(ctx context.Context, args map[string]any, appl
 	if !ok {
 		return errorResult("serviceManifest is required", nil), nil
 	}
-	if supplied := firstString(manifest, "delivery"); supplied != "" && supplied != delivery {
-		return errorResult("serviceManifest.delivery must be "+delivery, nil), nil
+	delivery := firstString(manifest, "deliveryMode")
+	if delivery != "local_dock" && delivery != "cloud_direct" {
+		return errorResult("serviceManifest.deliveryMode must be local_dock or cloud_direct", nil), nil
 	}
-	manifest["delivery"] = delivery
+	manifest["applicationSource"] = "api"
+	manifest["schemaVersion"] = "exora.service_manifest.v2"
 	body["serviceManifest"] = manifest
-	body["applicationSource"] = applicationSource
-	method, path := http.MethodPost, "/v3/provider/service-drafts"
+	body["applicationSource"] = "api"
+	method, path := http.MethodPost, "/v4/provider/api-drafts"
 	if draftID := firstString(body, "draftId"); draftID != "" {
 		method = http.MethodPut
 		path += "/" + url.PathEscape(draftID)
@@ -277,7 +407,7 @@ func (s *Server) proxy(ctx context.Context, method, path string, query url.Value
 	token := s.currentSessionToken()
 	payload, err := s.daemonJSONWithToken(ctx, method, path, query, body, token)
 	if err != nil {
-		return errorResult(err.Error(), nil), nil
+		return daemonToolError(err), nil
 	}
 	return successResult(payload), nil
 }
@@ -293,7 +423,7 @@ func (s *Server) ensureSession(ctx context.Context) (map[string]any, error) {
 	if strings.TrimSpace(s.opts.OwnerToken) == "" {
 		return nil, fmt.Errorf("Dock owner authorization is unavailable")
 	}
-	payload, err := s.daemonJSONWithToken(ctx, http.MethodPost, "/v3/local/agent-sessions", nil, map[string]any{
+	payload, err := s.daemonJSONWithToken(ctx, http.MethodPost, "/v4/local/agent-sessions", nil, map[string]any{
 		"clientName": s.opts.ClientName,
 	}, s.opts.OwnerToken)
 	if err != nil {
@@ -311,7 +441,6 @@ func (s *Server) ensureSession(ctx context.Context) (map[string]any, error) {
 	}
 	meta := map[string]any{
 		"sessionId":     sessionID,
-		"sessionKey":    token,
 		"baseUrl":       values["baseUrl"],
 		"scopes":        session["scopes"],
 		"idleExpiresAt": session["idleExpiresAt"],
@@ -334,6 +463,49 @@ func (s *Server) currentSessionToken() string {
 	return s.sessionToken
 }
 
+func (s *Server) sessionHasScope(required string) bool {
+	if strings.TrimSpace(required) == "" {
+		return true
+	}
+	s.sessionMu.RLock()
+	defer s.sessionMu.RUnlock()
+	switch scopes := s.sessionMeta["scopes"].(type) {
+	case []any:
+		for _, raw := range scopes {
+			if value, ok := raw.(string); ok && value == required {
+				return true
+			}
+		}
+	case []string:
+		for _, value := range scopes {
+			if value == required {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *Server) availableToolDefinitions() []toolDefinition {
+	all := append(marketplaceToolDefinitions(), integrationToolDefinitions()...)
+	available := make([]toolDefinition, 0, len(all))
+	for _, definition := range all {
+		if s.sessionHasScope(definition.RequiredScope) {
+			available = append(available, definition)
+		}
+	}
+	return available
+}
+
+func (s *Server) availableToolDefinition(name string) (toolDefinition, bool) {
+	for _, definition := range s.availableToolDefinitions() {
+		if definition.Name == strings.TrimSpace(name) {
+			return definition, true
+		}
+	}
+	return toolDefinition{}, false
+}
+
 func (s *Server) heartbeatSession(ctx context.Context) error {
 	s.sessionMu.RLock()
 	id, token := s.sessionID, s.sessionToken
@@ -341,7 +513,7 @@ func (s *Server) heartbeatSession(ctx context.Context) error {
 	if id == "" || token == "" {
 		return nil
 	}
-	_, err := s.daemonJSONWithToken(ctx, http.MethodPost, "/v3/local/agent-sessions/"+url.PathEscape(id)+"/heartbeat", nil, map[string]any{}, token)
+	_, err := s.daemonJSONWithToken(ctx, http.MethodPost, "/v4/local/agent-sessions/"+url.PathEscape(id)+"/heartbeat", nil, map[string]any{}, token)
 	return err
 }
 
@@ -353,7 +525,7 @@ func (s *Server) revokeSession(ctx context.Context) {
 	if id == "" || strings.TrimSpace(s.opts.OwnerToken) == "" {
 		return
 	}
-	_, _ = s.daemonJSONWithToken(ctx, http.MethodDelete, "/v3/local/agent-sessions/"+url.PathEscape(id), nil, nil, s.opts.OwnerToken)
+	_, _ = s.daemonJSONWithToken(ctx, http.MethodDelete, "/v4/local/agent-sessions/"+url.PathEscape(id), nil, nil, s.opts.OwnerToken)
 }
 
 func cloneMap(source map[string]any) map[string]any {
@@ -365,6 +537,17 @@ func cloneMap(source map[string]any) map[string]any {
 }
 
 func (s *Server) daemonJSONWithToken(ctx context.Context, method, path string, query url.Values, body any, token string) (any, error) {
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		timeout := 15 * time.Second
+		if strings.Contains(path, "/invocations") && method == http.MethodPost {
+			timeout = 75 * time.Second
+		} else if method != http.MethodGet {
+			timeout = 30 * time.Second
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	baseURL, err := s.resolveDaemon(ctx)
 	if err != nil {
 		return nil, err
@@ -404,7 +587,17 @@ func (s *Server) daemonJSONWithToken(ctx context.Context, method, path string, q
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("daemon returned %s: %s", resp.Status, strings.TrimSpace(string(data)))
+		message := sanitizeMCPText(string(data))
+		var payload map[string]any
+		if json.Unmarshal(data, &payload) == nil {
+			if value, ok := payload["error"].(string); ok && strings.TrimSpace(value) != "" {
+				message = sanitizeMCPText(value)
+			}
+		}
+		if message == "" {
+			message = http.StatusText(resp.StatusCode)
+		}
+		return nil, &daemonHTTPError{StatusCode: resp.StatusCode, Message: message}
 	}
 	if len(bytes.TrimSpace(data)) == 0 {
 		return map[string]any{}, nil
@@ -437,7 +630,9 @@ func (s *Server) resolveDaemon(ctx context.Context) (string, error) {
 }
 
 func (s *Server) healthOK(ctx context.Context, baseURL string) bool {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/health", nil)
+	healthCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(healthCtx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/health", nil)
 	if err != nil {
 		return false
 	}
@@ -451,51 +646,41 @@ func (s *Server) healthOK(ctx context.Context, baseURL string) bool {
 
 func marketplaceToolDefinitions() []toolDefinition {
 	return []toolDefinition{
-		tool("exora.search_products", "Search Products", "Search authoritative V3 Listings by text and applicationSource.", map[string]any{"q": stringProp("Search text."), "applicationSource": enumStringProp("Authoritative category.", "vm", "resources", "endpoint", "api_bridge")}, nil),
-		tool("exora.get_product_manifest", "Get Product Manifest", "Read one Listing and its AgentProductManifest.", map[string]any{"listingId": stringProp("Listing id.")}, []string{"listingId"}),
-		tool("exora.estimate_purchase", "Estimate Purchase", "Estimate a purchase without reserving funds. Resource purchases require resourceItemId.", map[string]any{"listingId": stringProp("Listing id."), "resourceItemId": stringProp("Independently priced Resource item id."), "durationMinutes": integerProp("VM duration."), "operationId": stringProp("Operation id.")}, []string{"listingId"}),
-		tool("exora.purchase_compute_minutes", "Purchase Compute Minutes", "Purchase an exclusive VM Lease.", purchaseProps(true), []string{"listingId", "idempotencyKey"}),
-		tool("exora.estimate_compute_extension", "Estimate Compute Extension", "Estimate additional VM minutes using the active Lease pricing snapshot.", map[string]any{"purchaseId": stringProp("Purchase id."), "durationMinutes": integerProp("Additional whole minutes.")}, []string{"purchaseId", "durationMinutes"}),
-		tool("exora.extend_compute_minutes", "Extend Compute Minutes", "Extend an active VM purchase.", map[string]any{"purchaseId": stringProp("Purchase id."), "durationMinutes": integerProp("Additional whole minutes."), "idempotencyKey": stringProp("Stable retry key.")}, []string{"purchaseId", "durationMinutes", "idempotencyKey"}),
-		tool("exora.run_compute_command", "Run Compute Command", "Run one command as the Lease administrator through the metered Exora control channel.", map[string]any{"leaseId": stringProp("Lease id."), "command": stringProp("Shell command."), "timeoutSeconds": integerProp("Optional execution timeout.")}, []string{"leaseId", "command"}),
-		tool("exora.read_compute_command_output", "Read Compute Command Output", "Read temporary command output retained for at most 15 minutes.", map[string]any{"commandId": stringProp("Command id.")}, []string{"commandId"}),
-		tool("exora.transfer_compute_file", "Transfer Compute File", "Start an automatically reviewed WebRTC file transfer between this Dock and /workspace in the Lease.", map[string]any{"leaseId": stringProp("Lease id."), "direction": enumStringProp("Transfer direction.", "upload", "download"), "localPath": stringProp("Local source or destination path."), "authorizedLocalRoot": stringProp("Previously authorized local transfer root."), "workspaceRelativePath": stringProp("Path relative to /workspace."), "sizeBytes": integerProp("Required expected size for downloads."), "sha256": stringProp("Required expected SHA-256 for downloads.")}, []string{"leaseId", "direction", "localPath", "authorizedLocalRoot", "workspaceRelativePath"}),
-		tool("exora.get_compute_transfer", "Get Compute Transfer", "Read local WebRTC connection, progress, and hash-verification state.", map[string]any{"transferId": stringProp("Transfer id.")}, []string{"transferId"}),
-		tool("exora.purchase_download", "Purchase Resource File", "Purchase one independently priced Resource file and receive a time-limited DownloadGrant.", purchaseProps(false), []string{"listingId", "resourceItemId", "idempotencyKey"}),
-		tool("exora.create_download_transfer", "Create Download Transfer", "Create or resume a signed object-store transfer.", map[string]any{"grantId": stringProp("DownloadGrant id.")}, []string{"grantId"}),
-		tool("exora.invoke_operation", "Invoke Operation", "Invoke a declared Endpoint or API Bridge operation.", map[string]any{"listingId": stringProp("Listing id."), "operationId": stringProp("Declared operation id."), "input": objectProp("Operation input."), "idempotencyKey": stringProp("Stable retry key.")}, []string{"listingId", "operationId", "idempotencyKey"}),
-		tool("exora.get_lease", "Get Lease", "Read Lease state and isolated Exora control capability metadata.", map[string]any{"leaseId": stringProp("Lease id.")}, []string{"leaseId"}),
-		tool("exora.release_lease", "Release Lease", "Release an active VM Lease.", map[string]any{"leaseId": stringProp("Lease id.")}, []string{"leaseId"}),
-		tool("exora.get_usage", "Get Usage", "Read Lease or account usage.", map[string]any{"leaseId": stringProp("Optional Lease id.")}, nil),
-		tool("exora.save_endpoint_draft", "Save Endpoint Service Draft", "Save an Agent-normalized OpenAPI 3.1 HTTP/JSON or SSE contract with dock_tunnel delivery. Runtime and credentials are forbidden.", draftProps(), []string{"title", "serviceManifest", "normalization"}),
-		tool("exora.save_api_bridge_draft", "Save API Bridge Service Draft", "Save an Agent-normalized OpenAPI 3.1 HTTP/JSON or SSE contract with cloud_direct delivery. Runtime and credentials are forbidden.", draftProps(), []string{"title", "serviceManifest", "normalization"}),
+		tool("exora.search_operations", "Search Operations", "Search the authoritative V4 Operation catalog. Each result includes its parent API summary.", "market.read", readOnlyAnnotations(true), map[string]any{"q": stringProp("Search text.")}, nil),
+		tool("exora.get_api", "Get API", "Read one API and all of its Operations.", "market.read", readOnlyAnnotations(false), map[string]any{"apiId": stringProp("API id.")}, []string{"apiId"}),
+		tool("exora.estimate_operation", "Estimate Operation", "Estimate one Operation invocation without reserving funds. The response binds the current formula hash, identifies known and unknown metering variables, and reports the sample amount, mandatory cap and eventual reservation amount.", "market.read", readOnlyAnnotations(true), map[string]any{"apiId": stringProp("API id."), "operationId": stringProp("Operation id."), "input": objectProp("Operation input used for metering estimation.")}, []string{"apiId", "operationId"}),
+		tool("exora.invoke_operation", "Invoke Operation", "Invoke a request/response, server-stream, or asynchronous Operation.", "api.invoke", writeAnnotations(true, true, true), map[string]any{"apiId": stringProp("API id."), "operationId": stringProp("Declared Operation id."), "input": objectProp("Operation input."), "inputArtifactIds": arrayProp("Uploaded input Artifact ids."), "idempotencyKey": stringProp("Stable retry key.")}, []string{"apiId", "operationId", "idempotencyKey"}),
+		tool("exora.get_invocation", "Get Invocation", "Recover one buyer-owned Invocation, including its status, result and ready output Artifacts.", "api.invoke", readOnlyAnnotations(true), map[string]any{"invocationId": stringProp("Invocation id returned by exora.invoke_operation.")}, []string{"invocationId"}),
+		tool("exora.get_job", "Get Job", "Read asynchronous Job state and progress.", "api.invoke", readOnlyAnnotations(true), map[string]any{"jobId": stringProp("Job id.")}, []string{"jobId"}),
+		tool("exora.cancel_job", "Cancel Job", "Request cancellation of an asynchronous Job.", "api.invoke", writeAnnotations(true, true, true), map[string]any{"jobId": stringProp("Job id.")}, []string{"jobId"}),
+		tool("exora.create_artifact_upload", "Create Artifact Upload", "Create a time-limited upload for a declared API input Artifact.", "api.invoke", writeAnnotations(false, false, true), map[string]any{"name": stringProp("Artifact name."), "mimeType": stringProp("MIME type."), "sizeBytes": integerProp("Exact byte size."), "sha256": stringProp("Exact SHA-256."), "purpose": stringProp("Declared purpose.")}, []string{"name", "mimeType", "sizeBytes", "sha256", "purpose"}),
+		tool("exora.complete_artifact_upload", "Complete Artifact Upload", "Verify and seal an uploaded Artifact.", "api.invoke", writeAnnotations(false, true, true), map[string]any{"artifactId": stringProp("Artifact id.")}, []string{"artifactId"}),
+		tool("exora.create_artifact_download_grant", "Create Artifact Download Grant", "Create a short-lived download URL for one ready buyer-owned output Artifact.", "api.invoke", writeAnnotations(false, false, true), map[string]any{"artifactId": stringProp("Ready output Artifact id returned by an Invocation or Job.")}, []string{"artifactId"}),
+		tool("exora.get_ledger", "Get Ledger", "Read the account API ledger.", "account.read", readOnlyAnnotations(true), map[string]any{}, nil),
+		deprecatedTool("exora.get_usage", "Get Usage (Deprecated)", "Deprecated compatibility alias for exora.get_ledger. Read the account API ledger.", "account.read", readOnlyAnnotations(true), map[string]any{}, nil, "exora.get_ledger"),
+		tool("exora.list_api_orders", "List API Orders", "List this buyer account's V4 Operation Orders. Defaults to active orders.", "account.read", readOnlyAnnotations(true), map[string]any{"status": enumStringProp("Order status filter.", "active", "inactive", "all"), "limit": boundedIntegerProp("Maximum orders to return.", 1, 100), "cursor": stringProp("Opaque pagination cursor.")}, nil),
+		tool("exora.get_api_order", "Get API Order", "Read one V4 Operation Order owned by this buyer account.", "account.read", readOnlyAnnotations(true), map[string]any{"apiOrderId": stringProp("API Order id.")}, []string{"apiOrderId"}),
+		tool("exora.deactivate_api_order", "Deactivate API Order", "Immediately deactivate one V4 Operation Order. Repeated calls are idempotent.", "api.invoke", writeAnnotations(true, true, true), map[string]any{"apiOrderId": stringProp("API Order id.")}, []string{"apiOrderId"}),
+		tool("exora.request_api_order_reactivation", "Request API Order Reactivation", "Create or return a pending human PIN approval for an inactive V4 Operation Order.", "api.invoke", writeAnnotations(false, true, true), map[string]any{"apiOrderId": stringProp("API Order id.")}, []string{"apiOrderId"}),
 	}
 }
 
-func purchaseProps(withDuration bool) map[string]any {
-	props := map[string]any{"listingId": stringProp("Listing id."), "idempotencyKey": stringProp("Stable retry key.")}
-	if withDuration {
-		props["durationMinutes"] = integerProp("Whole purchased minutes.")
-	} else {
-		props["resourceItemId"] = stringProp("Independently priced Resource item id.")
-	}
-	return props
+func tool(name, title, description, requiredScope string, annotations map[string]any, properties map[string]any, required []string) toolDefinition {
+	return toolDefinition{Name: name, Title: title, Description: description, InputSchema: strictObjectSchema(properties, required), Annotations: annotations, RequiredScope: requiredScope}
 }
 
-func draftProps() map[string]any {
-	return map[string]any{
-		"draftId":          stringProp("Existing private service draft id; omit to create."),
-		"expectedVersion":  integerProp("Required optimistic concurrency version when updating."),
-		"title":            stringProp("Seller-visible service title."),
-		"description":      stringProp("Seller-visible service description."),
-		"serviceManifest":  objectProp("ExoraServiceManifest v1: interface, locked delivery, operationPolicies, and pricingTemplate only."),
-		"normalization":    objectProp("Agent normalization audit with runId, sourceSha256, outputSha256, mode, and actor."),
-		"unresolvedFields": arrayProp("Fields which still require explicit seller confirmation."),
-	}
+func deprecatedTool(name, title, description, requiredScope string, annotations map[string]any, properties map[string]any, required []string, replacement string) toolDefinition {
+	definition := tool(name, title, description, requiredScope, annotations, properties, required)
+	definition.Meta = map[string]any{"exora/deprecated": true, "exora/replacement": replacement}
+	return definition
 }
 
-func tool(name, title, description string, properties map[string]any, required []string) toolDefinition {
-	return toolDefinition{Name: name, Title: title, Description: description, InputSchema: strictObjectSchema(properties, required)}
+func readOnlyAnnotations(openWorld bool) map[string]any {
+	return map[string]any{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": openWorld}
+}
+
+func writeAnnotations(destructive, idempotent, openWorld bool) map[string]any {
+	return map[string]any{"readOnlyHint": false, "destructiveHint": destructive, "idempotentHint": idempotent, "openWorldHint": openWorld}
 }
 
 type rpcRequest struct {
@@ -519,6 +704,13 @@ type toolCallParams struct {
 	Name      string         `json:"name"`
 	Arguments map[string]any `json:"arguments"`
 }
+type initializeParams struct {
+	ProtocolVersion string `json:"protocolVersion"`
+	ClientInfo      struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	} `json:"clientInfo"`
+}
 type toolResult struct {
 	Content           []textContent `json:"content"`
 	StructuredContent any           `json:"structuredContent,omitempty"`
@@ -529,10 +721,13 @@ type textContent struct {
 	Text string `json:"text"`
 }
 type toolDefinition struct {
-	Name        string         `json:"name"`
-	Title       string         `json:"title,omitempty"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"inputSchema"`
+	Name          string         `json:"name"`
+	Title         string         `json:"title,omitempty"`
+	Description   string         `json:"description"`
+	InputSchema   map[string]any `json:"inputSchema"`
+	Annotations   map[string]any `json:"annotations,omitempty"`
+	Meta          map[string]any `json:"_meta,omitempty"`
+	RequiredScope string         `json:"-"`
 }
 
 func rpcResult(id *json.RawMessage, result any) rpcResponse {
@@ -546,10 +741,28 @@ func successResult(value any) toolResult {
 	return toolResult{Content: []textContent{{Type: "text", Text: string(data)}}, StructuredContent: value}
 }
 func errorResult(message string, data any) toolResult {
+	message = sanitizeMCPText(message)
 	if data == nil {
 		data = map[string]any{"error": message}
 	}
 	return toolResult{Content: []textContent{{Type: "text", Text: message}}, StructuredContent: data, IsError: true}
+}
+
+func daemonToolError(err error) toolResult {
+	status := 0
+	retryable := false
+	code := "daemon_error"
+	if value, ok := err.(*daemonHTTPError); ok {
+		status = value.StatusCode
+		retryable = status == http.StatusTooManyRequests || status >= 500
+		code = "http_error"
+	} else if errors.Is(err, context.Canceled) {
+		code, retryable = "cancelled", true
+	} else if errors.Is(err, context.DeadlineExceeded) {
+		code, retryable = "timeout", true
+	}
+	message := sanitizeMCPText(err.Error())
+	return errorResult(message, map[string]any{"error": map[string]any{"code": code, "message": message, "httpStatus": status, "retryable": retryable}})
 }
 func firstString(args map[string]any, names ...string) string {
 	for _, name := range names {
@@ -599,9 +812,111 @@ func enumStringProp(description string, values ...string) map[string]any {
 func integerProp(description string) map[string]any {
 	return map[string]any{"type": "integer", "minimum": 0, "description": description}
 }
+func boundedIntegerProp(description string, minimum, maximum int) map[string]any {
+	return map[string]any{"type": "integer", "minimum": minimum, "maximum": maximum, "description": description}
+}
+func boolProp(description string) map[string]any {
+	return map[string]any{"type": "boolean", "description": description}
+}
 func objectProp(description string) map[string]any {
 	return map[string]any{"type": "object", "description": description, "additionalProperties": true}
 }
 func arrayProp(description string) map[string]any {
 	return map[string]any{"type": "array", "description": description, "items": map[string]any{}}
+}
+
+func validateSchemaValue(value any, schema map[string]any, path string) error {
+	typeName, _ := schema["type"].(string)
+	switch typeName {
+	case "object":
+		object, ok := value.(map[string]any)
+		if !ok {
+			return fmt.Errorf("%s must be an object", path)
+		}
+		properties, _ := schema["properties"].(map[string]any)
+		if required, ok := schema["required"].([]string); ok {
+			for _, name := range required {
+				if _, exists := object[name]; !exists {
+					return fmt.Errorf("%s.%s is required", path, name)
+				}
+			}
+		} else if rawRequired, ok := schema["required"].([]any); ok {
+			for _, raw := range rawRequired {
+				name, _ := raw.(string)
+				if _, exists := object[name]; !exists {
+					return fmt.Errorf("%s.%s is required", path, name)
+				}
+			}
+		}
+		additional, hasAdditional := schema["additionalProperties"].(bool)
+		for name, child := range object {
+			rawSchema, exists := properties[name]
+			if !exists {
+				if hasAdditional && !additional {
+					return fmt.Errorf("%s.%s is not allowed", path, name)
+				}
+				continue
+			}
+			childSchema, _ := rawSchema.(map[string]any)
+			if err := validateSchemaValue(child, childSchema, path+"."+name); err != nil {
+				return err
+			}
+		}
+	case "string":
+		text, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("%s must be a string", path)
+		}
+		if values, ok := schema["enum"].([]string); ok && len(values) > 0 {
+			matched := false
+			for _, candidate := range values {
+				matched = matched || text == candidate
+			}
+			if !matched {
+				return fmt.Errorf("%s has an unsupported value", path)
+			}
+		}
+	case "integer":
+		number, ok := value.(float64)
+		if !ok || math.Trunc(number) != number {
+			return fmt.Errorf("%s must be an integer", path)
+		}
+		if minimum, ok := schemaNumber(schema["minimum"]); ok && number < minimum {
+			return fmt.Errorf("%s must be at least %v", path, minimum)
+		}
+		if maximum, ok := schemaNumber(schema["maximum"]); ok && number > maximum {
+			return fmt.Errorf("%s must be at most %v", path, maximum)
+		}
+	case "boolean":
+		if _, ok := value.(bool); !ok {
+			return fmt.Errorf("%s must be a boolean", path)
+		}
+	case "array":
+		items, ok := value.([]any)
+		if !ok {
+			return fmt.Errorf("%s must be an array", path)
+		}
+		itemSchema, _ := schema["items"].(map[string]any)
+		if len(itemSchema) > 0 {
+			for index, item := range items {
+				if err := validateSchemaValue(item, itemSchema, fmt.Sprintf("%s[%d]", path, index)); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func schemaNumber(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case float64:
+		return typed, true
+	default:
+		return 0, false
+	}
 }

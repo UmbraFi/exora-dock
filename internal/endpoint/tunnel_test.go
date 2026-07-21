@@ -3,8 +3,8 @@ package endpoint
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -28,6 +28,9 @@ func TestTunnelClientForwardsBodyAndStreamsSSE(t *testing.T) {
 		case "/health":
 			w.WriteHeader(http.StatusNoContent)
 		case "/echo":
+			if got := r.Header.Get("X-Exora-Invocation-Id"); got != "inv-tunnel-test" {
+				t.Errorf("local request did not receive Cloud invocation identity: %q", got)
+			}
 			raw, _ := io.ReadAll(r.Body)
 			w.Header().Set("X-Upstream", "echo")
 			_, _ = w.Write(append([]byte("echo:"), raw...))
@@ -50,7 +53,7 @@ func TestTunnelClientForwardsBodyAndStreamsSSE(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	store := NewStore(c)
+	store := NewStore(c, "test-account")
 	endpointID := "epd_stream_test_1234"
 	manifest := endpointTestManifest()
 	manifestInterface := manifest["interface"].(map[string]any)
@@ -71,7 +74,7 @@ func TestTunnelClientForwardsBodyAndStreamsSSE(t *testing.T) {
 	result := make(chan error, 1)
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v3/provider/tunnels/connect" || r.Header.Get("Authorization") != "Bearer dock-token" {
+		if r.URL.Path != "/v4/provider/tunnels/connect" || r.Header.Get("Authorization") != "Bearer dock-token" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -86,7 +89,7 @@ func TestTunnelClientForwardsBodyAndStreamsSSE(t *testing.T) {
 			result <- readErr
 			return
 		}
-		if writeErr := conn.WriteJSON(Frame{Version: frameVersion, Type: "request_start", RequestID: "req-echo", EndpointID: endpointID, Method: "POST", Path: "/echo", TimeoutSec: 5}); writeErr != nil {
+		if writeErr := conn.WriteJSON(Frame{Version: frameVersion, Type: "request_start", RequestID: "req-echo", EndpointID: endpointID, Method: "POST", Path: "/echo", Headers: map[string][]string{"X-Exora-Invocation-Id": {"inv-tunnel-test"}}, TimeoutSec: 5}); writeErr != nil {
 			result <- writeErr
 			return
 		}
@@ -167,7 +170,94 @@ type tunnelTestError struct{ message string }
 
 func (e *tunnelTestError) Error() string { return e.message }
 
-func TestTunnelStreamChunkLimitAndDisconnectCleanup(t *testing.T) {
+func TestTunnelClientStaysOnlineWhenCloudSendsOnlyPingFrames(t *testing.T) {
+	const pingPayload = "cloud-heartbeat"
+	pongs := make(chan string, 16)
+	serverErrors := make(chan error, 1)
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErrors <- err
+			return
+		}
+		defer conn.Close()
+		var register Frame
+		if err := conn.ReadJSON(&register); err != nil || register.Type != "register" {
+			serverErrors <- fmt.Errorf("initial register failed: type=%q err=%w", register.Type, err)
+			return
+		}
+		conn.SetPongHandler(func(data string) error {
+			pongs <- data
+			return nil
+		})
+		stop := make(chan struct{})
+		defer close(stop)
+		go func() {
+			ticker := time.NewTicker(20 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					if err := conn.WriteControl(websocket.PingMessage, []byte(pingPayload), time.Now().Add(time.Second)); err != nil {
+						return
+					}
+				case <-stop:
+					return
+				}
+			}
+		}()
+		for {
+			var frame Frame
+			if err := conn.ReadJSON(&frame); err != nil {
+				return
+			}
+		}
+	}))
+	defer cloud.Close()
+
+	storage, err := cache.New(8, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storage.Close()
+	tokenPath := filepath.Join(t.TempDir(), "cloud-token.json")
+	if err := cloudlink.SaveToken(tokenPath, cloudlink.TokenFile{DockID: "dock", CloudURL: cloud.URL, CloudToken: "dock-token"}); err != nil {
+		t.Fatal(err)
+	}
+	client := NewTunnelClient(cloud.URL, tokenPath, NewStore(storage, "test-account"))
+	client.readTimeout = 55 * time.Millisecond
+	client.healthInterval = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { result <- client.runConnection(ctx) }()
+
+	deadline := time.After(220 * time.Millisecond)
+	pongCount := 0
+	for pongCount < 6 {
+		select {
+		case payload := <-pongs:
+			if payload != pingPayload {
+				t.Fatalf("pong payload=%q want=%q", payload, pingPayload)
+			}
+			pongCount++
+		case err := <-result:
+			t.Fatalf("tunnel disconnected while Cloud pings were active: %v", err)
+		case err := <-serverErrors:
+			t.Fatal(err)
+		case <-deadline:
+			t.Fatalf("received %d Pong frames before deadline", pongCount)
+		}
+	}
+	cancel()
+	select {
+	case <-result:
+	case <-time.After(time.Second):
+		t.Fatal("tunnel did not stop after context cancellation")
+	}
+}
+
+func TestTunnelChunkLimit(t *testing.T) {
 	max := base64.StdEncoding.EncodeToString(make([]byte, 64<<10))
 	if _, err := decodeChunk(max); err != nil {
 		t.Fatalf("64 KiB stream frame rejected: %v", err)
@@ -175,18 +265,5 @@ func TestTunnelStreamChunkLimitAndDisconnectCleanup(t *testing.T) {
 	over := base64.StdEncoding.EncodeToString(make([]byte, (64<<10)+1))
 	if _, err := decodeChunk(over); err == nil {
 		t.Fatal("oversized stream frame was accepted")
-	}
-	client := NewTunnelClient("", "", nil)
-	local, remote := net.Pipe()
-	defer remote.Close()
-	state := &streamState{conn: local}
-	client.streams["stream-1"] = state
-	client.closeAllStreams()
-	if len(client.streams) != 0 {
-		t.Fatal("stream registry was not cleared")
-	}
-	_ = remote.SetWriteDeadline(time.Now().Add(time.Second))
-	if _, err := remote.Write([]byte("closed")); err == nil {
-		t.Fatal("guest connection remained open after tunnel disconnect")
 	}
 }

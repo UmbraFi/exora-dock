@@ -23,7 +23,7 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - run: npm ci
         working-directory: desktop
-      - name: Build daemon and WSL broker sidecars
+      - name: Build x64 daemon sidecar
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path desktop/binaries | Out-Null
@@ -31,10 +31,6 @@ jobs:
           $env:GOOS='windows'
           $env:GOARCH='amd64'
           go build -trimpath -o desktop/binaries/exora-dockd.exe ./cmd/exora-dock/
-          go build -trimpath -o desktop/binaries/exora-wsl-broker.exe ./cmd/exora-worker/
-      - name: Fetch and verify bundled WSL Runtime
-        shell: pwsh
-        run: ./scripts/fetch-wsl-runtime.ps1
       - run: npm run build:exe
         working-directory: desktop
       - uses: actions/upload-artifact@v4
@@ -71,36 +67,8 @@ jobs:
             desktop/release/*macOS-arm64.zip
           if-no-files-found: error
 
-  desktop-linux:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.25.12'
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22.23.1'
-          cache: npm
-          cache-dependency-path: desktop/package-lock.json
-      - run: npm ci
-        working-directory: desktop
-      - name: Build x64 daemon sidecar
-        run: |
-          mkdir -p desktop/binaries
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o desktop/binaries/exora-dockd ./cmd/exora-dock/
-      - run: npm run build:linux
-        working-directory: desktop
-      - uses: actions/upload-artifact@v4
-        with:
-          name: exora-dock-linux-x64
-          path: |
-            desktop/release/*Linux-x64.AppImage
-            desktop/release/*Linux-x64.deb
-          if-no-files-found: error
-
   release:
-    needs: [desktop-windows, desktop-macos, desktop-linux]
+    needs: [desktop-windows, desktop-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -125,13 +93,13 @@ jobs:
           output-file: release-output/Exora-Dock-${{ github.ref_name }}-SBOM.spdx.json
       - uses: softprops/action-gh-release@v2
         with:
-          name: Exora Dock 0.1.0 Preview 2
+          name: Exora Dock 0.1.0 Preview 3
           prerelease: true
           make_latest: false
           body: |
-            Clean three-platform Technical Preview for Windows x64, macOS ARM64, and Linux x64.
+            Current Technical Preview for Windows x64 and macOS ARM64.
 
-            Windows is not Authenticode-signed and may show Unknown publisher or SmartScreen warnings. macOS is ad-hoc signed and not notarized, so the first launch may require choosing Open explicitly. Linux packages are verified through the signed release index and SHA-256 checksums.
+            Windows is not Authenticode-signed and may show Unknown publisher or SmartScreen warnings. macOS is ad-hoc signed and not notarized, so the first launch may require choosing Open explicitly. Verify downloads through the signed release index and SHA-256 checksums.
           files: |
             release-input/*
             release-output/*

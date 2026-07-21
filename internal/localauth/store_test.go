@@ -21,7 +21,7 @@ func TestAgentSessionsAreHashedScopedAndExpire(t *testing.T) {
 	if firstKey == secondKey || firstKey == string(first.TokenHash[:]) {
 		t.Fatal("MCP sessions did not receive distinct hashed credentials")
 	}
-	if !store.SessionPermits(firstKey, "api.invoke") || store.SessionPermits(firstKey, "seller.draft") {
+	if !store.SessionPermits(firstKey, "api.invoke") || store.SessionPermits(firstKey, "provider.publish") {
 		t.Fatal("session scope boundary was not enforced")
 	}
 	now = now.Add(DefaultSessionIdle + time.Second)
@@ -52,6 +52,18 @@ func TestSessionPolicyPersistsWithoutPersistingSessions(t *testing.T) {
 	}
 	if len(reloaded.ListSessions()) != 0 {
 		t.Fatal("ephemeral Agent sessions were persisted")
+	}
+}
+
+func TestRetiredAgentScopesAreRejectedAndDiscarded(t *testing.T) {
+	store := newStore("", Tokens{OwnerToken: "owner", SessionPolicyConfigured: true, DefaultSessionScopes: []string{"compute.use", "resources.use", "api.invoke"}})
+	if got := store.SessionPolicy(); len(got) != 1 || got[0] != "api.invoke" {
+		t.Fatalf("retired persisted scopes survived V4 load: %v", got)
+	}
+	for _, scope := range []string{"provider.publish", "owner.credentials", "admin"} {
+		if _, _, err := store.CreateSession("Agent", []string{scope}); err == nil {
+			t.Fatalf("retired scope %q was accepted", scope)
+		}
 	}
 }
 

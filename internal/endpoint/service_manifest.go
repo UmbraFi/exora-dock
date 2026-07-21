@@ -20,10 +20,10 @@ var openAPIMethods = map[string]string{
 // derives the private HTTP allowlist used by the tunnel. Cloud performs the
 // same validation independently before publication.
 func ValidateServiceManifest(value map[string]any) (map[string]any, []Route, string, error) {
-	if len(value) != 4 {
-		return nil, nil, "", errors.New("serviceManifest must contain only interface, delivery, operationPolicies, and pricingTemplate")
+	if len(value) != 3 {
+		return nil, nil, "", errors.New("serviceManifest must contain only interface, delivery, and operationPolicies")
 	}
-	for _, key := range []string{"interface", "delivery", "operationPolicies", "pricingTemplate"} {
+	for _, key := range []string{"interface", "delivery", "operationPolicies"} {
 		if _, found := value[key]; !found {
 			return nil, nil, "", fmt.Errorf("serviceManifest.%s is required", key)
 		}
@@ -86,7 +86,7 @@ func ValidateServiceManifest(value map[string]any) (map[string]any, []Route, str
 		}
 		seen[operationID] = true
 		interaction := strings.TrimSpace(stringValue(policy["interaction"]))
-		if interaction != "request_response" && interaction != "server_stream" {
+		if interaction != "request_response" && interaction != "server_stream" && interaction != "async_job" {
 			return nil, nil, "", fmt.Errorf("operation %s has an invalid interaction", operationID)
 		}
 		if serverStreams[operationID] != (interaction == "server_stream") {
@@ -103,10 +103,6 @@ func ValidateServiceManifest(value map[string]any) (map[string]any, []Route, str
 			return nil, nil, "", fmt.Errorf("operation %s limits are incomplete", operationID)
 		}
 		operationsByID[operationID] = operation
-	}
-	pricing, _ := value["pricingTemplate"].(map[string]any)
-	if strings.ToUpper(strings.TrimSpace(stringValue(pricing["currency"]))) != "USDC" {
-		return nil, nil, "", errors.New("pricingTemplate.currency must be USDC")
 	}
 	operations := make([]Route, 0, len(operationsByID))
 	for _, operation := range operationsByID {

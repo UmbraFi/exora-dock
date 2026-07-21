@@ -1,0 +1,28 @@
+{
+  "language": "exora.price-formula.v4",
+  "reservedVariables": {
+    "delivered": { "source": "cloud", "minimum": 0, "maximum": 1 }
+  },
+  "cases": [
+    {
+      "name": "usage plus successful delivery charge",
+      "expression": "request * 0.01 + delivered * 0.02",
+      "allowedVariables": ["request", "delivered"],
+      "variables": { "request": 1, "delivered": 1 },
+      "astSha256": "986c94a367bf5b543f9e8da9d5f20b59b9cbe121aaf43615d4fceecaa5b12872",
+      "maximumChargePerInvocationAtomic": 100000,
+      "unboundedAtomic": 30000,
+      "billedAtomic": 30000
+    },
+    {
+      "name": "execution cancellation omits delivery charge",
+      "expression": "request * 0.01 + delivered * 0.02",
+      "allowedVariables": ["request", "delivered"],
+      "variables": { "request": 1, "delivered": 0 },
+      "astSha256": "986c94a367bf5b543f9e8da9d5f20b59b9cbe121aaf43615d4fceecaa5b12872",
+      "maximumChargePerInvocationAtomic": 100000,
+      "unboundedAtomic": 10000,
+      "billedAtomic": 10000
+    }
+  ]
+}

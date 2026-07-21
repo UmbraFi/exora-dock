@@ -1,0 +1,237 @@
+{
+  "schemaVersion": "exora.api-contract.v1",
+  "capability": {
+    "schemaVersion": "exora.api.v3",
+    "title": "Random Puppy Card API",
+    "description": "Generate a random illustrated puppy profile card without requiring any user input.",
+    "deliveryMode": "local_dock",
+    "interface": {
+      "openapi": "3.1.0",
+      "info": {
+        "title": "Random Puppy Card API",
+        "version": "2.0.0",
+        "description": "A zero-input local API that creates a random puppy card as SVG and returns its structured profile data."
+      },
+      "paths": {
+        "/v1/puppy-card": {
+          "post": {
+            "operationId": "generate_puppy_card",
+            "summary": "Generate a random puppy card",
+            "description": "No fields are required. Each new invocation creates a puppy card with age, breed, favorite food, favorite activity, favorite player, and a fictional home address.",
+            "requestBody": {
+              "required": false,
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "maxProperties": 0,
+                    "description": "Optional empty object. The user does not need to provide any input."
+                  }
+                }
+              }
+            },
+            "responses": {
+              "200": {
+                "description": "Random puppy card generated",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "render_id",
+                        "status",
+                        "image_url",
+                        "mime_type",
+                        "sha256",
+                        "bytes",
+                        "width",
+                        "height",
+                        "dog"
+                      ],
+                      "properties": {
+                        "render_id": {
+                          "type": "string",
+                          "pattern": "^render_[a-f0-9]{24}$"
+                        },
+                        "status": {
+                          "const": "completed"
+                        },
+                        "image_url": {
+                          "type": "string",
+                          "format": "uri",
+                          "description": "Local URL of the generated SVG puppy card."
+                        },
+                        "mime_type": {
+                          "const": "image/svg+xml"
+                        },
+                        "sha256": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "bytes": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 1048576
+                        },
+                        "width": {
+                          "const": 1200
+                        },
+                        "height": {
+                          "const": 630
+                        },
+                        "dog": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "name",
+                            "age",
+                            "breed",
+                            "favorite_food",
+                            "favorite_activity",
+                            "favorite_player",
+                            "home_address"
+                          ],
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 40
+                            },
+                            "age": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 12,
+                              "description": "Puppy age in years."
+                            },
+                            "breed": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            "favorite_food": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            "favorite_activity": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 120
+                            },
+                            "favorite_player": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            "home_address": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 120,
+                              "description": "A fictional address generated for the card."
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "runtime": {
+      "publicBaseUrl": "http://127.0.0.1:8791",
+      "healthPath": "/health"
+    },
+    "operations": [
+      {
+        "schemaVersion": "exora.operation.v3",
+        "operationId": "generate_puppy_card",
+        "title": "Generate Random Puppy Card",
+        "description": "Generate an illustrated random puppy profile card and return its SVG URL plus structured profile fields.",
+        "enabled": true,
+        "usage": {
+          "useCases": [
+            "Generate a surprise puppy profile card with no input.",
+            "Create a playful SVG dog identity card for demos, games, or social sharing.",
+            "Receive structured puppy details together with the rendered card."
+          ],
+          "instructions": [
+            "Call this operation without supplying any fields; an empty JSON object is also accepted.",
+            "Use image_url to open the generated SVG puppy card.",
+            "Read dog for the puppy name, age, breed, favorite food, favorite activity, favorite player, and fictional home address.",
+            "Use a new invocation when you want a different random puppy card."
+          ]
+        },
+        "api": {
+          "method": "POST",
+          "path": "/v1/puppy-card",
+          "openapiOperationRef": "#/paths/~1v1~1puppy-card/post",
+          "errors": []
+        },
+        "behavior": {
+          "sideEffect": {
+            "present": false,
+            "description": "Generation only writes the SVG to a bounded in-memory preview cache.",
+            "reversible": false,
+            "testMode": "none"
+          },
+          "idempotency": {
+            "supported": true,
+            "retentionSeconds": 3600
+          }
+        },
+        "interaction": {
+          "mode": "request_response"
+        },
+        "limits": {
+          "timeoutSeconds": 15,
+          "maximumRequestBytes": 65536,
+          "maximumResponseBytes": 65536,
+          "maximumConcurrency": 8
+        },
+        "metering": {
+          "capabilities": []
+        },
+        "qualification": {
+          "fixtures": [
+            {
+              "id": "generate_puppy_card_success",
+              "kind": "success",
+              "description": "Verifies that a zero-input call returns a valid random puppy card and profile.",
+              "request": {
+                "body": {}
+              },
+              "expectedProtocol": {
+                "status": 200,
+                "mediaType": "application/json",
+                "openapiResponseRef": "#/paths/~1v1~1puppy-card/post/responses/200"
+              },
+              "safeToRepeat": true
+            }
+          ]
+        },
+        "dataPolicy": {
+          "inputHandling": "transient",
+          "retentionSeconds": 0
+        }
+      }
+    ]
+  },
+  "billing": [
+    {
+      "operationId": "generate_puppy_card",
+      "currency": "USDC",
+      "chargeFormula": {
+        "language": "exora.price-formula.v4",
+        "expression": "delivered * 0.01"
+      },
+      "maximumChargePerInvocationAtomic": 10000,
+      "settlementPolicy": "exora.operation-settlement.v4"
+    }
+  ]
+}

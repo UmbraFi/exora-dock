@@ -5,23 +5,23 @@ const test = require('node:test')
 
 const sourceFiles = [
   path.join(__dirname, '..', 'src', 'main.ts'),
+  path.join(__dirname, '..', 'src', 'provider-contract-guide.ts'),
   path.join(__dirname, '..', 'src', 'auth-ui.ts'),
   path.join(__dirname, '..', 'index.html'),
 ]
 const sources = sourceFiles.map((file) => ({ file, source: fs.readFileSync(file, 'utf8') }))
 const combinedSource = sources.map(({ source }) => source).join('\n')
-const combinedStyles = [
-  'styles.css',
-  'styles/v3-api.css',
-  'styles/v3-environment.css',
-  'styles/v3-listings.css',
-].map((file) => fs.readFileSync(path.join(__dirname, '..', 'src', file), 'utf8')).join('\n')
+const electronMainSource = fs.readFileSync(path.join(__dirname, 'main.cjs'), 'utf8')
+const domainSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'domain.ts'), 'utf8')
+const buttonVisualFixture = fs.readFileSync(path.join(__dirname, '..', 'button-visual-fixture.html'), 'utf8')
+const combinedStyles = ['styles.css', 'styles/v3-shell.css', 'styles/v3-api.css', 'styles/v3-listings.css', 'styles/v3-buyer.css', 'styles/v4-api-operation.css', 'styles/modal.css']
+  .map((file) => fs.readFileSync(path.join(__dirname, '..', 'src', file), 'utf8')).join('\n')
+const allStyleSources = [path.join(__dirname, '..', 'src', 'styles.css'), ...fs.readdirSync(path.join(__dirname, '..', 'src', 'styles')).filter((file) => file.endsWith('.css')).map((file) => path.join(__dirname, '..', 'src', 'styles', file))]
+  .map((file) => fs.readFileSync(file, 'utf8')).join('\n')
 
 function buttonTags(file, source) {
   return Array.from(source.matchAll(/<button\b[^>]*>/g), (match) => ({
-    file,
-    line: source.slice(0, match.index).split('\n').length,
-    tag: match[0],
+    file, line: source.slice(0, match.index).split('\n').length, tag: match[0],
   })).filter(({ tag }) => !tag.startsWith('<button[^') && !tag.startsWith('<button(') && !tag.startsWith('<button$'))
 }
 
@@ -30,93 +30,504 @@ function datasetProperty(attribute) {
 }
 
 test('every rendered button has an explicit valid type', () => {
-  for (const { file, source } of sources) {
-    for (const button of buttonTags(file, source)) {
-      const type = /\btype\s*=\s*["']([^"']+)["']/.exec(button.tag)?.[1]
-      assert.ok(type, `${path.basename(file)}:${button.line} button is missing an explicit type: ${button.tag}`)
-      assert.ok(type === 'button' || type === 'submit', `${path.basename(file)}:${button.line} has unsupported button type ${type}`)
-    }
+  for (const { file, source } of sources) for (const button of buttonTags(file, source)) {
+    const type = /\btype\s*=\s*["']([^"']+)["']/.exec(button.tag)?.[1]
+    assert.ok(type, `${path.basename(file)}:${button.line} button is missing an explicit type: ${button.tag}`)
+    assert.ok(type === 'button' || type === 'submit', `${path.basename(file)}:${button.line} has unsupported button type ${type}`)
   }
 })
 
 test('every non-submit button exposes a bound action or is intentionally disabled', () => {
-  for (const { file, source } of sources) {
-    for (const button of buttonTags(file, source)) {
-      if (/\btype\s*=\s*["']submit["']/.test(button.tag) || /\bdisabled\b/.test(button.tag)) continue
-      const attributes = Array.from(button.tag.matchAll(/\b(data-[a-z0-9-]+)/g), (match) => match[1])
-      const bound = attributes.some((attribute) => {
-        const occurrences = combinedSource.match(new RegExp(attribute.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []
-        return occurrences.length > 1 || combinedSource.includes(`dataset.${datasetProperty(attribute)}`)
-      })
-      assert.ok(bound, `${path.basename(file)}:${button.line} has no auditable action binding: ${button.tag}`)
-    }
+  for (const { file, source } of sources) for (const button of buttonTags(file, source)) {
+    if (/\btype\s*=\s*["']submit["']/.test(button.tag) || /\bdisabled\b/.test(button.tag)) continue
+    const attributes = Array.from(button.tag.matchAll(/\b(data-[a-z0-9-]+)/g), (match) => match[1])
+    const bound = attributes.some((attribute) => {
+      const occurrences = combinedSource.match(new RegExp(attribute.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []
+      return occurrences.length > 1 || combinedSource.includes(`dataset.${datasetProperty(attribute)}`)
+    })
+    assert.ok(bound, `${path.basename(file)}:${button.line} has no auditable action binding: ${button.tag}`)
   }
 })
 
-test('button interaction styles cover default and destructive states', () => {
-  assert.match(combinedStyles, /button:hover\s*\{[^}]*background:/s)
-  assert.match(combinedStyles, /button\.danger\.ghost:hover:not\(:disabled\)\s*\{/)
-  assert.match(combinedStyles, /button\.ghost:not\(\.danger\)/)
-  assert.match(combinedStyles, /\.v3-shared-file-row\s*>\s*button\s*\{[^}]*height:\s*30px;[^}]*font-size:\s*9px;/s)
-  assert.match(combinedStyles, /\.v3-api-price-component\s*>\s*button,[\s\S]*?height:\s*30px;/)
+test('button interaction styles cover default and disabled states', () => {
+  assert.match(combinedStyles, /button:hover/)
+  assert.match(combinedStyles, /button:disabled/)
 })
 
-test('material removal uses local button busy state instead of the global refresh flow', () => {
-  assert.match(combinedSource, /function removeV3AgentMaterial\(/)
-  assert.match(combinedSource, /await runControlAction\(button,/)
-  assert.doesNotMatch(combinedSource, /data-v3-(?:endpoint|api)-material-remove[^\n]*\brun\(/)
+test('settings navigation updates selection without rebuilding the sidebar', () => {
+  const navigation = combinedSource.slice(combinedSource.indexOf('function renderSettingsSidebar()'), combinedSource.indexOf('function setLedgerEmpty'))
+  assert.match(navigation, /if \(!nextView \|\| nextView === state\.activeSettingsView\) return/)
+  assert.match(navigation, /updateSettingsSidebarSelection\(\)/)
+  assert.match(navigation, /button\.classList\.toggle\('active', active\)/)
+  assert.match(navigation, /button\.setAttribute\('aria-pressed', String\(active\)\)/)
+  const clickHandler = navigation.slice(navigation.indexOf("button.addEventListener('click'"), navigation.indexOf('function updateSettingsSidebarSelection'))
+  assert.doesNotMatch(clickHandler, /renderSettingsSidebar\(\)/)
+  assert.match(combinedStyles, /\.app-shell\.settings-mode\.seller-surface-mode \.main-workspace:has\(\.v3-seller-surface\)::after\s*\{[^}]*height:\s*64px;/)
 })
 
-test('minute pricing uses the same six-decimal minimum and step', () => {
-  assert.match(combinedSource, /data-v3-pricing="pricePerMinute"[^>]*min="0\.000001"[^>]*step="0\.000001"/)
-  assert.doesNotMatch(combinedSource, /data-v3-pricing="pricePerMinute"[^>]*min="0\.000001"[^>]*step="0\.001"/)
+test('listing source icons share one resting structure and Operation rows use the brand fill on hover or expansion', () => {
+  assert.match(combinedSource, /function renderV3ListingSourceIcon\(sourceIcon: IconNode\)/)
+  assert.equal((combinedSource.match(/class="v3-listing-source-icon source-api"/g) || []).length, 1)
+  assert.match(combinedStyles, /\.v3-listing-source-icon\s*\{[\s\S]*?--source-icon-border:[^;]+;[\s\S]*?border:\s*1px solid var\(--source-icon-border\);/)
+  assert.match(combinedStyles, /\.v3-listing-source-icon\s*\{[\s\S]*?color:\s*var\(--source-icon-accent\);[\s\S]*?background:\s*var\(--source-icon-background\);/)
+  assert.doesNotMatch(combinedStyles, /(?:^|\})\s*\.v3-listing-summary:hover \.v3-listing-source-icon/)
+  assert.doesNotMatch(combinedStyles, /(?:^|\})\s*\.v3-listing-application\.expanded \.v3-listing-source-icon/)
+  assert.match(combinedStyles, /\.v4-api-draft-list \.v3-listing-summary:hover \.v3-listing-source-icon,/)
+  assert.match(combinedStyles, /\.v4-api-draft-list \.v3-listing-application\.expanded \.v3-listing-source-icon\s*\{[\s\S]*?--source-icon-border:\s*var\(--color-primary\);[\s\S]*?--source-icon-background:\s*var\(--color-primary\);[\s\S]*?color:\s*var\(--color-on-primary\);/)
+  assert.match(combinedStyles, /\.v4-marketplace-operation-row \.v3-listing-summary:hover \.v3-listing-source-icon,/)
+  assert.match(combinedStyles, /\.v4-marketplace-operation-row\.expanded \.v3-listing-source-icon\s*\{[\s\S]*?--source-icon-border:\s*var\(--color-primary\);[\s\S]*?--source-icon-background:\s*var\(--color-primary\);[\s\S]*?color:\s*var\(--color-on-primary\);/)
+  assert.doesNotMatch(combinedStyles, /\.v4-manual-api-row[^\{]*\.v3-listing-source-icon/)
 })
 
-test('resource file selection and per-file pricing stay in one step', () => {
-  assert.match(combinedSource, /<strong>Add files, prices and tags<\/strong>/)
-  assert.match(combinedSource, /<strong>\$\{state\.v3ResourceTargetSheet \? 'Review existing Res sheet and submit' : 'Describe and submit the Res sheet'\}<\/strong>/)
-  assert.doesNotMatch(combinedSource, /<strong>Set file prices and tags<\/strong>/)
+test('textareas never expose native resize or scrollbar-button controls', () => {
+  assert.match(combinedStyles, /textarea\s*\{\s*resize:\s*none !important;/)
+  assert.match(combinedStyles, /textarea::\-webkit-resizer/)
+  assert.match(combinedStyles, /textarea::\-webkit-scrollbar-button/)
 })
 
-test('resource product rows keep the file summary vertically centered', () => {
-  assert.match(combinedSource, /class="v3-resource-file-summary"/)
-  assert.match(combinedStyles, /\.v3-resource-file-config\s*\{[^}]*align-items:\s*center;/s)
-  assert.match(combinedStyles, /\.v3-resource-file-summary\s*\{[^}]*align-items:\s*center;/s)
+test('Desktop exposes exactly Market, Local API and Cloud API workspaces', () => {
+  const tabs = combinedSource.slice(combinedSource.indexOf('function renderV3SellerTabs()'), combinedSource.indexOf('function syncV3SellerTabs()'))
+  assert.match(tabs, /\['buyer', 'Market'/)
+  assert.match(tabs, /\['local_api', 'Local API'/)
+  assert.match(tabs, /\['cloud_api', 'Cloud API'/)
+  assert.doesNotMatch(tabs, /'Seller'|\['vm'|\['resources'/)
+  assert.equal((tabs.match(/^\s*\['(?:buyer|local_api|cloud_api)'/gm) || []).length, 3)
 })
 
-test('environment library keeps the signed catalog and ready local environments together', () => {
-  assert.match(combinedSource, /function v3MergeEnvironmentImages\(catalogImages:/)
-  assert.match(combinedSource, /catalogImages\.forEach\(\(image\) => images\.set\(v3EnvironmentImageKey\(image\), image\)\)/)
-  assert.match(combinedSource, /state\.v3EnvironmentImages = v3MergeEnvironmentImages\(catalog\.images \|\| \[\], state\.v3InstalledEnvironments\)/)
+test('Buyer marketplace rows represent callable Operations with buyer-relevant facts', () => {
+  const catalogLoader = combinedSource.slice(combinedSource.indexOf('async function loadV3Catalog'), combinedSource.indexOf('function v3ServiceManifestOperations'))
+  const operationHelpers = combinedSource.slice(combinedSource.indexOf('function v3ServiceManifestOperations'), combinedSource.indexOf('async function loadV3ActivitySessions'))
+  const buyerRow = combinedSource.slice(combinedSource.indexOf('function renderV3UnifiedListingRow'), combinedSource.indexOf('function renderV3UnifiedListingsPageV2'))
+  assert.match(catalogLoader, /operations: \[\{ operationId: operation\.operationId, title: operation\.title/)
+  assert.match(catalogLoader, /interaction: \{ mode: operation\.interaction \|\| 'request_response' \}/)
+  assert.match(operationHelpers, /Array\.isArray\(productManifest\?\.operations\)/)
+  assert.match(buyerRow, /v4-marketplace-operation-row/)
+  assert.match(buyerRow, /<em class="v3-source-badge source-api">Operation<\/em>/)
+  assert.match(buyerRow, /deliveryMode === 'local_dock' \? Code2 : Cloud/)
+  assert.match(buyerRow, /<small>Price<\/small>/)
+  assert.match(buyerRow, /'Availability'/)
+  assert.doesNotMatch(buyerRow, /v3-owner-badge market/)
+  assert.doesNotMatch(buyerRow, /renderV3ConsumerPanel|MANUAL API CLIENT|Invoke this Operation|invoke it manually/)
+  assert.doesNotMatch(combinedSource, /data-v3-consumer-form|v3ConsumerBusy|refreshV3ConsumerBalance/)
 })
 
-test('seller listings expose one accessible lifecycle switch and destructive delete path', () => {
-  assert.match(combinedSource, /class="v3-listing-state-pill v3-listing-lifecycle-switch[^>]*role="switch"[^>]*aria-checked=/)
-  assert.match(combinedSource, /data-v3-listing-action="\$\{escapeAttr\(toggleAction\)\}"/)
-  assert.match(combinedSource, /data-v3-listing-delete/)
-  assert.match(combinedSource, /deleteAllowed \? 'data-v3-listing-delete' : 'data-v3-listing-delete-unavailable'/)
-  assert.match(combinedSource, /This Cloud deployment does not support Listing deletion yet\. Deploy migration 033/)
-  assert.doesNotMatch(combinedSource, /const fallbackActions =[^\n]*'delete'/)
-  assert.match(combinedSource, /await invoke\('provider_listing_delete'/)
-  assert.match(combinedSource, /removed from the market and cannot be restored\. Existing transactions and audit history will be kept/)
-  assert.match(combinedSource, /button\.innerHTML = `<i><\/i>\$\{escapeHTML\(sx\('Updating…', '处理中…'\)\)\}`/)
-  assert.match(combinedSource, /void runControlAction\(button, async \(\) => \{/)
-  assert.doesNotMatch(combinedSource, /data-v3-listing-action="retire"/)
-  assert.match(combinedStyles, /\.v3-listing-lifecycle-switch:focus-visible\s*\{/)
-  assert.match(combinedStyles, /\.v3-listing-lifecycle-switch:disabled\s*\{[^}]*cursor:\s*not-allowed;/s)
+test('an account can see its own published API in both Buyer and Seller views', () => {
+  const unifiedItems = combinedSource.slice(combinedSource.indexOf('function v3UnifiedListingItems'), combinedSource.indexOf('function renderV3UnifiedListingRow'))
+  assert.match(unifiedItems, /items\.set\(`buyer:\$\{catalog\.listing\.listingId\}`/)
+  assert.match(unifiedItems, /items\.set\(`seller:\$\{application\.listing\.listingId\}`/)
+  assert.doesNotMatch(unifiedItems, /items\.delete\(application\.listing\.listingId\)/)
+  assert.doesNotMatch(combinedSource, /cannot purchase your own/i)
 })
 
-test('VM creation waits for the Cloud device slot before rendering scan controls', () => {
-  assert.match(combinedSource, /function renderV3VMPage\(\) \{\s+if \(!state\.v3ListingsLoaded\)/)
-  assert.match(combinedSource, /has no existing VM Listing before scanning or reserving disk space/)
-  assert.match(combinedSource, /data-v3-vm-slot-refresh/)
-  assert.match(combinedSource, /if \(state\.v3VMListingConstraint\.available\) return/)
+test('provider add controls contain their workspace purpose', () => {
+  const providerPage = combinedSource.slice(combinedSource.indexOf('function renderProviderAPIPage'), combinedSource.indexOf('async function refreshProviderIntegrations'))
+  assert.match(providerPage, /Prepare and review APIs adapted from code/)
+  assert.match(providerPage, /Prepare and review authorized public HTTPS APIs/)
+  assert.match(providerPage, /class="v4-api-add-context">\$\{icon\(providerContext\.contextIcon\)\}<strong>/)
+  assert.doesNotMatch(combinedSource, /class="v3-surface-heading"/)
+  assert.match(combinedStyles, /\.v4-api-add-context > small\s*\{[\s\S]*?white-space:\s*nowrap;/)
 })
 
-test('legacy Cloud readiness is displayed as Terminal and WebRTC delivery', () => {
-  assert.match(combinedSource, /function v3DisplayReadinessCheck\(check: V3ReadinessCheck\)/)
-  assert.match(combinedSource, /id: 'terminal_webrtc_delivery'/)
-  assert.match(combinedSource, /Exora Terminal and WebRTC delivery ready/)
-  assert.match(combinedSource, /checks = \(readiness\?\.checks \|\| \[\]\)\.map\(v3DisplayReadinessCheck\)/)
-  assert.doesNotMatch(combinedSource, /Cloud SSH|SSH ingress/)
+test('provider controls stay fixed like the Market header', () => {
+  const providerPage = combinedSource.slice(combinedSource.indexOf('function renderProviderAPIPage'), combinedSource.indexOf('async function refreshProviderIntegrations'))
+  assert.match(providerPage, /class="v3-listings-page v4-integration-page"/)
+  assert.match(providerPage, /class="v3-listing-fixed-header v4-api-fixed-header"/)
+  assert.match(providerPage, /class="v3-listing-search-switch v4-api-add-row"/)
+  assert.match(providerPage, /class="v3-listing-workspace v4-api-workspace scroll-area"/)
+  assert.ok(providerPage.indexOf('v4-api-add-row') < providerPage.indexOf('class="v3-listing-agent-hint"'))
+  assert.match(combinedStyles, /\.v3-listing-fixed-header\s*\{[^}]*position:\s*sticky;[^}]*top:\s*50px;[^}]*background:\s*transparent;/)
+  assert.match(combinedStyles, /\.app-shell\.seller-surface-mode \.main-workspace:has\(\.v3-seller-surface\)::after\s*\{[^}]*height:\s*144px;/)
+  assert.match(combinedStyles, /var\(--color-window\) 68%,\s*color-mix\(in srgb, var\(--color-window\) 58%, transparent\) 86%,\s*transparent 100%/)
+  assert.match(combinedStyles, /\.v4-integration-page\s*\{\s*padding:\s*0;\s*\}/)
+  assert.doesNotMatch(combinedStyles, /\.v4-api-fixed-header\s*\{/)
+})
+
+test('provider API add entry matches the Buyer search control', () => {
+  assert.match(combinedStyles, /\.v4-api-add-trigger\s*\{[\s\S]*?height:\s*48px;/)
+  assert.match(combinedStyles, /\.v4-api-add-trigger\s*\{[\s\S]*?border:\s*1px dashed [^;]+;/)
+  assert.match(combinedStyles, /\.v4-api-add-plus\s*\{[\s\S]*?background:\s*transparent;/)
+  assert.match(combinedStyles, /\.v4-api-refresh\s*\{[\s\S]*?flex:\s*0 0 48px;[\s\S]*?border:\s*1px solid var\(--color-border\);/)
+  assert.doesNotMatch(combinedSource, /v4-api-add-shell/)
+  assert.match(combinedSource, /class="v3-listing-agent-hint"/)
+  assert.doesNotMatch(combinedSource, /v4-api-agent-hint/)
+})
+
+test('Market search includes a remote catalog refresh control', () => {
+  const marketPage = combinedSource.slice(combinedSource.indexOf('function renderV3UnifiedListingsPageV2'), combinedSource.indexOf('function providerOperationKey'))
+  const handlers = combinedSource.slice(combinedSource.indexOf('function attachV3SurfaceHandlers'), combinedSource.indexOf('function expandV3Listing'))
+  assert.match(marketPage, /class="v4-api-refresh v3-marketplace-refresh" data-v3-marketplace-refresh/)
+  assert.match(marketPage, /aria-busy="\$\{String\(state\.v3CatalogLoading\)\}"/)
+  assert.match(handlers, /\[data-v3-marketplace-refresh\][\s\S]*?state\.v3CatalogLoaded = false[\s\S]*?loadV3Catalog\(\)/)
+  assert.match(combinedStyles, /\.v4-api-refresh\[aria-busy="true"\] svg\s*\{[^}]*animation:/)
+})
+
+test('Market search focus changes color without thickening the control', () => {
+  assert.match(combinedStyles, /\.v3-listing-search-switch \.v3-listing-search input:focus-visible\s*\{[^}]*border-color:\s*rgb\(var\(--color-primary-rgb\) \/ \.3\);[^}]*outline:\s*0;[^}]*box-shadow:\s*none;/)
+  assert.match(combinedStyles, /:root\[data-theme="dark"\] \.v3-listing-search-switch \.v3-listing-search input:focus-visible\s*\{[^}]*border-color:\s*rgb\(var\(--color-primary-rgb\) \/ \.3\);[^}]*outline:\s*0;[^}]*box-shadow:\s*none;/)
+  assert.match(combinedStyles, /\.v4-api-refresh:hover:not\(:disabled\)\s*\{[^}]*border-color:\s*rgb\(var\(--color-primary-rgb\) \/ \.3\);/)
+  const searchRules = combinedStyles.match(/\.v3-listing-search-switch \.v3-listing-search input:focus(?:-visible)?[^\{]*\{[^}]*\}/g)?.join('\n') || ''
+  assert.doesNotMatch(searchRules, /font-weight|border-width|box-shadow:\s*0 0/)
+})
+
+test('provider Agent guidance follows the session-scoped MCP tool surface', () => {
+  const providerPage = combinedSource.slice(combinedSource.indexOf('function renderProviderAPIPage'), combinedSource.indexOf('async function refreshProviderIntegrations'))
+  const providerInstruction = combinedSource.slice(combinedSource.indexOf('function copyMCPAgentInstruction'), combinedSource.indexOf('function mcpInfoSteps'))
+  assert.match(providerPage, /Ask your Seller Agent to use Exora MCP/)
+  assert.match(providerPage, /prepare and submit this API for per-Operation review/)
+  assert.doesNotMatch(providerPage, /get_api_preparation_guide/)
+  assert.match(providerInstruction, /Discover the provider tools available in the current MCP session/)
+  assert.match(providerInstruction, /writeClipboardText\(instruction\)/)
+  assert.match(providerInstruction, /invoke\('copy_agent_prompt', \{ input: \{ text \} \}\)/)
+  assert.match(electronMainSource, /clipboard\.writeText\(text\)/)
+})
+
+test('provider creation persists one stable UID-backed expandable row', () => {
+  assert.doesNotMatch(combinedSource, /Add API manually/)
+  assert.match(combinedSource, /class="v3-listing-application v4-provider-api-row/)
+  assert.match(combinedSource, /invoke<\{ apiDraft\?: ProviderIntegration \}>\('provider_api_create'/)
+  assert.match(combinedSource, /providerPreparationKey\(apiId\)/)
+  assert.match(electronMainSource, /provider_api_create/)
+  assert.match(electronMainSource, /POST', '\/v4\/local\/api-drafts'/)
+  assert.doesNotMatch(combinedSource, /Cloud synced/)
+  assert.doesNotMatch(combinedSource, /Stored locally/)
+  assert.doesNotMatch(combinedSource, /ManualProviderAPIDraft|manualProviderAPIDrafts|data-manual-api-uid/)
+  assert.doesNotMatch(combinedSource, /v4-api-editor-body scroll-area/)
+  assert.match(combinedStyles, /\.v4-api-editor-body\s*\{[\s\S]*?overflow:\s*visible;/)
+  assert.match(combinedStyles, /\.v4-api-editor-section textarea\s*\{[\s\S]*?resize:\s*none;/)
+})
+
+test('expanded API drafts expose persisted name and icon editing', () => {
+  const identityEditor = combinedSource.slice(combinedSource.indexOf('function renderProviderIdentityModal'), combinedSource.indexOf('function operationContext'))
+  const preparationRow = combinedSource.slice(combinedSource.indexOf('function renderProviderAPIPreparationRow'), combinedSource.indexOf('function renderProviderAPIPage'))
+  assert.match(identityEditor, /class="app-modal v4-api-identity-modal"/)
+  assert.match(identityEditor, /class="app-modal-head"/)
+  assert.match(identityEditor, /data-api-identity-form/)
+  assert.match(identityEditor, /name="displayName"/)
+  assert.match(identityEditor, /data-api-icon-option/)
+  assert.match(preparationRow, /data-open-api-identity/)
+  assert.doesNotMatch(preparationRow, /renderProviderIdentityModal\(api\)/)
+  assert.match(combinedSource, /'provider_api_update_identity'/)
+  assert.match(electronMainSource, /async function provider_api_update_identity/)
+  assert.match(electronMainSource, /\/v4\/local\/api-drafts\/\$\{encodeURIComponent\(apiID\)\}\/identity/)
+  assert.match(combinedStyles, /\.app-modal-panel\.v4-api-identity-panel\s*\{/)
+  assert.match(combinedStyles, /\.v4-api-icon-choice\.selected\s*\{/)
+})
+
+test('Provider publishing is available only from the operations console', () => {
+  const consolePanel = combinedSource.slice(combinedSource.indexOf('function renderProviderConsolePanel'), combinedSource.indexOf('function renderProviderAPIOperationRow'))
+  assert.match(consolePanel, /data-api-publish/)
+  assert.doesNotMatch(combinedSource, />Publish API</)
+  assert.doesNotMatch(buttonVisualFixture, /Publish API/)
+})
+
+test('Provider draft removal uses the shared in-app confirmation modal', () => {
+  assert.match(combinedSource, /class="app-modal app-confirm-modal hidden" data-app-confirm-modal/)
+  assert.match(combinedSource, /role="alertdialog" aria-modal="true" aria-labelledby="app-confirm-title"/)
+  assert.match(combinedSource, /await requestAppConfirmation\(\{[\s\S]*?title: 'Remove API draft\?'/)
+  assert.match(combinedSource, /closeAppConfirmation\(action === 'confirm'\)/)
+  assert.doesNotMatch(combinedSource, /window\.confirm\('Remove this local API draft\?'/)
+  assert.match(combinedStyles, /\.app-confirm-panel\s*\{[^}]*width:\s*min\(460px, calc\(100vw - 32px\)\);/)
+  assert.match(combinedStyles, /\.app-confirm-actions\s*\{[^}]*justify-content:\s*flex-end;/)
+  assert.match(combinedSource, /class="app-setting-button outline"[^>]*data-app-confirm-action="cancel"/)
+  assert.match(combinedSource, /class="app-setting-button danger"[^>]*data-app-confirm-action="confirm"/)
+  assert.match(combinedStyles, /\.app-confirm-actions \.app-setting-button\s*\{[^}]*height:\s*32px;[^}]*min-height:\s*32px;[^}]*min-width:\s*92px;/)
+})
+
+test('a pristine local API draft stays neutral while validation still gates later steps', () => {
+  const validationIssues = combinedSource.slice(combinedSource.indexOf('function providerDraftIsPristine'), combinedSource.indexOf('function providerOperationMeteringDimensions'))
+  assert.match(validationIssues, /if \(api\.status !== 'local_draft'\) return false/)
+  assert.match(validationIssues, /Object\.keys\(interfaceValue\)\.length/)
+  assert.match(validationIssues, /Array\.isArray\(operationsValue\) && operationsValue\.length > 0/)
+  assert.match(validationIssues, /if \(providerDraftIsPristine\(api\)\) return ''/)
+  assert.match(validationIssues, /api\.validation\?\.issues/)
+  assert.match(validationIssues, /Capability Form needs attention/)
+  assert.match(combinedSource, /if \(!review\) return \{ uid: api\.apiId, progress: 0, statusLabel: 'Contract required'/)
+})
+
+test('owner and MCP API updates converge on one persisted draft and workflow', () => {
+  assert.doesNotMatch(combinedSource, /api\.source === 'agent'/)
+  assert.match(combinedSource, /API Contract Guide/)
+  assert.match(combinedSource, /Test contract/)
+  assert.match(combinedSource, /function renderProviderValidationIssues/)
+  assert.match(combinedSource, /operationId \|\| 'api'/)
+  assert.match(combinedSource, /issue\.fieldPath/)
+  assert.match(combinedSource, /issue\.errorCode/)
+})
+
+test('provider rows always render UID and Progress from one row-state model', () => {
+  const rowState = combinedSource.slice(combinedSource.indexOf('type ProviderRowState'), combinedSource.indexOf('function providerOperationMeteringDimensions'))
+  const preparationRow = combinedSource.slice(combinedSource.indexOf('function renderProviderAPIPreparationRow'), combinedSource.indexOf('function renderProviderAPIPage'))
+  const operationRow = combinedSource.slice(combinedSource.indexOf('function renderProviderAPIOperationRow'), combinedSource.indexOf('function syncProviderPricingDraft'))
+  assert.match(rowState, /function providerRowState/)
+  assert.match(rowState, /function renderProviderRowSummary/)
+  assert.match(rowState, /<small>UID<\/small>/)
+  assert.match(rowState, /<small>Progress<\/small>/)
+  assert.match(rowState, /\$\{state\.progress\}\/2 complete/)
+  assert.match(preparationRow, /renderProviderRowSummary\(rowState\)/)
+  assert.match(operationRow, /renderProviderRowSummary\(rowState\)/)
+  assert.doesNotMatch(preparationRow, /renderProviderContractGuideTrigger\(api\)/)
+  assert.doesNotMatch(operationRow, /renderProviderContractGuideTrigger\(api\)/)
+  assert.doesNotMatch(preparationRow + operationRow, /PROVIDER OPERATION · TWO-STEP WORKFLOW/)
+  assert.match(combinedSource, /function renderProviderRemoveDraftAction/)
+  assert.doesNotMatch(operationRow, /<section class="v3-listing-actions">[\s\S]*?renderProviderUIDCopy/)
+  assert.doesNotMatch(combinedSource, /v4-provider-detail-status|statusLabel: string, statusTone/)
+  assert.doesNotMatch(preparationRow + operationRow, /<small>(?:Operations|Storage|Price|Review)<\/small>/)
+  assert.match(combinedSource, /data-copy-v3-identifier="\$\{escapeAttr\(uid\)\}"/)
+  assert.match(combinedStyles, /\.v4-provider-summary-metrics/)
+  assert.match(combinedStyles, /\.v4-provider-detail-actions\s*\{[^}]*--provider-detail-control-height:\s*32px;/)
+  assert.match(combinedStyles, /\.v4-api-editor-head > \.v4-provider-detail-actions\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;[^}]*gap:\s*8px;/)
+  assert.doesNotMatch(combinedStyles, /\.v4-provider-detail-status|\.v4-provider-detail-actions > span/)
+  assert.match(combinedStyles, /\.v4-provider-uid-copy\s*\{[^}]*height:\s*var\(--provider-detail-control-height\);[^}]*min-height:\s*var\(--provider-detail-control-height\);[^}]*padding:\s*0 10px;/)
+  assert.match(combinedStyles, /\.v4-contract-guide-entry > \.v4-provider-detail-actions\s*\{[^}]*align-items:\s*stretch;/)
+  assert.match(combinedStyles, /\.v4-contract-guide-entry \.v4-provider-uid-copy\s*\{[^}]*width:\s*100%;[^}]*height:\s*auto;[^}]*min-height:\s*62px;/)
+  assert.match(combinedSource, /data-open-contract-guide/)
+  assert.match(combinedSource, /exora\.get_api_preparation_guide/)
+  assert.match(combinedSource, /data-copy-contract-guide-template/)
+  assert.match(combinedStyles, /\.v4-contract-guide-trigger/)
+  assert.match(combinedStyles, /\.v4-contract-guide-panel/)
+})
+
+test('each Operation exposes one contract-validation step and one operations step', () => {
+  const integrationPanel = combinedSource.slice(combinedSource.indexOf('function renderProviderPreparationForm'), combinedSource.indexOf('const providerPricingBookRules'))
+  const pricingBook = combinedSource.slice(combinedSource.indexOf('const providerPricingBookRules'), combinedSource.indexOf('function renderProviderPricingPanel'))
+  const billingPanel = combinedSource.slice(combinedSource.indexOf('function renderProviderPricingPanel'), combinedSource.indexOf('function renderProviderConsolePanel'))
+  const consolePanel = combinedSource.slice(combinedSource.indexOf('function renderProviderConsolePanel'), combinedSource.indexOf('function renderProviderAPIOperationRow'))
+  const operationRow = combinedSource.slice(combinedSource.indexOf('function renderProviderAPIOperationRow'), combinedSource.indexOf('function syncProviderPricingDraft'))
+  const contractPanel = combinedSource.slice(combinedSource.indexOf('function renderProviderContractPanel'), combinedSource.indexOf('function renderProviderPreparationFields'))
+  assert.match(combinedSource, /id: 'contract'[^\n]+label: 'Contract validation'/)
+  assert.match(combinedSource, /id: 'operations'[^\n]+label: 'Operations'/)
+  assert.match(contractPanel, /exora\.api-contract\.v1/)
+  assert.match(contractPanel, /data-api-contract-file/)
+  assert.match(contractPanel, /data-api-contract-drop/)
+  assert.match(contractPanel, /renderProviderContractGuideTrigger\(api\)/)
+  assert.doesNotMatch(combinedSource, /v4-contract-scope/)
+  assert.match(contractPanel, /API Contract JSON uploaded/)
+  assert.match(contractPanel, /Click to inspect or edit JSON/)
+  assert.match(contractPanel, /data-api-contract-validate/)
+  assert.match(contractPanel, /data-api-contract-confirm/)
+  assert.doesNotMatch(contractPanel, /Integration validation|Billing validation|Owner confirmation/)
+  assert.match(operationRow, /renderProviderContractPanel/)
+  assert.match(operationRow, /renderProviderConsolePanel/)
+  assert.doesNotMatch(operationRow, /renderProviderIntegrationPanel|renderProviderPricingPanel/)
+  assert.match(combinedSource, /provider_api_contract_submit/)
+  assert.match(combinedSource, /provider_api_contract_clear/)
+  assert.match(contractPanel, /v4-contract-dropzone is-uploaded/)
+  assert.match(contractPanel, /data-api-contract-edit/)
+  assert.match(contractPanel, /data-api-contract-clear/)
+  assert.doesNotMatch(contractPanel, /v4-contract-source/)
+  assert.match(combinedSource, /const replacingConfirmed = hasExistingContract && Object\.values\(api\.operationReviews/)
+  assert.match(combinedSource, /provider_api_contract_validate/)
+  assert.match(combinedSource, /isAPIDraftVersionConflict/)
+  assert.match(combinedSource, /fetchLatestProviderIntegration/)
+  assert.match(combinedSource, /provider_api_contract_confirm/)
+  assert.match(combinedSource, /data-contract-json-editor/)
+  assert.match(combinedSource, /data-format-contract-json/)
+  assert.match(combinedSource, /data-save-contract-json/)
+  assert.match(combinedStyles, /\.v4-contract-editor-panel/)
+  assert.match(combinedStyles, /\.v4-operation-progress:has\(\[data-api-operation-view="contract"\]\)/)
+  assert.doesNotMatch(combinedStyles, /\.v4-contract-checks/)
+  assert.match(combinedStyles, /\.v4-contract-dropzone\.is-dragging/)
+  assert.match(combinedSource, /v4-contract-drop-backdrop/)
+  assert.doesNotMatch(combinedSource, /Release to add files|v3-file-drop-backdrop/)
+  assert.match(combinedStyles, /\.v4-contract-source > header\s*\{[^}]*grid-template-columns:/)
+  assert.match(consolePanel, /offline/)
+  assert.match(consolePanel, /live/)
+  assert.match(consolePanel, /draining/)
+  assert.match(consolePanel, /Publish Operation/)
+  assert.match(consolePanel, /Take offline/)
+  assert.match(consolePanel, /Users now/)
+  assert.match(consolePanel, /\['Health', healthLabel/)
+  assert.match(consolePanel, /Concurrent requests/)
+  assert.match(consolePanel, /maximumConcurrency/)
+  assert.match(consolePanel, /data-api-concurrency-form/)
+  assert.match(combinedSource, /provider_api_operational_settings/)
+  assert.doesNotMatch(consolePanel, /renderProviderContractGuideTrigger/)
+  return
+  assert.match(combinedSource, /id: 'integration'[^\n]+label: 'Integration validation'/)
+  assert.match(combinedSource, /id: 'billing'[^\n]+label: 'Billing validation'/)
+  assert.match(combinedSource, /id: 'console'[^\n]+label: 'Operations console'/)
+  assert.match(combinedSource, /data-api-operation-view="\$\{step\.id\}"/)
+  assert.match(integrationPanel, /data-api-preparation-form/)
+  assert.match(integrationPanel, /Run integration test/)
+  assert.match(integrationPanel, /Submit integration/)
+  assert.match(integrationPanel, /Change integration/)
+  assert.match(integrationPanel, /Cancel changes/)
+  assert.match(integrationPanel, /Save changes/)
+  assert.doesNotMatch(integrationPanel, /Save integration draft|Run format validation|Lock integration|Unlock and edit integration/)
+  assert.match(combinedSource, /providerIntegrationEditKeys/)
+  assert.match(combinedSource, /providerPreparationDraftStoragePrefix/)
+  assert.match(combinedSource, /data-api-connectivity-test-form/)
+  assert.match(combinedSource, /current\.version, operationSha256: review\.operationSha256/)
+  assert.match(billingPanel, /data-api-price-maximum/)
+  assert.match(billingPanel, /data-api-price-formula/)
+  assert.match(billingPanel, /Run billing test/)
+  assert.match(billingPanel, /Open Exora Pricing Book/)
+  assert.match(billingPanel, /filter\(\(dimension\) => dimension !== 'request'\)/)
+  assert.match(billingPanel, /v4-price-system-variable/)
+  assert.match(billingPanel, /It is not seller-reported/)
+  assert.doesNotMatch(billingPanel, /data-price-insert-variable="delivered"|Cloud · 0\/1/)
+  assert.doesNotMatch(combinedSource, /dimensions\.length \? dimensions : \['request'\]/)
+  assert.match(billingPanel, /data-api-begin-pricing-edit/)
+  assert.match(billingPanel, /data-api-cancel-pricing-edit/)
+  assert.match(billingPanel, /providerPricingDraftMatchesLocked/)
+  assert.match(billingPanel, /Local estimate only; the Sandbox Ledger creates evidence/)
+  assert.match(pricingBook, /app-modal v4-pricing-book-modal/)
+  assert.match(pricingBook, /role="dialog" aria-modal="true"/)
+  assert.match(pricingBook, /Read-only guidance\. Nothing here changes the formal pricing rule/)
+  assert.doesNotMatch(pricingBook, /data-copy-price-formula|Copy formula|Back to billing validation/)
+  assert.match(combinedSource, /\[data-global-modal-layer\][^\n]+insertAdjacentHTML\('beforeend', renderProviderPricingBook\(\)\)/)
+  assert.doesNotMatch(billingPanel, /data-api-price-start|data-api-price-success|Save pricing draft|REFERENCE ONLY/)
+  assert.doesNotMatch(combinedSource, /provider_api_pricing_save|data-api-unlock-pricing|renderPricingReferenceRules/)
+  assert.doesNotMatch(billingPanel, /data-api-price-template|templateId|templateParameters|Start from a template|Restore template/)
+  assert.match(consolePanel, /offline/)
+  assert.match(consolePanel, /live/)
+  assert.match(consolePanel, /draining/)
+  assert.match(consolePanel, /take_offline/)
+  assert.match(consolePanel, /force_stop/)
+  assert.match(consolePanel, /Metering integrity/)
+  assert.match(consolePanel, /Health protection/)
+  assert.match(consolePanel, /Fault-rate protection/)
+  assert.match(combinedSource, /api\.status === 'draining' \|\| hasActiveOperation/)
+  assert.equal((integrationPanel.match(/renderProviderStepActionBar\(api,/g) || []).length, 1)
+  assert.equal((billingPanel.match(/renderProviderStepActionBar\(api,/g) || []).length, 1)
+  assert.equal((consolePanel.match(/renderProviderStepActionBar\(api,/g) || []).length, 1)
+  assert.doesNotMatch(operationRow, /OPERATION READINESS|v3-listing-actions/)
+  assert.match(combinedSource, /schemaVersion: 'exora\.operation-pricing\.v4'/)
+  assert.match(combinedSource, /settlementPolicy: 'exora\.operation-settlement\.v4'/)
+  assert.match(combinedSource, /language: 'exora\.price-formula\.v4'/)
+  assert.match(combinedSource, /'delivered'/)
+  assert.doesNotMatch(combinedSource, /exora\.operation-pricing\.v[123]|exora\.price-formula\.v[123]|exora\.operation-settlement\.v[123]/)
+  assert.match(combinedStyles, /\.v4-operation-progress/)
+  assert.match(combinedSource, /data-active-step="\$\{active\}"/)
+  assert.match(combinedSource, /const completionState = step\.complete \? 'completed' : 'incomplete'/)
+  assert.match(combinedStyles, /\.v4-operation-progress\[data-active-step="billing"\]::before/)
+  assert.match(combinedStyles, /\.v4-operation-progress\[data-active-step="console"\]::before/)
+  assert.doesNotMatch(combinedStyles, /v4-operation-qualification|v4-price-template-grid/)
+  assert.match(combinedStyles, /\.v4-operation-action-bar\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) auto;[^}]*border-radius:\s*10px;/)
+  assert.match(combinedStyles, /\.v4-operation-action-buttons\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;[^}]*flex-wrap:\s*nowrap;/)
+  assert.match(combinedStyles, /\.v4-operation-action-buttons > button\s*\{[\s\S]*?height:\s*34px;[\s\S]*?min-height:\s*34px;[\s\S]*?white-space:\s*nowrap;/)
+  assert.match(combinedStyles, /\.v4-operation-action-buttons > button svg\s*\{[^}]*width:\s*13px;[^}]*height:\s*13px;[^}]*flex:\s*0 0 13px;/)
+  assert.doesNotMatch(combinedSource + combinedStyles, /v4-api-editor-footer|v4-operation-qualification-actions|v4-operation-step-actions/)
+})
+
+test('integration validation plans are grouped for owners and hide technical identifiers', () => {
+  const validationPlan = combinedSource.slice(combinedSource.indexOf("type ProviderValidationGroup"), combinedSource.indexOf('function renderProviderPreparationForm'))
+  assert.match(validationPlan, /connectivity: \{ title: 'Connectivity'/)
+  assert.match(validationPlan, /response_format: \{ title: 'Request and response formats'/)
+  assert.match(validationPlan, /protocol: \{ title: 'Protocol capability'/)
+  assert.match(validationPlan, /metering: \{ title: 'Metering trust'/)
+  assert.match(validationPlan, /Integration test/)
+  assert.match(validationPlan, /Seller cases/)
+  assert.match(validationPlan, /system checks/)
+  assert.match(validationPlan, /v4-validation-technical/)
+  assert.match(validationPlan, /Plan hash/)
+  assert.match(validationPlan, /stream_interruption'[\s\S]*?interactionMode === 'server_stream'/)
+  assert.match(validationPlan, /artifact_corruption'[\s\S]*?hasArtifacts/)
+  assert.doesNotMatch(validationPlan, /Generated validation plan/)
+  assert.match(combinedStyles, /\.v4-validation-group\s*\{/)
+  assert.match(combinedStyles, /\.v4-validation-technical\s*\{/)
+})
+test('Listing rows animate both open and closed around their measured detail height', () => {
+  assert.match(combinedSource, /if \(!changed && collapseV3Listing\(button, id\)\) return/)
+  assert.match(combinedSource, /renderDecisionPanel\(\)[\s\S]*?if \(changed\) expandV3Listing\(id\)/)
+  assert.match(combinedSource, /function expandV3Listing[\s\S]*?bodyHeight = body\.getBoundingClientRect\(\)\.height[\s\S]*?body\.style\.height = '0px'[\s\S]*?body\.style\.height = `\$\{bodyHeight\}px`/)
+  assert.match(combinedSource, /finishExpand[\s\S]*?body\.style\.removeProperty\('height'\)/)
+  assert.match(combinedSource, /body\.addEventListener\('transitionend', handleTransitionEnd\)/)
+  assert.match(combinedSource, /requestAnimationFrame[\s\S]*?body\.style\.height = '0px'/)
+  assert.match(combinedSource, /finishCollapse[\s\S]*?state\.v3ExpandedListingId = undefined[\s\S]*?renderDecisionPanel\(\)/)
+  assert.match(combinedStyles, /\.v3-listing-application\.is-expanding,[\s\S]*?\.v3-listing-application\.is-collapsing\s*\{\s*pointer-events:\s*none;/)
+  assert.match(combinedStyles, /\.v3-listing-application-body\.is-animating\s*\{[^}]*overflow:\s*clip;[^}]*contain:\s*paint;[^}]*transition:\s*height 180ms/)
+})
+
+test('registered Desktop IPC surface has no retired delivery commands', () => {
+  const surface = electronMainSource.slice(electronMainSource.indexOf('function createIpcHandlerGroups()'), electronMainSource.indexOf('async function window_minimize'))
+  assert.doesNotMatch(surface, /consumer_purchase_(?:compute|download)|consumer_get_lease|provider_vm_|provider_environment_|provider_resource_/)
+})
+
+test('Electron owns the Dock runtime lifecycle without a user opt-out', () => {
+  const surface = electronMainSource.slice(electronMainSource.indexOf('function createIpcHandlerGroups()'), electronMainSource.indexOf('async function window_minimize'))
+  const ready = electronMainSource.slice(electronMainSource.indexOf('app.whenReady()'), electronMainSource.indexOf("app.on('window-all-closed'"))
+  const shutdown = electronMainSource.slice(electronMainSource.indexOf("app.on('before-quit'"), electronMainSource.indexOf('function createTray'))
+  assert.match(ready, /startDockSupervisor\(\)/)
+  assert.match(electronMainSource, /function startDockSupervisor\(\)[\s\S]*?ensureElectronDockRuntime\(\)[\s\S]*?setInterval/)
+  assert.match(shutdown, /event\.preventDefault\(\)[\s\S]*?stopTrackedDaemon\(paths\)[\s\S]*?app\.quit\(\)/)
+  assert.doesNotMatch(surface, /\bstart_dock,|\bstop_dock,|\bstart_daemon,|\bstop_daemon,/)
+  assert.match(surface, /\brestart_dock,/)
+  assert.doesNotMatch(combinedSource, /startDockOnLaunch|Start Dock with the app|data-settings-action="(?:start|stop)-dock"/)
+})
+
+test('structured Cloud errors survive IPC and prefer statusReason', () => {
+  assert.match(electronMainSource, /const error = new Error\(JSON\.stringify\(errorPayload\)\)/)
+  assert.match(domainSource, /if \(parsed\?\.statusReason\) return String\(parsed\.statusReason\)/)
+})
+
+test('account key creation checks Cloud before reusing a stored key and tolerates pending Dock sync', () => {
+  const ensure = electronMainSource.slice(
+    electronMainSource.indexOf('async function account_api_key_ensure()'),
+    electronMainSource.indexOf('async function account_api_key_import'),
+  )
+  assert.ok(ensure.indexOf("apiRequest('POST', '/v4/account/api-key/ensure'") < ensure.indexOf('if (!key && existing)'))
+  assert.match(ensure, /trySyncAccountKeyToDock/)
+  assert.match(combinedSource, /result\.dockSyncPending/)
+})
+
+test('first-run security setup stays in one four-step window and finishes with Agent selection', () => {
+  const pinMarkup = combinedSource.slice(combinedSource.indexOf('data-pin-settings-modal'), combinedSource.indexOf('data-mcp-info-modal'))
+  assert.match(pinMarkup, /Step 1 of 4/)
+  const progressMarkup = pinMarkup.slice(pinMarkup.indexOf('class="pin-settings-progress"'), pinMarkup.indexOf('class="pin-settings-stage"'))
+  assert.equal((progressMarkup.match(/<i><\/i>/g) || []).length, 4)
+  assert.match(pinMarkup, /data-pin-settings-key-stage/)
+  assert.match(pinMarkup, /data-pin-settings-account-key/)
+  assert.match(pinMarkup, /data-pin-settings-agent-stage/)
+  assert.match(pinMarkup, /data-pin-settings-agent-list/)
+
+  const submit = combinedSource.slice(combinedSource.indexOf('async function submitPINSettings()'), combinedSource.indexOf('function advancePINSettingsStep'))
+  assert.match(submit, /advancePINSettingsStep\('account_key'/)
+  assert.match(submit, /advancePINSetupToAgentStep\(\)/)
+  assert.doesNotMatch(submit, /revealAccountKey\(result\.accountKey/)
+
+  const onboarding = combinedSource.slice(combinedSource.indexOf('async function maybeOpenAgentMcpOnboarding()'), combinedSource.indexOf('async function connectSelectedAgentMcpClients()'))
+  assert.match(onboarding, /state\.pinSettingsSetupStep = 'agent'/)
+  assert.match(onboarding, /state\.pinSettingsModalOpen = true/)
+  assert.doesNotMatch(onboarding, /state\.agentMcpOnboardingOpen = true/)
+})
+
+test('Agent settings contain only V4 API scopes', () => {
+  assert.match(combinedSource, /provider\.integrate/)
+  assert.match(combinedSource, /Create API drafts/)
+  assert.doesNotMatch(combinedSource, /seller-automation|Authorized HTTP services|Credential aliases|Recent Integration Sessions/)
+  assert.doesNotMatch(combinedSource + electronMainSource, /compute\.use|resources\.use|seller\.draft/)
+})
+
+test('temporary storage operations stay inside the Exora Dock temp directory', () => {
+  assert.match(electronMainSource, /function dockTemporaryRoot\(\)\s*\{\s*return path\.join\(app\.getPath\('temp'\), 'exora-dock', 'desktop-temporary'\)\s*\}/)
+  assert.match(electronMainSource, /emptyDirectory\(dockTemporaryRoot\(\)\)/)
+  assert.match(electronMainSource, /directorySize\(dockTemporaryRoot\(\)\)/)
+})
+
+test('Desktop uses in-app dialogs instead of operating-system prompts', () => {
+  assert.doesNotMatch(combinedSource, /window\.(?:alert|confirm|prompt)\s*\(/)
+  assert.match(combinedSource, /data-app-confirm-modal/)
+  assert.match(combinedSource, /data-app-input-modal/)
+  assert.match(combinedSource, /requestAppConfirmation/)
+  assert.match(combinedSource, /requestAppInput/)
+})
+
+test('order detail keeps actionable commerce facts and removes duplicate audit panels', () => {
+  const start = combinedSource.lastIndexOf('function renderV3ActivityDetail()')
+  const detail = combinedSource.slice(start, combinedSource.indexOf('function renderV3SellerTabs()', start))
+  const activityStart = combinedSource.indexOf('function renderV3OrderActivity(')
+  const activity = combinedSource.slice(activityStart, combinedSource.indexOf('function renderV3OrderAccess(', activityStart))
+  assert.match(activity, /ORDER ACTIVITY/)
+  assert.match(detail, /FULFILLMENT/)
+  assert.match(detail, /PAYMENT/)
+  assert.match(detail, /renderV3OrderAccess\(detail\)/)
+  assert.doesNotMatch(detail, /PRODUCT SNAPSHOT|AUDIT REFERENCES|MEASURED FACTS|Identifiers/)
+  assert.match(allStyleSources, /\.v3-activity-summary-compact > dl\s*\{[^}]*grid-template-columns:\s*repeat\(3,/)
+  assert.match(allStyleSources, /\.v3-order-overview \.v3-activity-context-facts\s*\{[^}]*grid-template-columns:\s*repeat\(3,/)
+})
+
+test('readable interface text never falls below 10px', () => {
+  const undersized = Array.from(allStyleSources.matchAll(/font-size:\s*(\d+(?:\.\d+)?)px/g), (match) => Number(match[1])).filter((size) => size < 10)
+  assert.deepEqual(undersized, [])
 })

@@ -18,32 +18,36 @@ import (
 )
 
 type Options struct {
-	Discovery      *discovery.Manifest
-	CloudURL       string
-	CloudTokenPath string
-	Endpoints      *endpoint.Store
-	EndpointTunnel *endpoint.TunnelClient
-	SellerDrafts   *sellerdraft.Service
-	LocalAuth      *localauth.Store
+	Discovery           *discovery.Manifest
+	CloudURL            string
+	CloudTokenPath      string
+	ActiveAccountID     string
+	EnforceAccountScope bool
+	Endpoints           *endpoint.Store
+	EndpointTunnel      *endpoint.TunnelClient
+	SellerDrafts        *sellerdraft.Service
+	LocalAuth           *localauth.Store
 }
 
 type Handler struct {
-	discovery      *discovery.Manifest
-	cloudURL       string
-	cloudTokenPath string
-	endpoints      *endpoint.Store
-	endpointTunnel *endpoint.TunnelClient
-	sellerDrafts   *sellerdraft.Service
-	localAuth      *localauth.Store
-	startTime      time.Time
+	discovery           *discovery.Manifest
+	cloudURL            string
+	cloudTokenPath      string
+	activeAccountID     string
+	enforceAccountScope bool
+	endpoints           *endpoint.Store
+	endpointTunnel      *endpoint.TunnelClient
+	sellerDrafts        *sellerdraft.Service
+	localAuth           *localauth.Store
+	startTime           time.Time
 }
 
 func NewHandler(opts Options) *Handler {
-	return &Handler{discovery: opts.Discovery, cloudURL: opts.CloudURL, cloudTokenPath: opts.CloudTokenPath, endpoints: opts.Endpoints, endpointTunnel: opts.EndpointTunnel, sellerDrafts: opts.SellerDrafts, localAuth: opts.LocalAuth, startTime: time.Now().UTC()}
+	return &Handler{discovery: opts.Discovery, cloudURL: opts.CloudURL, cloudTokenPath: opts.CloudTokenPath, activeAccountID: strings.TrimSpace(opts.ActiveAccountID), enforceAccountScope: opts.EnforceAccountScope, endpoints: opts.Endpoints, endpointTunnel: opts.EndpointTunnel, sellerDrafts: opts.SellerDrafts, localAuth: opts.LocalAuth, startTime: time.Now().UTC()}
 }
 
 func (h *Handler) Health(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "service": "exora-dock", "uptimeSeconds": int64(time.Since(h.startTime).Seconds()), "applicationSources": []string{"vm", "resources", "endpoint", "api_bridge"}})
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "service": "exora-dock", "protocolVersion": 4, "uptimeSeconds": int64(time.Since(h.startTime).Seconds()), "applicationSources": []string{"api"}, "deliveryModes": []string{"local_dock", "cloud_direct"}})
 }
 
 func (h *Handler) DiscoveryManifest(w http.ResponseWriter, _ *http.Request) {
@@ -96,9 +100,12 @@ func (h *Handler) accountCloudRequest(r *http.Request, method, path string, body
 	if h.localAuth == nil {
 		return 0, nil, fmt.Errorf("Dock local authorization is unavailable")
 	}
-	_, accountKey, ok := h.localAuth.AccountKey()
+	accountID, accountKey, ok := h.localAuth.AccountKey()
 	if !ok {
 		return 0, nil, fmt.Errorf("Exora account API key is not configured on this Dock")
+	}
+	if h.enforceAccountScope && (h.activeAccountID == "" || accountID != h.activeAccountID) {
+		return 0, nil, fmt.Errorf("Exora account API key does not match the active account")
 	}
 	token, err := cloudlink.LoadToken(h.cloudTokenPath)
 	if err != nil {
@@ -142,7 +149,7 @@ func (h *Handler) accountCloudRequest(r *http.Request, method, path string, body
 
 func protectedLocalForwardHeader(name string) bool {
 	name = strings.ToLower(strings.TrimSpace(name))
-	return name == "authorization" || name == "host" || name == "cookie" || strings.HasPrefix(name, "x-exora-")
+	return name == "accept-encoding" || name == "authorization" || name == "host" || name == "cookie" || strings.HasPrefix(name, "x-exora-")
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

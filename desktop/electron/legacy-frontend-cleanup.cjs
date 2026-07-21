@@ -21,13 +21,17 @@ const RETIRED_DESKTOP_STATE_KEYS = Object.freeze([
   'workMcpUids',
   'workMcpLeases',
   'accountKey',
+  'providerEnvironmentRoot',
 ])
+
+const RETIRED_DOCK_FILES = Object.freeze(['providerEnvironmentSettingsPath', 'providerHostSnapshotPath'])
 
 async function cleanupLegacyFrontendData(options = {}) {
   const paths = options.paths || {}
   const readJson = options.readJson
   const writeJson = options.writeJson
   const now = options.now || (() => new Date())
+  const removeFile = options.removeFile
   if (typeof readJson !== 'function' || typeof writeJson !== 'function') {
     throw new Error('Legacy frontend cleanup requires JSON read/write helpers.')
   }
@@ -52,6 +56,11 @@ async function cleanupLegacyFrontendData(options = {}) {
     [LEGACY_FRONTEND_CLEANUP_MARKER]: now().toISOString(),
   }
   await writeJson(paths.desktopStatePath, nextDesktopState)
+  if (typeof removeFile === 'function') {
+    for (const key of RETIRED_DOCK_FILES) {
+      if (typeof paths[key] === 'string' && paths[key]) await removeFile(paths[key])
+    }
+  }
   return { migrated: true, alreadyComplete: false }
 }
 
@@ -69,5 +78,6 @@ module.exports = {
   LEGACY_FRONTEND_CLEANUP_MARKER,
   RETIRED_DESKTOP_STATE_KEYS,
   RETIRED_SETTINGS_KEYS,
+  RETIRED_DOCK_FILES,
   cleanupLegacyFrontendData,
 }

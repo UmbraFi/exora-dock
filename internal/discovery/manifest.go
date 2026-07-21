@@ -70,26 +70,27 @@ func BuildWithBaseURL(baseURL, dockID string) Manifest {
 		ProcessID: os.Getpid(), ExecutablePath: executable, StartCommand: startCommand(executable), MCPCommand: mcp,
 		AgentPrompt: AgentPrompt(), OpenCodeConfig: OpenCodeConfig(mcp), RESTFallback: RESTFallback(baseURL),
 		Capabilities: []Capability{
-			{Name: "mcp.stdio", Description: "Authoritative MCP entrypoint for the four V3 marketplace categories."},
+			{Name: "mcp.stdio", Description: "Authoritative MCP entrypoint for the API-only V4 marketplace."},
 			{Name: "security.session_key", Description: "Each MCP initialize creates a scoped local-only session key; Cloud accepts the account key injected by Dock."},
-			{Name: "marketplace.vm.ssh", Description: "Purchase exclusive VM minutes and transfer code or results through lease-scoped SSH, SFTP, or rsync."},
-			{Name: "marketplace.resources.s3", Description: "Purchase immutable Resources and receive a time-limited S3-compatible DownloadGrant."},
-			{Name: "marketplace.endpoint.http_sse", Description: "Invoke OpenAPI 3.1 HTTP/JSON or SSE operations on private services through an online Dock tunnel."},
-			{Name: "marketplace.api_bridge.http_sse", Description: "Invoke OpenAPI 3.1 HTTP/JSON or SSE APIs through Cloud without requiring Dock online."},
+			{Name: "marketplace.api", Description: "Discover and invoke OpenAPI 3.1 request/response, SSE, and asynchronous Job operations."},
+			{Name: "provider.api-contract", Description: "Guide Seller Agents through stateless MCP preparation and accept one complete exora.api-contract.v1 file containing API capability, safe Seller cases and owner-specified billing rules."},
+			{Name: "artifact.verified", Description: "Exchange large inputs and outputs through ownership-, size-, MIME-, and SHA-256-verified Artifacts."},
 		},
 		Endpoints: map[string]Endpoint{
-			"health":    {Method: "GET", Path: "/health", URL: baseURL + "/health", Description: "Check whether this Dock is online."},
-			"manifest":  {Method: "GET", Path: "/.well-known/exora-dock.json", URL: baseURL + "/.well-known/exora-dock.json", Description: "Read this discovery manifest."},
-			"mcp.stdio": {Method: "STDIO", Description: "Launch the MCP server with mcpCommand."},
-			"catalog":   {Method: "GET", Path: "/v3/catalog/listings", URL: baseURL + "/v3/catalog/listings", Description: "Search the four authoritative marketplace categories."},
-			"gateway":   {Method: "POST", Path: "/v3/gateway/{listingId}/{operation}", URL: baseURL + "/v3/gateway/{listingId}/{operation}", Description: "Invoke a declared OpenAPI HTTP/JSON or SSE operation with a session key."},
+			"health":     {Method: "GET", Path: "/health", URL: baseURL + "/health", Description: "Check whether this Dock is online."},
+			"manifest":   {Method: "GET", Path: "/.well-known/exora-dock.json", URL: baseURL + "/.well-known/exora-dock.json", Description: "Read this discovery manifest."},
+			"mcp.stdio":  {Method: "STDIO", Description: "Launch the MCP server with mcpCommand."},
+			"catalog":    {Method: "GET", Path: "/v4/catalog/operations", URL: baseURL + "/v4/catalog/operations", Description: "Search flat Operation rows with their parent API summaries."},
+			"api":        {Method: "GET", Path: "/v4/catalog/apis/{apiId}", URL: baseURL + "/v4/catalog/apis/{apiId}", Description: "Read one API and all Operations."},
+			"invocation": {Method: "POST", Path: "/v4/apis/{apiId}/operations/{operationId}/invocations", URL: baseURL + "/v4/apis/{apiId}/operations/{operationId}/invocations", Description: "Create an Invocation for one declared Operation."},
+			"apiDrafts":  {Method: "MCP", Description: "Follow the stateless preparation guide and submit one complete exora.api-contract.v1 file to an existing stable API UID."},
 		},
 		LastSeen: time.Now().UTC().Format(time.RFC3339),
 	}
 }
 
 func AgentPrompt() string {
-	return "Read the local Exora Dock discovery manifest and start its stdio MCP server. MCP initialize returns a local-only session key plus a REST base URL. Endpoint and API Bridge use only OpenAPI 3.1 HTTP/JSON or SSE. VM files move through SSH/SFTP/rsync; Resources use DownloadGrants. Never publish a seller draft, reveal credentials, or invent a category."
+	return "Read the local Exora Dock discovery manifest and start its stdio MCP server. Begin provider preparation with exora.get_api_preparation_guide and follow its stateless steps. When its submission checklist is satisfied, submit one complete exora.api-contract.v1 file to the existing stable API UID. Include the exora.api.v3 capability, safe repeatable Seller cases and exactly one owner-directed billing rule per Operation. An Agent may encode billing values explicitly supplied by the seller, but must never choose rates, submit credentials, run validation, confirm the contract, publish, or change lifecycle on a human's behalf. The bundled prepare-exora-api Skill is only an MCP bootstrap guide."
 }
 
 func OpenCodeConfig(command []string) map[string]any {

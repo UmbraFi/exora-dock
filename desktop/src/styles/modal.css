@@ -96,7 +96,7 @@ button.app-modal-scrim:focus-visible {
 
 .app-modal-head .eyebrow {
   color: var(--color-primary);
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: .14em;
   margin: 0;
@@ -113,8 +113,130 @@ button.app-modal-scrim:focus-visible {
 .app-modal-head-copy > div > span {
   color: var(--color-text-tertiary);
   display: block;
-  font-size: 9px;
+  font-size: 10px;
   margin-top: 3px;
+}
+
+.app-confirm-modal {
+  align-items: center;
+  padding: 24px;
+  z-index: 3;
+}
+
+.app-confirm-panel {
+  width: min(460px, calc(100vw - 32px));
+}
+
+.app-confirm-mark {
+  border: 1px solid color-mix(in srgb, var(--color-danger) 36%, var(--color-border));
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
+}
+
+.app-confirm-modal .app-modal-head .eyebrow {
+  color: var(--color-danger);
+}
+
+.app-confirm-body {
+  display: grid;
+  gap: 14px;
+  padding: 5px 20px 20px;
+}
+
+.app-confirm-body > p {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.app-confirm-impact {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 28%, var(--color-border));
+  border-radius: 10px;
+  color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger-soft) 78%, var(--color-surface));
+}
+
+.app-confirm-impact svg {
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+}
+
+.app-confirm-impact span {
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.app-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 13px 20px 18px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.app-confirm-actions .app-setting-button {
+  height: 32px;
+  min-height: 32px;
+  min-width: 92px;
+  padding-inline: 12px;
+}
+
+.app-input-modal {
+  align-items: center;
+  padding: 24px;
+  z-index: 3;
+}
+
+.app-input-panel {
+  width: min(460px, calc(100vw - 32px));
+}
+
+.app-input-body {
+  display: grid;
+  gap: 14px;
+  padding: 5px 20px 20px;
+}
+
+.app-input-body > p {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.app-input-body > label {
+  display: grid;
+  gap: 7px;
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.app-input-body input {
+  width: 100%;
+  height: 40px;
+  padding: 0 11px;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  outline: 0;
+  color: var(--color-text-primary);
+  background: var(--color-surface);
+  font: inherit;
+  box-shadow: none;
+}
+
+.app-input-body input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgb(var(--color-primary-rgb) / .1);
 }
 
 .app-modal-close {
@@ -131,6 +253,79 @@ button.app-modal-scrim:focus-visible {
   width: 32px;
 }
 
+.agent-mcp-onboarding-panel {
+  width: min(560px, calc(100vw - 48px));
+}
+
+.agent-mcp-onboarding-body {
+  display: grid;
+  gap: 9px;
+  max-height: min(440px, 52vh);
+  overflow: auto;
+  padding: 4px 20px 18px;
+}
+
+.agent-mcp-onboarding-client {
+  align-items: center;
+  background: var(--color-surface-secondary);
+  border: 1px solid rgb(var(--color-primary-rgb) / .14);
+  border-radius: 11px;
+  cursor: pointer;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: auto minmax(0, 1fr);
+  padding: 12px 14px;
+}
+
+.agent-mcp-onboarding-client.is-disabled {
+  cursor: default;
+  opacity: .66;
+}
+
+.agent-mcp-onboarding-client input {
+  accent-color: var(--color-primary);
+  height: 16px;
+  width: 16px;
+}
+
+.agent-mcp-onboarding-client span,
+.agent-mcp-onboarding-client small {
+  display: block;
+}
+
+.agent-mcp-onboarding-client em {
+  color: var(--color-text-tertiary);
+  display: block;
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  font-style: normal;
+  margin-top: 4px;
+  max-width: 430px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-mcp-onboarding-client strong {
+  color: var(--color-text-primary);
+  font-size: 12px;
+}
+
+.agent-mcp-onboarding-client small {
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+  margin-top: 3px;
+}
+
+.agent-mcp-onboarding-actions {
+  align-items: center;
+  border-top: 1px solid var(--color-border-subtle);
+  display: flex;
+  gap: 9px;
+  justify-content: flex-end;
+  padding: 14px 20px 18px;
+}
+
 .app-modal-close:hover {
   background: var(--color-primary-soft);
   color: var(--color-text-primary);
@@ -142,7 +337,7 @@ button.app-modal-scrim:focus-visible {
   border-top: 1px solid var(--color-border);
   color: var(--color-text-tertiary);
   display: flex;
-  font-size: 9px;
+  font-size: 10px;
   justify-content: space-between;
   min-height: 42px;
   padding: 7px 16px;
@@ -224,7 +419,7 @@ button.v3-environment-cloud-scrim:hover {
 
 .pin-settings-progress > span {
   color: var(--color-text-tertiary);
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 750;
   letter-spacing: .035em;
   white-space: nowrap;
@@ -274,10 +469,110 @@ button.v3-environment-cloud-scrim:hover {
 
 .pin-settings-code-field > small {
   color: var(--color-text-tertiary);
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 500;
   line-height: 1.5;
   text-align: center;
+}
+
+.pin-settings-key-stage,
+.pin-settings-agent-stage {
+  display: grid;
+  gap: 12px;
+}
+
+.pin-settings-key-stage[hidden],
+.pin-settings-agent-stage[hidden],
+.pin-settings-code-field[hidden] {
+  display: none;
+}
+
+.pin-settings-key-notice {
+  display: grid;
+  gap: 4px;
+  text-align: center;
+}
+
+.pin-settings-key-notice strong {
+  color: var(--color-text-primary);
+  font-size: 12px;
+}
+
+.pin-settings-key-notice span {
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.pin-settings-key-stage > label {
+  display: grid;
+  gap: 7px;
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.pin-settings-key-stage code {
+  display: block;
+  max-height: 92px;
+  overflow: auto;
+  padding: 11px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 9px;
+  color: var(--color-text-primary);
+  background: var(--color-surface);
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.pin-settings-inline-button,
+.pin-settings-skip-agent {
+  height: 34px;
+  min-height: 34px;
+  border: 1px solid rgb(var(--color-primary-rgb) / .28);
+  border-radius: 8px;
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.pin-settings-inline-button:hover,
+.pin-settings-skip-agent:hover {
+  border-color: var(--color-primary);
+}
+
+.pin-settings-agent-list {
+  display: grid;
+  gap: 8px;
+  max-height: min(320px, 38vh);
+  overflow: auto;
+}
+
+.pin-settings-agent-list:empty::before {
+  content: 'No supported Agent clients were detected.';
+  padding: 14px;
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.pin-settings-agent-list .agent-mcp-onboarding-client {
+  padding: 10px 11px;
+}
+
+.pin-settings-agent-list .agent-mcp-onboarding-client em {
+  max-width: 290px;
+}
+
+.pin-settings-skip-agent {
+  border-color: transparent;
+  color: var(--color-text-tertiary);
+  background: transparent;
 }
 
 .pin-settings-code-control {
@@ -350,7 +645,7 @@ button.v3-environment-cloud-scrim:hover {
 
 .pin-settings-message {
   color: var(--color-text-secondary);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.5;
   margin: 0;
   min-height: 14px;
@@ -459,7 +754,7 @@ button.v3-environment-cloud-scrim:hover {
 
 .mcp-info-command > span {
   color: var(--color-primary);
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: .08em;
   text-transform: uppercase;
@@ -484,7 +779,7 @@ button.v3-environment-cloud-scrim:hover {
   color: var(--color-primary);
   background: var(--color-surface);
   box-shadow: none;
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .mcp-info-command button:hover { background: color-mix(in srgb, var(--color-surface) 76%, var(--color-primary-soft)); box-shadow: none; transform: none; }
@@ -527,7 +822,7 @@ button.v3-environment-cloud-scrim:hover {
 
 .mcp-info-route.manual > header > span { color: var(--color-success); background: rgb(36 153 107 / .08); }
 .mcp-info-route > header svg { width: 16px; height: 16px; }
-.mcp-info-route > header small { display: block; color: var(--color-primary); font-size: 7px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.mcp-info-route > header small { display: block; color: var(--color-primary); font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
 .mcp-info-route.manual > header small { color: var(--color-success); }
 .mcp-info-route > header h3 { margin: 2px 0 0; color: var(--color-text-primary); font-size: 12px; }
 
@@ -545,7 +840,7 @@ button.v3-environment-cloud-scrim:hover {
   min-height: 20px;
   padding-left: 27px;
   color: var(--color-text-secondary);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.55;
   counter-increment: mcp-step;
 }
@@ -562,19 +857,19 @@ button.v3-environment-cloud-scrim:hover {
   border-radius: 6px;
   color: var(--color-primary);
   content: counter(mcp-step);
-  font-size: 7px;
+  font-size: 10px;
   font-weight: 800;
 }
 
 .mcp-info-products { padding: 18px 0; border-bottom: 1px solid var(--color-border); }
-.mcp-info-products > header { margin-bottom: 12px; color: var(--color-text-primary); font-size: 9px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.mcp-info-products > header { margin-bottom: 12px; color: var(--color-text-primary); font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
 .mcp-info-products > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .mcp-info-products article { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 9px; min-width: 0; padding-right: 14px; }
 .mcp-info-products article + article { padding-left: 14px; border-left: 1px solid var(--color-border); }
 .mcp-info-products article > span { display: grid; width: 30px; height: 30px; place-items: center; border-radius: 8px; color: var(--color-primary); background: var(--color-primary-soft); }
 .mcp-info-products article svg { width: 14px; height: 14px; }
-.mcp-info-products article strong { color: var(--color-text-primary); font-size: 9px; }
-.mcp-info-products article p { margin: 4px 0 0; color: var(--color-text-secondary); font-size: 8px; line-height: 1.5; }
+.mcp-info-products article strong { color: var(--color-text-primary); font-size: 10px; }
+.mcp-info-products article p { margin: 4px 0 0; color: var(--color-text-secondary); font-size: 10px; line-height: 1.5; }
 
 .mcp-info-boundaries {
   display: grid;
@@ -587,10 +882,10 @@ button.v3-environment-cloud-scrim:hover {
   background: color-mix(in srgb, var(--color-primary-soft) 42%, var(--color-surface));
 }
 
-.mcp-info-boundaries > header { display: flex; gap: 8px; align-items: flex-start; color: var(--color-text-primary); font-size: 9px; }
+.mcp-info-boundaries > header { display: flex; gap: 8px; align-items: flex-start; color: var(--color-text-primary); font-size: 10px; }
 .mcp-info-boundaries > header svg { flex: 0 0 auto; width: 15px; height: 15px; color: var(--color-primary); }
 .mcp-info-boundaries ul { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 18px; margin: 0; padding: 0; list-style: none; }
-.mcp-info-boundaries li { position: relative; padding-left: 11px; color: var(--color-text-secondary); font-size: 8px; line-height: 1.5; }
+.mcp-info-boundaries li { position: relative; padding-left: 11px; color: var(--color-text-secondary); font-size: 10px; line-height: 1.5; }
 .mcp-info-boundaries li::before { position: absolute; top: .55em; left: 0; width: 4px; height: 4px; border-radius: 50%; background: var(--color-primary); content: ''; }
 
 :root[data-theme="dark"] button.app-modal-scrim {

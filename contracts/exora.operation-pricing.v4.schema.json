@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://exora.dev/contracts/exora.operation-pricing.v4.schema.json",
+  "title": "Exora Manual Operation Pricing v4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "apiId", "operationId", "operationSha256", "currency", "chargeFormula", "maximumChargePerInvocationAtomic", "settlementPolicy", "reviewStatus"],
+  "properties": {
+    "schemaVersion": { "const": "exora.operation-pricing.v4" },
+    "apiId": { "type": "string", "pattern": "^api_[A-Za-z0-9_-]+$" },
+    "operationId": { "type": "string", "minLength": 1 },
+    "operationSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "currency": { "const": "USDC" },
+    "chargeFormula": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["language", "expression", "astSha256", "referencedVariables"],
+      "properties": {
+        "language": { "const": "exora.price-formula.v4" },
+        "expression": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "astSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "referencedVariables": { "type": "array", "maxItems": 16, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" } }
+      }
+    },
+    "maximumChargePerInvocationAtomic": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "settlementPolicy": { "const": "exora.operation-settlement.v4" },
+    "reviewStatus": { "enum": ["edited", "tested", "confirmed"] },
+    "confirmedAt": { "type": "string", "format": "date-time" }
+  }
+}

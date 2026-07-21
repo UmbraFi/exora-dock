@@ -1,21 +1,19 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"runtime"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/exora-dock/exora-dock/internal/accountscope"
 	"github.com/exora-dock/exora-dock/internal/cache"
 	"github.com/exora-dock/exora-dock/internal/cloudlink"
 	"github.com/exora-dock/exora-dock/internal/config"
@@ -23,7 +21,6 @@ import (
 	"github.com/exora-dock/exora-dock/internal/endpoint"
 	"github.com/exora-dock/exora-dock/internal/localauth"
 	"github.com/exora-dock/exora-dock/internal/mcp"
-	"github.com/exora-dock/exora-dock/internal/providerworker"
 	"github.com/exora-dock/exora-dock/internal/sellerdraft"
 	"github.com/exora-dock/exora-dock/internal/server"
 )
@@ -71,22 +68,28 @@ func runDaemon(cfgPath string) error {
 		return fmt.Errorf("cache init: %w", err)
 	}
 	defer c.Close()
+	if err := accountscope.MigrateLegacy(c, cfg.DataDir); err != nil {
+		return fmt.Errorf("account scope migration: %w", err)
+	}
+	activeAccountID := ""
+	if token, tokenErr := cloudlink.LoadToken(cfg.CloudTokenPath); tokenErr == nil {
+		activeAccountID = strings.TrimSpace(token.AccountID)
+	}
 	authStore, err := localauth.LoadOrCreate(cfg.AuthTokenPath)
 	if err != nil {
 		return fmt.Errorf("auth init: %w", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	endpointStore := endpoint.NewStore(c)
+	endpointStore := endpoint.NewStore(c, activeAccountID)
 	endpointTunnel := endpoint.NewTunnelClient(cfg.CloudURL, cfg.CloudTokenPath, endpointStore)
-	sellerVault := sellerdraft.NewCredentialVault(cfg.DataDir)
-	sellerService := sellerdraft.NewService(sellerdraft.ServiceOptions{Store: sellerdraft.NewStore(c), Vault: sellerVault, DataDir: cfg.DataDir, CloudURL: cfg.CloudURL, CloudTokenPath: cfg.CloudTokenPath, Endpoints: endpointStore, NotifyEndpoint: endpointTunnel.Notify})
+	sellerVault := sellerdraft.NewCredentialVault(cfg.DataDir, activeAccountID)
+	sellerService := sellerdraft.NewService(sellerdraft.ServiceOptions{Store: sellerdraft.NewStore(c, activeAccountID), Vault: sellerVault, DataDir: cfg.DataDir, CloudURL: cfg.CloudURL, CloudTokenPath: cfg.CloudTokenPath, EndpointStore: endpointStore, NotifyEndpoint: endpointTunnel.Notify})
 	endpointTunnel.CredentialResolver = func(ref string) (string, string, string, error) {
 		metadata, secret, err := sellerVault.Resolve(ref, "")
 		return metadata.AuthType, metadata.APIKeyHeader, secret, err
 	}
 	go endpointTunnel.Run(ctx)
-	sellerService.RecoverInterrupted()
 	dockID := firstNonEmptyString(cfg.DockID, "local-dock")
 	manifest := discovery.Build(cfg.ListenAddr, dockID)
 	manifest.ConfigPath = cfgPath
@@ -96,11 +99,9 @@ func runDaemon(cfgPath string) error {
 		manifest.OpenCodeConfig = discovery.OpenCodeConfig(manifest.MCPCommand)
 	}
 	manifest.DiscoveryFiles = discovery.CandidatePaths()
-	if policy, configured := sellerService.Policy(); configured && policy.Enabled {
-		manifest.Capabilities = append(manifest.Capabilities, discovery.Capability{Name: "provider.listing_drafts.mcp.v1", Description: "Create private VM, Resources, Endpoint, and API Bridge drafts from seller-authorized local materials."})
-		manifest.Endpoints["provider.listing_drafts"] = discovery.Endpoint{Method: "MCP", Description: "ProviderAgent-scoped draft tools; publishing remains owner-only."}
-	}
-	srv := &http.Server{Addr: cfg.ListenAddr, Handler: server.New(server.Options{Auth: authStore, AllowedOrigins: cfg.CORSAllowedOrigins, Discovery: &manifest, CloudURL: cfg.CloudURL, CloudTokenPath: cfg.CloudTokenPath, Endpoints: endpointStore, EndpointTunnel: endpointTunnel, SellerDrafts: sellerService})}
+	manifest.Capabilities = append(manifest.Capabilities, discovery.Capability{Name: "provider.api-capability.mcp.v3", Description: "Accept complete exora.api.v3 Capability Forms; external validation, owner confirmation, formal pricing, and publication remain owner-only."})
+	manifest.Endpoints["provider.api-drafts"] = discovery.Endpoint{Method: "MCP", Description: "Final-form API Draft submission; integration locks, pricing entry and testing, execution and publication remain owner-only."}
+	srv := &http.Server{Addr: cfg.ListenAddr, Handler: server.New(server.Options{Auth: authStore, AllowedOrigins: cfg.CORSAllowedOrigins, Discovery: &manifest, CloudURL: cfg.CloudURL, CloudTokenPath: cfg.CloudTokenPath, ActiveAccountID: activeAccountID, EnforceAccountScope: true, Endpoints: endpointStore, EndpointTunnel: endpointTunnel, SellerDrafts: sellerService})}
 	listener, err := net.Listen("tcp", cfg.ListenAddr)
 	if err != nil {
 		return fmt.Errorf("server listen: %w", err)
@@ -119,7 +120,6 @@ func runDaemon(cfgPath string) error {
 			cancel()
 		}
 	}()
-	startProviderCapacitySupervisor(ctx, cfg)
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 	select {
@@ -130,76 +130,6 @@ func runDaemon(cfgPath string) error {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	return srv.Shutdown(shutdownCtx)
-}
-
-func startProviderCapacitySupervisor(ctx context.Context, cfg *config.Config) {
-	if runtime.GOOS != "linux" || strings.TrimSpace(cfg.CloudTokenPath) == "" {
-		return
-	}
-	token, err := cloudlink.LoadToken(cfg.CloudTokenPath)
-	if err != nil || strings.TrimSpace(token.CloudToken) == "" {
-		return
-	}
-	cloudURL := strings.TrimRight(firstNonEmptyString(cfg.CloudURL, token.CloudURL), "/")
-	if cloudURL == "" {
-		return
-	}
-	go func() {
-		light := time.NewTicker(30 * time.Second)
-		full := time.NewTicker(5 * time.Minute)
-		defer light.Stop()
-		defer full.Stop()
-		recoveryPasses := 0
-		report := func(level string) {
-			checkCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-			defer cancel()
-			result, err := (providerworker.Client{}).Call(checkCtx, "capacity_check", map[string]any{"checkLevel": level})
-			if err != nil {
-				log.Printf("[provider-capacity] %s check failed: %v", level, err)
-				return
-			}
-			busy, _ := result["providerBusy"].(bool)
-			healthy := !busy
-			if level == "full" {
-				if healthy {
-					recoveryPasses++
-				} else {
-					recoveryPasses = 0
-				}
-			}
-			result["checkLevel"] = level
-			result["healthy"] = healthy
-			result["recoveryPasses"] = recoveryPasses
-			body, _ := json.Marshal(result)
-			req, err := http.NewRequestWithContext(checkCtx, http.MethodPost, cloudURL+"/v3/provider/capacity-snapshots", bytes.NewReader(body))
-			if err != nil {
-				return
-			}
-			req.Header.Set("Authorization", "Bearer "+token.CloudToken)
-			req.Header.Set("Content-Type", "application/json")
-			resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
-			if err != nil {
-				log.Printf("[provider-capacity] report failed: %v", err)
-				return
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode >= 300 {
-				message, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-				log.Printf("[provider-capacity] cloud status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(message)))
-			}
-		}
-		report("light")
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-light.C:
-				report("light")
-			case <-full.C:
-				report("full")
-			}
-		}
-	}()
 }
 
 func runCloudCommand(args []string) error {
@@ -213,7 +143,7 @@ func runCloudCommand(args []string) error {
 	}
 	cloudURL := firstNonEmptyString(cfg.CloudURL, "http://127.0.0.1:8090")
 	dockID := firstNonEmptyString(cfg.DockID, "local-dock")
-	link, token, err := cloudlink.Link(context.Background(), cloudURL, cfg.CloudTokenPath, cloudlink.DeviceLinkRequest{DockID: dockID, ClientKind: "cli", DisplayName: "Exora Dock", Mode: cfg.Mode, PublicBaseURL: discovery.BaseURL(cfg.ListenAddr), Version: "0.1.0", Capabilities: []string{"marketplace.v3", "vm.ssh", "resources.s3", "endpoint.tunnel", "api_bridge.cloud", "seller.drafts"}}, 10*time.Minute, nil)
+	link, token, err := cloudlink.Link(context.Background(), cloudURL, cfg.CloudTokenPath, cloudlink.DeviceLinkRequest{DockID: dockID, ClientKind: "cli", DisplayName: "Exora Dock", Mode: cfg.Mode, PublicBaseURL: discovery.BaseURL(cfg.ListenAddr), Version: "0.1.0", Capabilities: []string{"marketplace.v4.api", "delivery.local_dock", "delivery.cloud_direct", "api.async_job", "api.artifacts", "provider.integrations"}}, 10*time.Minute, nil)
 	if err != nil {
 		return printJSON(map[string]any{"status": "pending", "userCode": link.UserCode, "verificationUrl": link.VerificationURL, "expiresAt": link.ExpiresAt, "message": err.Error()})
 	}

@@ -1,0 +1,273 @@
+{
+  "schemaVersion": "exora.api-contract.v1",
+  "capability": {
+    "schemaVersion": "exora.api.v3",
+    "title": "Random Three-Card Tarot API",
+    "description": "Draw three unique tarot cards for Past, Present, and Future positions and return both structured reading data and a generated SVG. Readings are for entertainment and personal reflection only.",
+    "deliveryMode": "local_dock",
+    "interface": {
+      "openapi": "3.1.0",
+      "info": {
+        "title": "Random Three-Card Tarot API",
+        "version": "1.0.0",
+        "description": "A zero-input local API that draws three unique tarot cards with random orientations and renders one SVG reading."
+      },
+      "paths": {
+        "/v1/draw-three": {
+          "post": {
+            "operationId": "draw_three_tarot_cards",
+            "summary": "Draw a three-card tarot reading",
+            "description": "No fields are required. Each new invocation draws three unique cards for Past, Present, and Future, chooses an upright or reversed orientation for each card, and creates an SVG reading.",
+            "requestBody": {
+              "required": false,
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "maxProperties": 0,
+                    "description": "Optional empty object. The caller does not provide any tarot question or personal data."
+                  }
+                }
+              }
+            },
+            "responses": {
+              "200": {
+                "description": "Three-card tarot reading generated",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "draw_id",
+                        "status",
+                        "image_url",
+                        "mime_type",
+                        "sha256",
+                        "bytes",
+                        "width",
+                        "height",
+                        "cards",
+                        "disclaimer"
+                      ],
+                      "properties": {
+                        "draw_id": {
+                          "type": "string",
+                          "pattern": "^draw_[a-f0-9]{24}$"
+                        },
+                        "status": {
+                          "const": "completed"
+                        },
+                        "image_url": {
+                          "type": "string",
+                          "format": "uri",
+                          "description": "Local URL of the generated SVG tarot reading."
+                        },
+                        "mime_type": {
+                          "const": "image/svg+xml"
+                        },
+                        "sha256": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        },
+                        "bytes": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 65536
+                        },
+                        "width": {
+                          "const": 1440
+                        },
+                        "height": {
+                          "const": 760
+                        },
+                        "cards": {
+                          "type": "array",
+                          "minItems": 3,
+                          "maxItems": 3,
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "position",
+                              "name",
+                              "arcana",
+                              "suit",
+                              "orientation",
+                              "meaning"
+                            ],
+                            "properties": {
+                              "position": {
+                                "enum": ["PAST", "PRESENT", "FUTURE"]
+                              },
+                              "name": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80
+                              },
+                              "arcana": {
+                                "enum": ["Major Arcana", "Minor Arcana"]
+                              },
+                              "suit": {
+                                "enum": ["Major", "Wands", "Cups", "Swords", "Pentacles"]
+                              },
+                              "orientation": {
+                                "enum": ["UPRIGHT", "REVERSED"]
+                              },
+                              "meaning": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 240
+                              }
+                            }
+                          }
+                        },
+                        "disclaimer": {
+                          "const": "For entertainment and personal reflection only."
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "400": {
+                "description": "The zero-input operation received fields or invalid JSON",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["code", "message"],
+                      "properties": {
+                        "code": {
+                          "const": "invalid_input"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "413": {
+                "description": "Request body exceeded the declared limit",
+                "content": {
+                  "application/json": {
+                    "schema": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["code", "message"],
+                      "properties": {
+                        "code": {
+                          "const": "request_too_large"
+                        },
+                        "message": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "runtime": {
+      "publicBaseUrl": "http://127.0.0.1:8792",
+      "healthPath": "/health"
+    },
+    "operations": [
+      {
+        "schemaVersion": "exora.operation.v3",
+        "operationId": "draw_three_tarot_cards",
+        "title": "Draw Three Tarot Cards",
+        "description": "Generate a zero-input Past, Present, and Future tarot reading with three unique cards, structured meanings, orientations, and an SVG image.",
+        "enabled": true,
+        "usage": {
+          "useCases": [
+            "Generate a three-card Past, Present, and Future tarot reading without supplying input.",
+            "Receive structured card names, suits, orientations, and meanings for a reflective prompt.",
+            "Open a generated SVG containing the complete three-card reading."
+          ],
+          "instructions": [
+            "Call this operation without fields; an empty JSON object is also accepted.",
+            "Read cards in order as Past, Present, and Future.",
+            "Use image_url to open the generated SVG reading.",
+            "Use a new invocation when you want a different random draw.",
+            "Treat the result as entertainment and personal reflection, not professional advice."
+          ]
+        },
+        "api": {
+          "method": "POST",
+          "path": "/v1/draw-three",
+          "openapiOperationRef": "#/paths/~1v1~1draw-three/post",
+          "errors": []
+        },
+        "behavior": {
+          "sideEffect": {
+            "present": false,
+            "description": "The operation only writes the generated SVG to a bounded in-memory preview cache.",
+            "reversible": false,
+            "testMode": "none"
+          },
+          "idempotency": {
+            "supported": true,
+            "retentionSeconds": 3600
+          }
+        },
+        "interaction": {
+          "mode": "request_response"
+        },
+        "limits": {
+          "timeoutSeconds": 15,
+          "maximumRequestBytes": 65536,
+          "maximumResponseBytes": 65536,
+          "maximumConcurrency": 8
+        },
+        "metering": {
+          "capabilities": []
+        },
+        "qualification": {
+          "fixtures": [
+            {
+              "id": "draw_three_tarot_cards_success",
+              "kind": "success",
+              "description": "Verifies that a zero-input call returns a schema-valid three-card reading and SVG reference without asserting random business values.",
+              "request": {
+                "body": {}
+              },
+              "expectedProtocol": {
+                "status": 200,
+                "mediaType": "application/json",
+                "openapiResponseRef": "#/paths/~1v1~1draw-three/post/responses/200"
+              },
+              "safeToRepeat": true
+            }
+          ]
+        },
+        "dataPolicy": {
+          "inputHandling": "transient",
+          "retentionSeconds": 0
+        }
+      }
+    ]
+  },
+  "billing": [
+    {
+      "operationId": "draw_three_tarot_cards",
+      "currency": "USDC",
+      "chargeFormula": {
+        "language": "exora.price-formula.v4",
+        "expression": "delivered * 0.01"
+      },
+      "maximumChargePerInvocationAtomic": 10000,
+      "settlementPolicy": "exora.operation-settlement.v4"
+    }
+  ]
+}
