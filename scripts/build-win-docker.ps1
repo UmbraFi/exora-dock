@@ -110,23 +110,6 @@ Invoke-Step "Building Windows MCP/CLI helper" {
   }
 }
 
-Invoke-Step "Fetching and verifying bundled WSL Runtime" {
-}
-
-Invoke-Step "Building Windows WSL broker" {
-  Push-Location $Root
-  try {
-    $env:CGO_ENABLED = "0"
-    $env:GOOS = "windows"
-    $env:GOARCH = "amd64"
-  } finally {
-    Remove-Item Env:\CGO_ENABLED -ErrorAction SilentlyContinue
-    Remove-Item Env:\GOOS -ErrorAction SilentlyContinue
-    Remove-Item Env:\GOARCH -ErrorAction SilentlyContinue
-    Pop-Location
-  }
-}
-
 Invoke-Step "Installing locked desktop dependencies" {
   Push-Location $DesktopDir
   try {
@@ -155,10 +138,10 @@ Invoke-Step "Checking Electron shell" {
 }
 
 if (-not $SkipInstaller) {
-  Invoke-Step "Building NSIS installer" {
+  Invoke-Step "Building Windows portable ZIP" {
     Push-Location $DesktopDir
     try {
-      & $Npm run build:exe
+      & $Npm run build:portable
     } finally {
       Pop-Location
     }
@@ -171,4 +154,4 @@ if ($ShouldBuildDockerImage) {
   Write-Host "Image tar: $ImageTar"
 }
 Write-Host "Helper:    $HelperPath"
-Write-Host "Installer: $DesktopDir\release"
+Write-Host "Archive:   $DesktopDir\release"

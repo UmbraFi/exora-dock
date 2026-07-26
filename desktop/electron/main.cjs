@@ -611,7 +611,7 @@ function releaseVerificationKey() {
 }
 
 async function release_status() {
-  const manifestURL = String(process.env.EXORA_RELEASE_MANIFEST_URL || 'https://github.com/UmbraFi/exora-dock/releases/download/v0.1.0-preview.3/release-manifest.json').trim()
+  const manifestURL = String(process.env.EXORA_RELEASE_MANIFEST_URL || 'https://github.com/UmbraFi/exora-dock/releases/download/v0.1.0-preview.4/release-manifest.json').trim()
   const signatureURL = manifestURL.replace(/release-manifest\.json(?:\?.*)?$/, 'release-manifest.sig')
   const [manifestResult, signatureResult] = await Promise.all([
     fetchArrayBufferWithTimeout(manifestURL, {}, 15000),
