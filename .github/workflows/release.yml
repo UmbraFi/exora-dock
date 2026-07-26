@@ -31,12 +31,12 @@ jobs:
           $env:GOOS='windows'
           $env:GOARCH='amd64'
           go build -trimpath -o desktop/binaries/exora-dockd.exe ./cmd/exora-dock/
-      - run: npm run build:exe
+      - run: npm run build:portable
         working-directory: desktop
       - uses: actions/upload-artifact@v4
         with:
           name: exora-dock-windows-x64
-          path: desktop/release/*Windows-x64-Unsigned-Technical-Preview.exe
+          path: desktop/release/*Windows-x64-Portable.zip
           if-no-files-found: error
 
   desktop-macos:
@@ -62,9 +62,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: exora-dock-macos-arm64
-          path: |
-            desktop/release/*macOS-arm64.dmg
-            desktop/release/*macOS-arm64.zip
+          path: desktop/release/*macOS-arm64.zip
           if-no-files-found: error
 
   release:
@@ -93,13 +91,13 @@ jobs:
           output-file: release-output/Exora-Dock-${{ github.ref_name }}-SBOM.spdx.json
       - uses: softprops/action-gh-release@v2
         with:
-          name: Exora Dock 0.1.0 Preview 3
+          name: Exora Dock 0.1.0 Preview 4
           prerelease: true
           make_latest: false
           body: |
-            Current Technical Preview for Windows x64 and macOS ARM64.
+            No-install Technical Preview for Windows x64 and macOS ARM64.
 
-            Windows is not Authenticode-signed and may show Unknown publisher or SmartScreen warnings. macOS is ad-hoc signed and not notarized, so the first launch may require choosing Open explicitly. Verify downloads through the signed release index and SHA-256 checksums.
+            Download the ZIP for your platform, extract it completely, and open Exora Dock from the extracted folder. Windows is not Authenticode-signed and may show SmartScreen warnings. macOS is ad-hoc signed and not notarized, so the first launch may require choosing Open explicitly. Verify downloads through the signed release index and SHA-256 checksums.
           files: |
             release-input/*
             release-output/*

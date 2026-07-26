@@ -1,6 +1,6 @@
 {
   "name": "exora-dock-desktop",
-  "version": "0.1.0-preview.3",
+  "version": "0.1.0-preview.4",
   "description": "Desktop agent workstation for Exora Dock",
   "author": "Exora",
   "homepage": "https://exoradock.com/",
@@ -19,8 +19,9 @@
     "build:electron": "node --test electron/account-activity-scope.test.cjs electron/agent-mcp-registry.test.cjs electron/button-audit.test.cjs electron/app-settings.test.cjs electron/cloud-auth.test.cjs electron/legacy-frontend-cleanup.test.cjs electron/release-manifest.test.cjs electron/ipc.test.cjs electron/network-timeout.test.cjs electron/mcp-connectivity.test.cjs electron/pricing-formula.test.cjs electron/ui-system.test.cjs && node electron/check.cjs",
     "build": "npm run build:frontend && npm run build:electron && electron-builder",
     "build:dmg": "npm run build:frontend && npm run build:electron && electron-builder --mac dmg",
-    "build:mac": "npm run build:frontend && npm run build:electron && electron-builder --mac dmg zip --arm64 --publish never -c.mac.identity=- -c.mac.hardenedRuntime=false",
-    "build:exe": "npm run build:frontend && npm run build:electron && electron-builder --win nsis --publish never",
+    "build:mac": "npm run build:frontend && npm run build:electron && electron-builder --mac zip --arm64 --publish never -c.mac.identity=- -c.mac.hardenedRuntime=false",
+    "build:portable": "npm run build:frontend && npm run build:electron && electron-builder --win zip --x64 --publish never",
+    "build:exe": "npm run build:frontend && npm run build:electron && electron-builder --win nsis --x64 --publish never -c.win.target=nsis -c.win.artifactName=Exora-Dock-${version}-Windows-x64-Unsigned-Technical-Preview.${ext}",
     "build:linux": "npm run build:frontend && npm run build:electron && electron-builder --linux AppImage deb --publish never",
     "build:win": "powershell -ExecutionPolicy Bypass -File ../scripts/build-win-docker.ps1",
     "build:win-docker": "powershell -ExecutionPolicy Bypass -File ../scripts/build-win-docker.ps1 -BuildDockerImage"
@@ -99,16 +100,15 @@
       "category": "public.app-category.developer-tools",
       "artifactName": "Exora-Dock-${version}-macOS-${arch}.${ext}",
       "target": [
-        "dmg",
         "zip"
       ]
     },
     "win": {
       "target": [
-        "nsis"
+        "zip"
       ],
       "icon": "build/icon.ico",
-      "artifactName": "Exora-Dock-${version}-Windows-x64-Unsigned-Technical-Preview.${ext}"
+      "artifactName": "Exora-Dock-${version}-Windows-x64-Portable.${ext}"
     },
     "linux": {
       "category": "Development",

@@ -2,7 +2,7 @@
 
 Exora Dock 是 Exora API-only 商业能力市场的桌面工作台、本地运行时和 MCP 安全边界。它让 Buyer Agent 调用经过验证和计费的 API Operation，也让 Seller 把本地程序或公共 HTTPS API 接入同一个市场，同时把凭证、价格确认、发布和生命周期操作保留在人类可控的边界内。
 
-> 当前版本：`0.1.0-preview.3` Technical Preview。本文基于 2026-07-22 的当前工作区；“已实现”表示代码和自动化检查已经存在，不代表真实 Cloud、资金或生产环境已经完成验收。
+> 当前版本：`0.1.0-preview.4` Technical Preview。本文基于 2026-07-27 的当前工作区；“已实现”表示代码和自动化检查已经存在，不代表真实 Cloud、资金或生产环境已经完成验收。
 
 ## 唯一产品模型
 
@@ -131,7 +131,7 @@ Dock 从同一份源合约生成并锁定两类相互绑定的证据：
 | 生命周期 | Offline、Live、Draining、强停、退款和保护状态机已有测试 | 在真实并发和在途调用下验证 draining、强停、健康故障、计量异常和退款一致性 |
 | 多账户 | Store、Vault、请求防串号、退出清理和迁移有测试 | 真实账号 A/B 连续切换、崩溃恢复、离线退出与旧数据人工验收 |
 | 桌面安全 | IPC、导航、网络超时、凭证脱敏和安全存储降级有测试 | Windows 与 macOS 的系统密钥库、证书、代理和系统权限场景 |
-| 发布 | Preview 3 workflow 目标为 Windows x64 与 macOS ARM64，并生成签名发布清单与 SHA-256 | 完成两平台 clean build、安装、首次启动、升级、卸载和数据保留 smoke test |
+| 发布 | Preview 4 workflow 目标为 Windows x64 与 macOS ARM64 免安装 ZIP，并生成签名发布清单与 SHA-256 | 完成两平台 clean build、首次启动、升级和数据保留 smoke test |
 | UI | 主要按钮、工作区、字号和操作边界有静态检查 | 完成人工视觉回归、键盘、屏幕阅读器、高 DPI、小窗口和中英文完整性检查 |
 
 ### 已知工程缺口
@@ -139,7 +139,7 @@ Dock 从同一份源合约生成并锁定两类相互绑定的证据：
 - 部分 Desktop 市场指南仍显示已取消商品的旧文案；`docs/DESKTOP_DEV.md` 与 `deploy/exoradock/README.md` 也仍描述过时模型。它们不能作为当前 V4 产品事实来源。
 - 部分 CSS、Go 文件和内部函数仍保留 V3 历史命名。当前公开协议已经是 V4，但内部命名清理尚未完成。
 - `desktop/package.json` 的 Electron 测试命令仍引用不存在的 `electron/ui-system.test.cjs`；Node 当前不会因此失败，对应覆盖需要补回或显式移除。
-- Preview 3 暂不发布 Linux 包。Windows 尚未 Authenticode 签名；macOS 使用 ad-hoc signing 且尚未 notarize。
+- Preview 4 暂不发布 Linux 包。Windows 免安装 ZIP 内的可执行文件尚未 Authenticode 签名；macOS ZIP 使用 ad-hoc signing 且尚未 notarize。
 - 现有自动化主要验证结构和状态机，不能替代 API 业务结果、真实资金和生产运行验收。
 
 ## 下一步目标
@@ -174,7 +174,7 @@ Dock 从同一份源合约生成并锁定两类相互绑定的证据：
 
 - Go `1.25.x`
 - Node.js `22.x` 与 npm；当前 CI 使用 Node `22.23.1`
-- Windows 或 macOS；核心 Go 代码也可在 Linux 开发，但 Preview 3 不发布 Linux 桌面包
+- Windows 或 macOS；核心 Go 代码也可在 Linux 开发，但 Preview 4 不发布 Linux 桌面包
 
 ### 运行 Dock daemon
 

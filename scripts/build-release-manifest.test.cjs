@@ -13,16 +13,15 @@ test('signs a complete Windows and macOS release index and checksum list', () =>
   const output = path.join(temporary, 'output')
   fs.mkdirSync(input)
   const files = {
-    'Exora-Dock-0.1.0-preview.3-Windows-x64-Unsigned-Technical-Preview.exe': 'windows-installer',
-    'Exora-Dock-0.1.0-preview.3-macOS-arm64.dmg': 'mac-dmg',
-    'Exora-Dock-0.1.0-preview.3-macOS-arm64.zip': 'mac-zip',
+    'Exora-Dock-0.1.0-preview.4-Windows-x64-Portable.zip': 'windows-portable',
+    'Exora-Dock-0.1.0-preview.4-macOS-arm64.zip': 'mac-zip',
   }
   try {
     for (const [name, bytes] of Object.entries(files)) fs.writeFileSync(path.join(input, name), bytes)
     const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519')
     const result = spawnSync(process.execPath, [
       path.join(root, 'scripts', 'build-release-manifest.cjs'), input, output,
-      'v0.1.0-preview.3', '0123456789abcdef',
+      'v0.1.0-preview.4', '0123456789abcdef',
     ], {
       cwd: root,
       encoding: 'utf8',
@@ -33,14 +32,14 @@ test('signs a complete Windows and macOS release index and checksum list', () =>
     const manifest = JSON.parse(encoded)
     assert.equal(manifest.schema, 'exora.release-manifest.v2')
     assert.deepEqual(new Set(manifest.artifacts.map(({ platform }) => platform)), new Set(['windows', 'macos']))
-    assert.equal(manifest.artifacts.length, 3)
+    assert.equal(manifest.artifacts.length, 2)
     for (const artifact of manifest.artifacts) {
       assert.equal(artifact.sha256, crypto.createHash('sha256').update(files[artifact.artifact]).digest('hex'))
     }
     const signature = Buffer.from(fs.readFileSync(path.join(output, 'release-manifest.sig'), 'utf8').trim(), 'base64')
     assert.equal(crypto.verify(null, encoded, publicKey, signature), true)
     const sums = fs.readFileSync(path.join(output, 'SHA256SUMS.txt'), 'utf8').trim().split('\n')
-    assert.equal(sums.length, 3)
+    assert.equal(sums.length, 2)
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true })
   }

@@ -5,8 +5,9 @@ const { releaseWarningForArtifact, selectReleaseArtifact } = require('./release-
 const sha256 = 'a'.repeat(64)
 const manifest = {
   schema: 'exora.release-manifest.v2',
-  version: 'v0.1.0-preview.2',
+  version: 'v0.1.0-preview.4',
   artifacts: [
+    { platform: 'windows', architecture: 'x64', format: 'zip', artifact: 'dock-portable.zip', sha256, signing: { scheme: 'authenticode', status: 'unsigned' } },
     { platform: 'windows', architecture: 'x64', format: 'nsis', artifact: 'dock.exe', sha256, signing: { scheme: 'authenticode', status: 'unsigned' } },
     { platform: 'macos', architecture: 'arm64', format: 'zip', artifact: 'dock.zip', sha256, signing: { scheme: 'codesign', status: 'adhoc' } },
     { platform: 'macos', architecture: 'arm64', format: 'dmg', artifact: 'dock.dmg', sha256, signing: { scheme: 'codesign', status: 'adhoc' } },
@@ -16,8 +17,8 @@ const manifest = {
 }
 
 test('selects the preferred package for each supported platform', () => {
-  assert.equal(selectReleaseArtifact(manifest, 'win32', 'x64').artifact, 'dock.exe')
-  assert.equal(selectReleaseArtifact(manifest, 'darwin', 'arm64').artifact, 'dock.dmg')
+  assert.equal(selectReleaseArtifact(manifest, 'win32', 'x64').artifact, 'dock-portable.zip')
+  assert.equal(selectReleaseArtifact(manifest, 'darwin', 'arm64').artifact, 'dock.zip')
   assert.equal(selectReleaseArtifact(manifest, 'linux', 'x64').artifact, 'dock.AppImage')
 })
 
