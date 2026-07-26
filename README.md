@@ -2,7 +2,7 @@
 
 Exora Dock is the desktop workbench, local runtime, and MCP security boundary for the Exora commercial API-only capability market. It lets Buyer Agents invoke validated and billed API Operations and lets Sellers connect local programs or public HTTPS APIs to the same market, while keeping credentials, price confirmation, publication, and lifecycle actions under human control.
 
-> Current version: `0.1.0-preview.4` Technical Preview. This document reflects the current workspace on 2026-07-27; “implemented” means code and automated checks exist, not that real Cloud, funds, or production acceptance is complete.
+> Current version: `0.1.0-preview.5` Technical Preview. This document reflects the workspace as of 2026-07-27. “Implemented” means code and automated checks exist; it does not mean real Cloud, funds, or production acceptance has been completed.
 
 ## Single product model
 
@@ -131,7 +131,7 @@ These results verify local code, protocol constraints, state transitions, and UI
 | Lifecycle | Offline, Live, Draining, force-stop, refund, and protection state machines tested | Validate draining, force-stop, health faults, metering anomalies, and refund consistency under real concurrency and in-flight calls |
 | Multiple accounts | Store, Vault, cross-account request prevention, logout cleanup, and migrations tested | Manually accept repeated real A/B account switching, crash recovery, offline logout, and old data |
 | Desktop security | IPC, navigation, network timeouts, credential redaction, and secure-storage fallback tested | Exercise system keychains, certificates, proxies, and permissions on Windows and macOS |
-| Release | Preview 4 workflow targets portable Windows x64 and macOS ARM64 ZIPs, generating a signed release manifest and SHA-256 | Complete clean builds, first-start, upgrade, and data-retention smoke tests on both platforms |
+| Releases | Preview 5 workflow targets Windows x64 Portable ZIP and macOS ARM64 DMG, generating a signed release manifest and SHA-256 | Complete clean builds, first-launch, upgrade, and data-retention smoke tests on both platforms |
 | UI | Main buttons, workspaces, text sizes, and action boundaries statically checked | Complete visual regression, keyboard, screen-reader, high-DPI, small-window, and English/Chinese completeness checks |
 
 ### Known engineering gaps
@@ -139,7 +139,7 @@ These results verify local code, protocol constraints, state transitions, and UI
 - Some Desktop market guides still display retired-product copy. `docs/DESKTOP_DEV.md` and `deploy/exoradock/README.md` also describe obsolete models and cannot serve as sources of current V4 product facts.
 - Some CSS, Go files, and internal functions retain historical V3 names. The public protocol is V4, but internal naming cleanup remains incomplete.
 - The Electron test command in `desktop/package.json` still references the missing `electron/ui-system.test.cjs`; Node currently does not fail for this, so that coverage must be restored or explicitly removed.
-- Preview 4 does not yet publish Linux packages. Executables in the portable Windows ZIP are not Authenticode-signed; the macOS ZIP uses ad-hoc signing without notarization.
+- Preview 5 does not release Linux packages. Executables in the Windows portable ZIP are not yet Authenticode-signed; the macOS DMG application uses ad-hoc signing and is not yet notarized.
 - Existing automation mainly validates structure and state machines; it cannot replace API business-result, real-funds, and production acceptance.
 
 ## Next goals
@@ -174,7 +174,7 @@ These results verify local code, protocol constraints, state transitions, and UI
 
 - Go `1.25.x`
 - Node.js `22.x` and npm; current CI uses Node `22.23.1`
-- Windows or macOS; core Go code also supports Linux development, but Preview 4 publishes no Linux desktop package
+- Windows or macOS; core Go code can also be developed on Linux, but Preview 5 does not release Linux desktop packages
 
 ### Run the Dock daemon
 

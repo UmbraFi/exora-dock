@@ -62,7 +62,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: exora-dock-macos-arm64
-          path: desktop/release/*macOS-arm64.zip
+          path: desktop/release/*macOS-arm64.dmg
           if-no-files-found: error
 
   release:
@@ -91,13 +91,13 @@ jobs:
           output-file: release-output/Exora-Dock-${{ github.ref_name }}-SBOM.spdx.json
       - uses: softprops/action-gh-release@v2
         with:
-          name: Exora Dock 0.1.0 Preview 4
+          name: Exora Dock 0.1.0 Preview 5
           prerelease: true
           make_latest: false
           body: |
-            No-install Technical Preview for Windows x64 and macOS ARM64.
+            Technical Preview for Windows x64 and macOS ARM64.
 
-            Download the ZIP for your platform, extract it completely, and open Exora Dock from the extracted folder. Windows is not Authenticode-signed and may show SmartScreen warnings. macOS is ad-hoc signed and not notarized, so the first launch may require choosing Open explicitly. Verify downloads through the signed release index and SHA-256 checksums.
+            On Windows, download the Portable ZIP, extract it completely, and open Exora Dock from the extracted folder. On macOS, open the DMG and drag Exora Dock into Applications.
           files: |
             release-input/*
             release-output/*

@@ -11,7 +11,7 @@ if (!privateKeyBase64) throw new Error('EXORA_RELEASE_SIGNING_PRIVATE_KEY_BASE64
 
 const definitions = [
   { pattern: /Windows-x64-Portable\.zip$/i, platform: 'windows', architecture: 'x64', format: 'zip', signing: { scheme: 'authenticode', status: 'unsigned' } },
-  { pattern: /macOS-arm64\.zip$/i, platform: 'macos', architecture: 'arm64', format: 'zip', signing: { scheme: 'codesign', status: 'adhoc', notarized: false } },
+  { pattern: /macOS-arm64\.dmg$/i, platform: 'macos', architecture: 'arm64', format: 'dmg', signing: { scheme: 'codesign', status: 'adhoc', notarized: false } },
 ]
 
 const artifacts = fs.readdirSync(artifactDirectory, { withFileTypes: true })

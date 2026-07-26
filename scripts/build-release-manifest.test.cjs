@@ -13,15 +13,15 @@ test('signs a complete Windows and macOS release index and checksum list', () =>
   const output = path.join(temporary, 'output')
   fs.mkdirSync(input)
   const files = {
-    'Exora-Dock-0.1.0-preview.4-Windows-x64-Portable.zip': 'windows-portable',
-    'Exora-Dock-0.1.0-preview.4-macOS-arm64.zip': 'mac-zip',
+    'Exora-Dock-0.1.0-preview.5-Windows-x64-Portable.zip': 'windows-portable',
+    'Exora-Dock-0.1.0-preview.5-macOS-arm64.dmg': 'mac-dmg',
   }
   try {
     for (const [name, bytes] of Object.entries(files)) fs.writeFileSync(path.join(input, name), bytes)
     const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519')
     const result = spawnSync(process.execPath, [
       path.join(root, 'scripts', 'build-release-manifest.cjs'), input, output,
-      'v0.1.0-preview.4', '0123456789abcdef',
+      'v0.1.0-preview.5', '0123456789abcdef',
     ], {
       cwd: root,
       encoding: 'utf8',
@@ -33,6 +33,7 @@ test('signs a complete Windows and macOS release index and checksum list', () =>
     assert.equal(manifest.schema, 'exora.release-manifest.v2')
     assert.deepEqual(new Set(manifest.artifacts.map(({ platform }) => platform)), new Set(['windows', 'macos']))
     assert.equal(manifest.artifacts.length, 2)
+    assert.equal(manifest.artifacts.find(({ platform }) => platform === 'macos').format, 'dmg')
     for (const artifact of manifest.artifacts) {
       assert.equal(artifact.sha256, crypto.createHash('sha256').update(files[artifact.artifact]).digest('hex'))
     }

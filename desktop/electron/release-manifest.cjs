@@ -14,7 +14,7 @@ function selectReleaseArtifact(manifest, platformName = process.platform, archit
   }
   if (manifest?.schema !== 'exora.release-manifest.v2') throw new Error('Release manifest contract is invalid.')
   const platform = platformName === 'win32' ? 'windows' : platformName === 'darwin' ? 'macos' : platformName
-  const formatPreference = platform === 'windows' ? ['zip', 'nsis'] : platform === 'macos' ? ['zip', 'dmg'] : ['appimage', 'deb']
+  const formatPreference = platform === 'windows' ? ['zip', 'nsis'] : platform === 'macos' ? ['dmg', 'zip'] : ['appimage', 'deb']
   const artifact = (Array.isArray(manifest.artifacts) ? manifest.artifacts : [])
     .filter((candidate) => candidate?.platform === platform && candidate?.architecture === architecture && validSHA256(candidate?.sha256))
     .sort((left, right) => formatPreference.indexOf(String(left.format)) - formatPreference.indexOf(String(right.format)))[0]
