@@ -1,5 +1,7 @@
 # Exora V4 API-only whitepaper
 
+English | [简体中文](WHITEPAPER.md)
+
 ## One contract, two validations, two product steps
 
 Sellers or their authorized Agents submit one `exora.api-contract.v1` JSON
@@ -59,3 +61,31 @@ Invocation bodies are not retained by default. Parties submit redacted evidence 
 ## Reset
 
 V4 is a destructive test reset. Accounts, Sessions, API Keys, Listings, balances and history are recreated. Reset refuses non-test environments, mainnet custody records and non-zero account balances. Identity stays on `/v1`; the market is `/v4` with no compatibility fallback.
+
+## Stable Draft identity and Agent permissions
+
+Dock generates a persistent, stable public `apiId` when a Draft is created and synchronizes the same UID to Cloud. An Agent may update a non-Live Draft using `apiId + expectedVersion`, but cannot overwrite Live content or bypass version checks. The Adapter runtime interface remains described by `exora.service_manifest.v2`; Provider Operation V3 describes public capability, format validation, metering, and billing.
+
+Agents may create and update non-Live integration drafts, draft cases from OpenAPI and seller descriptions, explain missing cases and fields, and query validation plans and failure reasons. Agents cannot automatically run external validation, confirm capability, write or lock formal prices, publish, take offline, or force-stop.
+
+## Validation plans and protocol requirements
+
+Machine checks cover required fields, types, formats, ranges, enumerations, explicit Schema `const` values, response sizes, and timeouts in addition to the protocol checks above. Streaming declares events, completion, errors, sequence numbers, and timeouts. Async Jobs declare Job ID, status, polling, terminal states, and maximum wait time; cancellation support requires a cancellation case.
+
+Saving an integration draft deterministically compiles `exora.operation-validation-plan.v3` from the specification. Identical specifications produce the same `planHash`. Each validation run has an independent run ID. Its receipt binds API UID, Operation, version, integration/OpenAPI/plan hashes, individual results, and metering-evidence hashes. Credentials, authentication headers, and full request/response bodies are not retained; only a redacted summary of at most 4 KiB is kept.
+
+## Explicit billing and sandbox coverage
+
+Every Operation source contract explicitly includes a billing formula and a positive per-invocation maximum. Currency is USDC and settlement policy is V4. There are no automatic templates, template parameters, or silent defaults. Provider metering specifies a standard evidence location.
+
+The Cloud Sandbox Ledger covers zero usage, unit usage, Seller samples, maximum usage, conditional boundaries, success, business errors, cancellation, Provider/Cloud/timeout/Schema/Artifact faults, and force-stop. Desktop Preview is only an estimate and is not billing evidence.
+
+## Lifecycle and automatic protection
+
+Operations uses `offline / live / draining`. Live or Draining Operations cannot be edited or deleted. Ordinary removal immediately rejects new calls while waiting for in-flight fulfillment. Force-stop cancels unfinished fulfillment, refunds it in full, and records Seller responsibility. The console prefers SSE and falls back to polling every 15 seconds after disconnection.
+
+Any metering anomaly blocks new calls. Two consecutive failed health checks also block new calls, as does a 15-minute window with at least ten calls and a Provider fault rate of at least 10%.
+
+## Pricing V4 rollout
+
+Pricing V3, old template pricing, and old billing receipts are not migrated. Cloud deploys Pricing, Formula, Billing Plan, Billing Receipt, and Settlement V4 first; Dock and Desktop enable V4 afterward. All old V3 files and compatibility-reading paths are removed. Identity remains on `/v1`; market capabilities are exposed through `/v4`.

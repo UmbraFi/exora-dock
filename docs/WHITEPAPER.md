@@ -1,5 +1,7 @@
 # Exora V4 API-only 白皮书
 
+[English](WHITEPAPER.en.md) | 简体中文
+
 ## 一份合约、两类验证、两个产品步骤
 
 卖家或其授权 Agent 只提交一份 `exora.api-contract.v1` JSON。该文件同时包含
@@ -71,3 +73,37 @@ Agent 可以创建和更新非 Live 接入草稿、根据 OpenAPI 与卖家描�
 V4 的唯一公式、测试计划和签名凭证契约分别为 `exora.price-formula.v4`、`exora.operation-billing-plan.v4` 和 `exora.operation-billing-receipt.v4`。
 
 Pricing V3、旧模板定价和旧计费凭证不迁移。Cloud 先部署 Pricing、Formula、Billing Plan、Billing Receipt 与 Settlement V4，Dock 与 Desktop 随后启用 V4；旧 V3 文件和兼容读取路径全部删除。
+
+## 本地接入的执行边界补充
+
+有用的本地实现可以通过保持 Exora Dock 在线成为付费供给；卖家不必先搭建公共网站、UI、域名、托管、认证、计量和计费系统。
+
+Exora 不提供专用 Agent。卖家现有的 Codex、Claude Code、Cursor 或其他 MCP 客户端遵循 Dock 强制执行的 Integration Session，依次完成发现、能力设计、Adapter 生成、静态验证、人类执行批准、运行时验证和商业审阅。Agent 只能读取人类授权的来源，只能写入 `<authorized-root>/.exora/generated/<integrationId>`。单文件最多 256 KiB，每个 Integration 最多 100 个文件、共 5 MiB；拒绝绝对路径、目录穿越和符号链接。
+
+最终产物是一项 Exora Adapter：针对本地代码、函数、CLI 或协议转换 HTTP 服务的可执行 Adapter；或针对公共 HTTPS API、可供 Cloud 按 OpenAPI 3.1 契约代理的声明式 Adapter。只有人类所有者可以批准 `executable + args[]`、选择 Vault 凭证、接受副作用与商业权利、设定最终价格、创建私有草稿或发布。Dock 不执行 Shell 字符串，也不安装依赖。
+
+## 公式与计量规则补充
+
+固定执行、成功交付、token、时间块、流式、异步任务、文档/媒体/批处理和分层定价规则位于独立只读 Pricing Book。Provider 侧 Agent 仅可在源合约中编码卖家指定的值并解释影响，不能运行测试或确认合约。
+
+允许常量公式。执行前取消、业务错误和系统故障绕过公式并收取零费用。Provider 签证的计量出现在买家可见凭证中。缺失、冲突、非法或越界计量触发全额退款并阻断新调用。Dock 在所有者确认价格前验证 V4 凭证的 Ed25519 签名和 API UID、版本、接入凭证、价格、公式 AST、计划哈希；Cloud 在发布前再次验证这些绑定。Pricing V3 凭证绝不被接受。
+
+## Manifest、Job 与 Artifact 补充
+
+ExoraServiceManifest v2（`exora.service_manifest.v2`）使用 OpenAPI 3.1、Operation Policy、计量和 Artifact 声明。计费在 `exora.api-contract.v1` 内编写，仅在验证期间投影为平台所有的 Pricing V4 契约。
+
+Job 从 `queued` 进入 `running`，随后进入 `succeeded`、`failed`、`cancelled` 或 `expired`；进度使用 SSE，取消会传播至本地 Supervisor。
+
+Artifact 包含 id、名称、MIME、精确大小、SHA-256、用途和过期时间。默认每个 Artifact 上限 1 GiB，每个账户暂存上限 5 GiB；未绑定上传保留 24 小时，成功输出保留 72 小时。大文件不出现在 JSON 或 SSE 中。
+
+## 评价与仲裁规则补充
+
+每个 API Order 在至少一次成功付费 Invocation 后允许一条评价，七天内可编辑。质量、契约遵守和性价比分别采用 1–5 分。买家显示 Verified Purchase，卖家可回复一次。Exora 不计算综合信誉分，也不将信誉用于排序或准入。
+
+连接、启动、超时、Schema/SSE 和 Artifact 完整性故障自动全额退款。主观争议绑定一项付费 Invocation，须在 72 小时内发起。卖家须在 48 小时内回应；平台目标在 72 小时内裁决；每方各有一次 72 小时申诉机会。允许部分退款，佣金按比例退回。仲裁者可暂停 Listing。
+
+默认不保留 Invocation 正文。双方提交脱敏证据或哈希，并单独同意仲裁者访问。证据访问经过审计，正文在最终结案后 30 天删除。
+
+## 测试重置
+
+V4 是破坏性的测试重置：重新创建账户、Session、API Key、Listing、余额和历史。重置拒绝非测试环境、主网托管记录和非零账户余额。身份继续使用 `/v1`；市场使用 `/v4`，没有兼容回退。

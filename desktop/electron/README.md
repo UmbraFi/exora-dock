@@ -1,5 +1,7 @@
 # Electron Runtime
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 This folder owns the desktop shell around the local Exora Dock daemon.
 
 ## Files

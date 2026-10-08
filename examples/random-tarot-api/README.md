@@ -1,5 +1,7 @@
 # Random Three-Card Tarot API
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 A zero-input local Node.js API that draws three unique cards from a full 78-card tarot deck. Each draw assigns Past, Present, and Future positions, randomly chooses upright or reversed orientation, and generates a single SVG reading.
 
 ## Start

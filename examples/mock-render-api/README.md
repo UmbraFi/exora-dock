@@ -1,5 +1,7 @@
 # Random Puppy Card API
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 A zero-external-dependency Exora `local_dock` Provider example. Users fill in no fields; every new invocation generates a random puppy SVG profile card and returns its URL and structured details.
 
 The card includes the puppy's name, age, breed, favorite food, favorite activities, favorite player, and fictional home address.

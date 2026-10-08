@@ -1,5 +1,7 @@
 # Desktop UI development
 
+[English](DESKTOP_DEV.md) | [简体中文](DESKTOP_DEV.zh-CN.md)
+
 Use the Electron dev runner while iterating on the Desktop frontend. This opens
 a live Desktop window and reloads frontend changes without rebuilding or
 installing the NSIS package.

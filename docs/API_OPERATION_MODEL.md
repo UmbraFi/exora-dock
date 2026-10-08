@@ -1,5 +1,7 @@
 # Exora Provider Operation Model V3
 
+[English](API_OPERATION_MODEL.md) | [简体中文](API_OPERATION_MODEL.zh-CN.md)
+
 ## Seller source contract and two-step workflow
 
 Provider onboarding has one seller-authored source document: `exora.api-contract.v1`.

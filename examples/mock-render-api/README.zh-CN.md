@@ -1,5 +1,7 @@
 # Random Puppy Card API
 
+[English](README.md) | 简体中文
+
 这是一个零外部依赖的 Exora `local_dock` Provider 示例。用户不需要填写任何字段；每次新调用都会生成一张随机小狗 SVG 名片，并返回名片地址和结构化资料。
 
 名片包含：小狗名字、年龄、品种、喜欢的食物、喜欢做的事、喜欢的玩家和虚构家庭地址。

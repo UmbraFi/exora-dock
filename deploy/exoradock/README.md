@@ -1,5 +1,7 @@
 # Legacy standalone Dock deployment
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 > This directory is retained as an operator reference for running a Dock daemon
 > in a container. It is not the Exora V3.2 production topology and must not be
 > exposed as the public Exora Cloud API.

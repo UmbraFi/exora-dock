@@ -1,5 +1,7 @@
 # Exora Dock
 
+[English](README.md) | 简体中文
+
 Exora Dock 是 Exora API-only 商业能力市场的桌面工作台、本地运行时和 MCP 安全边界。它让 Buyer Agent 调用经过验证和计费的 API Operation，也让 Seller 把本地程序或公共 HTTPS API 接入同一个市场，同时把凭证、价格确认、发布和生命周期操作保留在人类可控的边界内。
 
 > 当前版本：`0.1.0-preview.5` Technical Preview。本文基于 2026-07-27 的当前工作区；“已实现”表示代码和自动化检查已经存在，不代表真实 Cloud、资金或生产环境已经完成验收。

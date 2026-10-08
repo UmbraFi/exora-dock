@@ -1,5 +1,7 @@
 # Virtual Text Summary API
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 This local fixture exercises the Exora Provider workflow without an external dependency.
 
 ## Runtime

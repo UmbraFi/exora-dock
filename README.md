@@ -1,5 +1,7 @@
 # Exora Dock
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 Exora Dock is the desktop workbench, local runtime, and MCP security boundary for the Exora commercial API-only capability market. It lets Buyer Agents invoke validated and billed API Operations and lets Sellers connect local programs or public HTTPS APIs to the same market, while keeping credentials, price confirmation, publication, and lifecycle actions under human control.
 
 > Current version: `0.1.0-preview.5` Technical Preview. This document reflects the workspace as of 2026-07-27. “Implemented” means code and automated checks exist; it does not mean real Cloud, funds, or production acceptance has been completed.

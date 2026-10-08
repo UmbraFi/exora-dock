@@ -5,6 +5,8 @@ description: Prepare one complete exora.api-contract.v1 source file from authori
 
 # Prepare Exora API
 
+[English](SKILL.md) | [简体中文](SKILL.zh-CN.md)
+
 The authoritative output is one UID-free `exora.api-contract.v1` JSON file.
 Dock binds it to the selected stable API UID during submission. It contains a complete `exora.api.v3` capability, OpenAPI input
 and output schemas with parameter semantics, safe Seller cases, trusted meters,
